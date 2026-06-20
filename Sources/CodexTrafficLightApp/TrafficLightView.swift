@@ -31,7 +31,7 @@ final class TrafficLightView: NSView {
         let body = layout.bodyRect.nsRect
         drawRoundedGradient(
             body,
-            radius: 28,
+            radius: 46,
             top: NSColor(hex: "#30363a"),
             bottom: NSColor(hex: "#161a1f"),
             stroke: NSColor.white.withAlphaComponent(0.20),
@@ -77,7 +77,7 @@ final class TrafficLightView: NSView {
         let paragraph = NSMutableParagraphStyle()
         paragraph.alignment = .center
         let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.roundedSystemFont(ofSize: 8.5, weight: .medium),
+            .font: NSFont.roundedSystemFont(ofSize: 12.5, weight: .medium),
             .foregroundColor: NSColor.white.withAlphaComponent(0.42),
             .kern: 0,
             .shadow: NSShadow.softTextShadow(alpha: 0.25),
@@ -92,7 +92,7 @@ final class TrafficLightView: NSView {
         let paragraph = NSMutableParagraphStyle()
         paragraph.alignment = .left
         let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.roundedSystemFont(ofSize: 15, weight: .semibold),
+            .font: NSFont.roundedSystemFont(ofSize: 23, weight: .semibold),
             .foregroundColor: NSColor.white.withAlphaComponent(0.84),
             .kern: 0,
             .shadow: NSShadow.softTextShadow(alpha: 0.38),
@@ -100,7 +100,7 @@ final class TrafficLightView: NSView {
         ]
 
         if let active = activeLight() {
-            let dot = NSRect(x: layout.statusRect.minX - 16, y: layout.statusRect.minY + 5, width: 9, height: 9)
+            let dot = NSRect(x: layout.statusRect.minX - 24, y: layout.statusRect.minY + 12, width: 14, height: 14)
             color(for: active).withAlphaComponent(0.95).setFill()
             NSBezierPath(ovalIn: dot).fill()
         }
@@ -127,14 +127,14 @@ final class TrafficLightView: NSView {
         valueParagraph.alignment = .right
 
         let labelAttributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.roundedSystemFont(ofSize: 13, weight: .semibold),
+            .font: NSFont.roundedSystemFont(ofSize: 20, weight: .semibold),
             .foregroundColor: NSColor.white.withAlphaComponent(0.82),
             .kern: 0,
             .shadow: NSShadow.softTextShadow(alpha: 0.30),
             .paragraphStyle: labelParagraph
         ]
         let valueAttributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .bold),
+            .font: NSFont.monospacedDigitSystemFont(ofSize: 20, weight: .bold),
             .foregroundColor: NSColor.white.withAlphaComponent(percent == nil ? 0.40 : 0.86),
             .kern: 0,
             .shadow: NSShadow.softTextShadow(alpha: 0.32),
@@ -145,7 +145,7 @@ final class TrafficLightView: NSView {
         value.draw(in: row.valueRect.nsRect, withAttributes: valueAttributes)
 
         let barRect = row.progressRect.nsRect
-        let barPath = NSBezierPath(roundedRect: barRect, xRadius: 2, yRadius: 2)
+        let barPath = NSBezierPath(roundedRect: barRect, xRadius: 3, yRadius: 3)
         NSColor.white.withAlphaComponent(0.12).setFill()
         barPath.fill()
 
@@ -156,7 +156,7 @@ final class TrafficLightView: NSView {
             width: barRect.width * CGFloat(clampedPercent) / 100,
             height: barRect.height
         )
-        let fillPath = NSBezierPath(roundedRect: fillRect, xRadius: 2, yRadius: 2)
+        let fillPath = NSBezierPath(roundedRect: fillRect, xRadius: 3, yRadius: 3)
         accent.withAlphaComponent(0.72).setFill()
         fillPath.fill()
     }
@@ -164,27 +164,27 @@ final class TrafficLightView: NSView {
     private func drawPanelDividers() {
         NSColor.white.withAlphaComponent(0.07).setStroke()
         let horizontal = NSBezierPath()
-        horizontal.move(to: NSPoint(x: layout.bodyRect.minX + 12, y: 58))
-        horizontal.line(to: NSPoint(x: layout.bodyRect.maxX - 12, y: 58))
+        horizontal.move(to: NSPoint(x: layout.bodyRect.minX + 22, y: 72))
+        horizontal.line(to: NSPoint(x: layout.bodyRect.maxX - 22, y: 72))
         horizontal.lineWidth = 1
         horizontal.stroke()
 
         let statusDivider = NSBezierPath()
-        statusDivider.move(to: NSPoint(x: 125, y: 72))
-        statusDivider.line(to: NSPoint(x: 125, y: 98))
+        statusDivider.move(to: NSPoint(x: 222, y: 88))
+        statusDivider.line(to: NSPoint(x: 222, y: 124))
         statusDivider.lineWidth = 1
         statusDivider.stroke()
 
         let quotaDivider = NSBezierPath()
-        quotaDivider.move(to: NSPoint(x: 114, y: 22))
-        quotaDivider.line(to: NSPoint(x: 114, y: 48))
+        quotaDivider.move(to: NSPoint(x: 206, y: 28))
+        quotaDivider.line(to: NSPoint(x: 206, y: 60))
         quotaDivider.lineWidth = 1
         quotaDivider.stroke()
     }
 
     private func drawLens(center: NSPoint, light: TrafficLightSlot, active: Bool) {
         let base = color(for: light)
-        let glowAlpha: CGFloat = active ? 0.34 : 0.04
+        let glowAlpha: CGFloat = active ? 0.14 : 0.02
         let fillAlpha: CGFloat = active ? 0.96 : 0.20
         let rimAlpha: CGFloat = active ? 0.36 : 0.12
         let glowRadius = CGFloat(layout.lensGlowRadius)
@@ -208,7 +208,7 @@ final class TrafficLightView: NSView {
         bulb.fill()
 
         base.withAlphaComponent(rimAlpha).setStroke()
-        bulb.lineWidth = 2.4
+        bulb.lineWidth = 4
         bulb.stroke()
 
         NSColor.black.withAlphaComponent(0.23).setStroke()
@@ -216,7 +216,7 @@ final class TrafficLightView: NSView {
         bulb.stroke()
 
         NSColor.white.withAlphaComponent(active ? 0.24 : 0.08).setFill()
-        NSBezierPath(ovalIn: NSRect(x: center.x - 4.5, y: center.y + 3.5, width: 8, height: 3)).fill()
+        NSBezierPath(ovalIn: NSRect(x: center.x - 8, y: center.y + 8, width: 14, height: 5)).fill()
     }
 
     private func drawRoundedGradient(_ rect: NSRect, radius: CGFloat, top: NSColor, bottom: NSColor, stroke: NSColor, width: CGFloat) {
