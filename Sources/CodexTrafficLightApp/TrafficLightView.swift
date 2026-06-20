@@ -31,14 +31,14 @@ final class TrafficLightView: NSView {
         let body = layout.bodyRect.nsRect
         drawRoundedGradient(
             body,
-            radius: 19,
-            top: NSColor(hex: "#30363b"),
-            bottom: NSColor(hex: "#171b1f"),
-            stroke: NSColor.white.withAlphaComponent(0.14),
+            radius: 28,
+            top: NSColor(hex: "#30363a"),
+            bottom: NSColor(hex: "#161a1f"),
+            stroke: NSColor.white.withAlphaComponent(0.20),
             width: 1
         )
 
-        drawTitle()
+        drawPanelDividers()
 
         let centers: [(TrafficLightSlot, NSPoint)] = [
             (.red, layout.center(for: .red).nsPoint),
@@ -75,27 +75,35 @@ final class TrafficLightView: NSView {
 
     private func drawTitle() {
         let paragraph = NSMutableParagraphStyle()
-        paragraph.alignment = .left
+        paragraph.alignment = .center
         let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.roundedSystemFont(ofSize: 8.0, weight: .semibold),
-            .foregroundColor: NSColor.white.withAlphaComponent(0.38),
+            .font: NSFont.roundedSystemFont(ofSize: 8.5, weight: .medium),
+            .foregroundColor: NSColor.white.withAlphaComponent(0.42),
             .kern: 0,
             .shadow: NSShadow.softTextShadow(alpha: 0.25),
             .paragraphStyle: paragraph
         ]
-        "CODEX".draw(in: layout.titleRect.nsRect, withAttributes: attributes)
+        "Agent 正在运行".draw(in: layout.titleRect.nsRect, withAttributes: attributes)
     }
 
     private func drawStatusAndQuota() {
+        drawTitle()
+
         let paragraph = NSMutableParagraphStyle()
-        paragraph.alignment = .right
+        paragraph.alignment = .left
         let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.roundedSystemFont(ofSize: 11.2, weight: .semibold),
+            .font: NSFont.roundedSystemFont(ofSize: 15, weight: .semibold),
             .foregroundColor: NSColor.white.withAlphaComponent(0.84),
             .kern: 0,
             .shadow: NSShadow.softTextShadow(alpha: 0.38),
             .paragraphStyle: paragraph
         ]
+
+        if let active = activeLight() {
+            let dot = NSRect(x: layout.statusRect.minX - 16, y: layout.statusRect.minY + 5, width: 9, height: 9)
+            color(for: active).withAlphaComponent(0.95).setFill()
+            NSBezierPath(ovalIn: dot).fill()
+        }
         state.label.draw(in: layout.statusRect.nsRect, withAttributes: attributes)
 
         drawQuotaRow(
@@ -119,14 +127,14 @@ final class TrafficLightView: NSView {
         valueParagraph.alignment = .right
 
         let labelAttributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.roundedSystemFont(ofSize: 8.4, weight: .semibold),
-            .foregroundColor: NSColor.white.withAlphaComponent(0.76),
+            .font: NSFont.roundedSystemFont(ofSize: 13, weight: .semibold),
+            .foregroundColor: NSColor.white.withAlphaComponent(0.82),
             .kern: 0,
             .shadow: NSShadow.softTextShadow(alpha: 0.30),
             .paragraphStyle: labelParagraph
         ]
         let valueAttributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.monospacedDigitSystemFont(ofSize: 8.4, weight: .semibold),
+            .font: NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .bold),
             .foregroundColor: NSColor.white.withAlphaComponent(percent == nil ? 0.40 : 0.86),
             .kern: 0,
             .shadow: NSShadow.softTextShadow(alpha: 0.32),
@@ -137,7 +145,7 @@ final class TrafficLightView: NSView {
         value.draw(in: row.valueRect.nsRect, withAttributes: valueAttributes)
 
         let barRect = row.progressRect.nsRect
-        let barPath = NSBezierPath(roundedRect: barRect, xRadius: 1.25, yRadius: 1.25)
+        let barPath = NSBezierPath(roundedRect: barRect, xRadius: 2, yRadius: 2)
         NSColor.white.withAlphaComponent(0.12).setFill()
         barPath.fill()
 
@@ -148,9 +156,30 @@ final class TrafficLightView: NSView {
             width: barRect.width * CGFloat(clampedPercent) / 100,
             height: barRect.height
         )
-        let fillPath = NSBezierPath(roundedRect: fillRect, xRadius: 1.25, yRadius: 1.25)
+        let fillPath = NSBezierPath(roundedRect: fillRect, xRadius: 2, yRadius: 2)
         accent.withAlphaComponent(0.72).setFill()
         fillPath.fill()
+    }
+
+    private func drawPanelDividers() {
+        NSColor.white.withAlphaComponent(0.07).setStroke()
+        let horizontal = NSBezierPath()
+        horizontal.move(to: NSPoint(x: layout.bodyRect.minX + 12, y: 58))
+        horizontal.line(to: NSPoint(x: layout.bodyRect.maxX - 12, y: 58))
+        horizontal.lineWidth = 1
+        horizontal.stroke()
+
+        let statusDivider = NSBezierPath()
+        statusDivider.move(to: NSPoint(x: 125, y: 72))
+        statusDivider.line(to: NSPoint(x: 125, y: 98))
+        statusDivider.lineWidth = 1
+        statusDivider.stroke()
+
+        let quotaDivider = NSBezierPath()
+        quotaDivider.move(to: NSPoint(x: 114, y: 22))
+        quotaDivider.line(to: NSPoint(x: 114, y: 48))
+        quotaDivider.lineWidth = 1
+        quotaDivider.stroke()
     }
 
     private func drawLens(center: NSPoint, light: TrafficLightSlot, active: Bool) {
