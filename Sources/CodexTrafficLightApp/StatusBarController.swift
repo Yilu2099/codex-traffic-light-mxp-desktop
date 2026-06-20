@@ -19,7 +19,7 @@ final class StatusBarController {
     private var quota: QuotaSnapshot?
 
     init() {
-        item.button?.imagePosition = .imageOnly
+        item.button?.imagePosition = .imageLeft
         rebuildMenu()
     }
 
@@ -28,6 +28,7 @@ final class StatusBarController {
         self.muted = muted
         self.quota = quota
         item.button?.image = makeStatusImage(state: state)
+        item.button?.title = statusBarQuotaText(for: quota)
         item.button?.toolTip = tooltipText(state: state, quota: quota)
         rebuildMenu()
     }
@@ -64,6 +65,11 @@ final class StatusBarController {
         return "5小时 \(quota.fiveHourRemainingPercent)% · 1周 \(quota.weeklyRemainingPercent)%"
     }
 
+    private func statusBarQuotaText(for quota: QuotaSnapshot?) -> String {
+        guard let quota else { return " 5h -- · 1w --" }
+        return " 5h \(quota.fiveHourRemainingPercent)% · 1w \(quota.weeklyRemainingPercent)%"
+    }
+
     @objc private func setWorking() { delegate?.statusBarDidRequestState(.working) }
     @objc private func setDone() { delegate?.statusBarDidRequestState(.done) }
     @objc private func setWaiting() { delegate?.statusBarDidRequestState(.waiting) }
@@ -74,22 +80,33 @@ final class StatusBarController {
     @objc private func quit() { delegate?.statusBarDidRequestQuit() }
 
     private func makeStatusImage(state: LightState) -> NSImage {
-        let size = NSSize(width: 28, height: 16)
+        let size = NSSize(width: 16, height: 16)
         let image = NSImage(size: size)
         image.lockFocus()
         NSColor.clear.setFill()
         NSRect(origin: .zero, size: size).fill()
 
-        let lights: [(LightState, NSColor, CGFloat)] = [
-            (.waiting, NSColor(hex: "#f3423b"), 6),
-            (.working, NSColor(hex: "#ffd441"), 14),
-            (.done, NSColor(hex: "#55d34d"), 22)
-        ]
-        for (lightState, color, x) in lights {
-            let active = state == lightState
-            color.withAlphaComponent(active ? 1.0 : 0.20).setFill()
-            NSBezierPath(ovalIn: NSRect(x: x - 4, y: 4, width: 8, height: 8)).fill()
+        let color: NSColor
+        let alpha: CGFloat
+        switch state {
+        case .waiting:
+            color = NSColor(hex: "#f3423b")
+            alpha = 1.0
+        case .working:
+            color = NSColor(hex: "#ffd441")
+            alpha = 1.0
+        case .done:
+            color = NSColor(hex: "#55d34d")
+            alpha = 1.0
+        case .idle, .quit:
+            color = NSColor(hex: "#89919a")
+            alpha = 0.55
         }
+
+        color.withAlphaComponent(0.18).setFill()
+        NSBezierPath(ovalIn: NSRect(x: 1, y: 1, width: 14, height: 14)).fill()
+        color.withAlphaComponent(alpha).setFill()
+        NSBezierPath(ovalIn: NSRect(x: 4, y: 4, width: 8, height: 8)).fill()
         image.unlockFocus()
         image.isTemplate = false
         return image
