@@ -107,14 +107,14 @@ public struct TrafficLightLayout: Equatable, Sendable {
     }
 
     public static let `default`: TrafficLightLayout = {
-        let width = 92.0
+        let width = 102.0
         let height = 282.0
         let bodyInsetX = 10.0
         let bodyInsetY = 8.0
         let contentX = 18.0
-        let contentWidth = 56.0
-        let labelWidth = 23.0
-        let gap = 3.0
+        let contentWidth = 66.0
+        let labelWidth = 32.0
+        let gap = 4.0
         let valueWidth = contentWidth - labelWidth - gap
 
         func quotaRow(label: String, baseY: Double) -> TrafficLightQuotaRowLayout {
@@ -148,7 +148,7 @@ public struct TrafficLightLayout: Equatable, Sendable {
                 .green: TrafficLightPoint(x: width / 2, y: 108)
             ],
             hudRect: TrafficLightRect(x: 14, y: 12, width: 64, height: 58),
-            statusRect: TrafficLightRect(x: 18, y: 53, width: 56, height: 13),
+            statusRect: TrafficLightRect(x: 18, y: 53, width: 66, height: 13),
             quotaRows: [
                 quotaRow(label: "5小时", baseY: 34),
                 quotaRow(label: "1周", baseY: 20)

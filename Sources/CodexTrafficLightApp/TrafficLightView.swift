@@ -119,10 +119,10 @@ final class TrafficLightView: NSView {
         valueParagraph.alignment = .right
 
         let labelAttributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.roundedSystemFont(ofSize: 6.9, weight: .medium),
-            .foregroundColor: NSColor.white.withAlphaComponent(0.54),
+            .font: NSFont.roundedSystemFont(ofSize: 8.4, weight: .semibold),
+            .foregroundColor: NSColor.white.withAlphaComponent(0.76),
             .kern: 0,
-            .shadow: NSShadow.softTextShadow(alpha: 0.28),
+            .shadow: NSShadow.softTextShadow(alpha: 0.30),
             .paragraphStyle: labelParagraph
         ]
         let valueAttributes: [NSAttributedString.Key: Any] = [
