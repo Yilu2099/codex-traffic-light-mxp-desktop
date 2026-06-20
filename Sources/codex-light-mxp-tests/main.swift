@@ -399,7 +399,6 @@ func testClearPreservesQuota() throws {
 
 func testFloatingWidgetLayoutKeepsQuotaHudClearOfGreenLight() throws {
     let layout = TrafficLightLayout.default
-    let greenGlow = layout.glowRect(for: .green)
 
     try expect(
         layout.hudRect.minX >= layout.bodyRect.minX
@@ -408,14 +407,19 @@ func testFloatingWidgetLayoutKeepsQuotaHudClearOfGreenLight() throws {
             && layout.hudRect.maxY <= layout.bodyRect.maxY,
         "HUD background should stay inside the traffic light body"
     )
-    try expect(
-        greenGlow.minY >= layout.statusRect.maxY + layout.minimumHudGap,
-        "green glow should sit above status text by at least \(layout.minimumHudGap)pt"
-    )
-    try expect(
-        !greenGlow.intersects(layout.statusRect),
-        "green glow should not overlap status text"
-    )
+    for slot in TrafficLightSlot.allCases {
+        let glow = layout.glowRect(for: slot)
+        try expect(
+            !glow.intersects(layout.statusRect),
+            "\(slot.rawValue) glow should not overlap status text"
+        )
+        for row in layout.quotaRows {
+            try expect(
+                !glow.intersects(row.textRect) && !glow.intersects(row.progressRect),
+                "\(slot.rawValue) glow should not overlap quota row \(row.label)"
+            )
+        }
+    }
 
     for row in layout.quotaRows {
         try expect(

@@ -31,10 +31,10 @@ final class TrafficLightView: NSView {
         let body = layout.bodyRect.nsRect
         drawRoundedGradient(
             body,
-            radius: 17,
-            top: NSColor(hex: "#2f3338"),
-            bottom: NSColor(hex: "#15181c"),
-            stroke: NSColor.white.withAlphaComponent(0.13),
+            radius: 19,
+            top: NSColor(hex: "#30363b"),
+            bottom: NSColor(hex: "#171b1f"),
+            stroke: NSColor.white.withAlphaComponent(0.14),
             width: 1
         )
 
@@ -75,10 +75,10 @@ final class TrafficLightView: NSView {
 
     private func drawTitle() {
         let paragraph = NSMutableParagraphStyle()
-        paragraph.alignment = .center
+        paragraph.alignment = .left
         let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.roundedSystemFont(ofSize: 7.8, weight: .medium),
-            .foregroundColor: NSColor.white.withAlphaComponent(0.36),
+            .font: NSFont.roundedSystemFont(ofSize: 8.0, weight: .semibold),
+            .foregroundColor: NSColor.white.withAlphaComponent(0.38),
             .kern: 0,
             .shadow: NSShadow.softTextShadow(alpha: 0.25),
             .paragraphStyle: paragraph
@@ -88,9 +88,9 @@ final class TrafficLightView: NSView {
 
     private func drawStatusAndQuota() {
         let paragraph = NSMutableParagraphStyle()
-        paragraph.alignment = .center
+        paragraph.alignment = .right
         let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.roundedSystemFont(ofSize: 10.2, weight: .semibold),
+            .font: NSFont.roundedSystemFont(ofSize: 11.2, weight: .semibold),
             .foregroundColor: NSColor.white.withAlphaComponent(0.84),
             .kern: 0,
             .shadow: NSShadow.softTextShadow(alpha: 0.38),
@@ -137,8 +137,8 @@ final class TrafficLightView: NSView {
         value.draw(in: row.valueRect.nsRect, withAttributes: valueAttributes)
 
         let barRect = row.progressRect.nsRect
-        let barPath = NSBezierPath(roundedRect: barRect, xRadius: 1.5, yRadius: 1.5)
-        NSColor.white.withAlphaComponent(0.13).setFill()
+        let barPath = NSBezierPath(roundedRect: barRect, xRadius: 1.25, yRadius: 1.25)
+        NSColor.white.withAlphaComponent(0.12).setFill()
         barPath.fill()
 
         guard let clampedPercent, clampedPercent > 0 else { return }
@@ -148,16 +148,16 @@ final class TrafficLightView: NSView {
             width: barRect.width * CGFloat(clampedPercent) / 100,
             height: barRect.height
         )
-        let fillPath = NSBezierPath(roundedRect: fillRect, xRadius: 1.5, yRadius: 1.5)
+        let fillPath = NSBezierPath(roundedRect: fillRect, xRadius: 1.25, yRadius: 1.25)
         accent.withAlphaComponent(0.72).setFill()
         fillPath.fill()
     }
 
     private func drawLens(center: NSPoint, light: TrafficLightSlot, active: Bool) {
         let base = color(for: light)
-        let glowAlpha: CGFloat = active ? 0.28 : 0.035
-        let fillAlpha: CGFloat = active ? 0.96 : 0.18
-        let rimAlpha: CGFloat = active ? 0.38 : 0.12
+        let glowAlpha: CGFloat = active ? 0.34 : 0.04
+        let fillAlpha: CGFloat = active ? 0.96 : 0.20
+        let rimAlpha: CGFloat = active ? 0.36 : 0.12
         let glowRadius = CGFloat(layout.lensGlowRadius)
         let bulbRadius = CGFloat(layout.lensBulbRadius)
 
@@ -179,7 +179,7 @@ final class TrafficLightView: NSView {
         bulb.fill()
 
         base.withAlphaComponent(rimAlpha).setStroke()
-        bulb.lineWidth = 3.5
+        bulb.lineWidth = 2.4
         bulb.stroke()
 
         NSColor.black.withAlphaComponent(0.23).setStroke()
@@ -187,7 +187,7 @@ final class TrafficLightView: NSView {
         bulb.stroke()
 
         NSColor.white.withAlphaComponent(active ? 0.24 : 0.08).setFill()
-        NSBezierPath(ovalIn: NSRect(x: center.x - 9, y: center.y + 9, width: 16, height: 6)).fill()
+        NSBezierPath(ovalIn: NSRect(x: center.x - 4.5, y: center.y + 3.5, width: 8, height: 3)).fill()
     }
 
     private func drawRoundedGradient(_ rect: NSRect, radius: CGFloat, top: NSColor, bottom: NSColor, stroke: NSColor, width: CGFloat) {
