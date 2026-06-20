@@ -345,13 +345,26 @@ public struct ProcessCodexAppServerTransport: CodexAppServerTransport {
     private let rateLimitsTimeout: TimeInterval
 
     public init(
-        codexBinary: String = ProcessInfo.processInfo.environment["CODEX_TRAFFIC_LIGHT_CODEX_BIN"] ?? "codex",
+        codexBinary: String = ProcessCodexAppServerTransport.defaultCodexBinary(),
         initializeTimeout: TimeInterval = 50,
         rateLimitsTimeout: TimeInterval = 20
     ) {
         self.codexBinary = codexBinary
         self.initializeTimeout = initializeTimeout
         self.rateLimitsTimeout = rateLimitsTimeout
+    }
+
+    public static func defaultCodexBinary() -> String {
+        if let configured = ProcessInfo.processInfo.environment["CODEX_TRAFFIC_LIGHT_CODEX_BIN"],
+           !configured.isEmpty {
+            return configured
+        }
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let localCodex = home.appendingPathComponent(".local/bin/codex").path
+        if FileManager.default.isExecutableFile(atPath: localCodex) {
+            return localCodex
+        }
+        return "codex"
     }
 
     public func readRateLimits() throws -> Data {

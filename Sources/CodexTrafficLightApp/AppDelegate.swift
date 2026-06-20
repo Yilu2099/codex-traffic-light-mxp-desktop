@@ -56,7 +56,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let backgroundStore = StateStore(stateURL: stateURL)
             do {
-                let snapshot = try CodexAppServerQuotaCollector().fetchAndUpdate(store: backgroundStore)
+                let transport = ProcessCodexAppServerTransport(initializeTimeout: 12, rateLimitsTimeout: 8)
+                let collector = CodexAppServerQuotaCollector(
+                    transport: transport,
+                    retryPolicy: CodexAppServerRetryPolicy(retries: 0)
+                )
+                let snapshot = try collector.fetchAndUpdate(store: backgroundStore)
                 DispatchQueue.main.async {
                     self?.handleQuotaSnapshot(snapshot)
                 }
