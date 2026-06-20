@@ -205,7 +205,7 @@ public enum Defaults {
            seconds > 0 {
             return seconds
         }
-        return 30
+        return 60
     }()
 }
 
