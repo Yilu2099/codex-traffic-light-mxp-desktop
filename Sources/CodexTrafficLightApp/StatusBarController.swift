@@ -5,7 +5,6 @@ import CodexTrafficLightCore
 protocol StatusBarControllerDelegate: AnyObject {
     func statusBarDidRequestState(_ state: LightState)
     func statusBarDidRequestClear()
-    func statusBarDidRequestToggleFloatingWindow()
     func statusBarDidRequestToggleMute()
     func statusBarDidRequestQuit()
 }
@@ -38,7 +37,6 @@ final class StatusBarController {
         menu.addItem(withTitle: "当前：\(state.label)", action: nil, keyEquivalent: "")
         menu.addItem(withTitle: "额度：\(quotaText(for: quota))", action: nil, keyEquivalent: "")
         menu.addItem(.separator())
-        menu.addItem(withTitle: "显示/隐藏红绿灯", action: #selector(toggleFloatingWindow), keyEquivalent: "")
         menu.addItem(withTitle: muted ? "恢复提示音" : "静音提示音", action: #selector(toggleMute), keyEquivalent: "")
         menu.addItem(.separator())
         menu.addItem(withTitle: "黄灯：工作中", action: #selector(setWorking), keyEquivalent: "")
@@ -75,7 +73,6 @@ final class StatusBarController {
     @objc private func setWaiting() { delegate?.statusBarDidRequestState(.waiting) }
     @objc private func setIdle() { delegate?.statusBarDidRequestState(.idle) }
     @objc private func clear() { delegate?.statusBarDidRequestClear() }
-    @objc private func toggleFloatingWindow() { delegate?.statusBarDidRequestToggleFloatingWindow() }
     @objc private func toggleMute() { delegate?.statusBarDidRequestToggleMute() }
     @objc private func quit() { delegate?.statusBarDidRequestQuit() }
 

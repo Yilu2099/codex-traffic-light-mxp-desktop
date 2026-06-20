@@ -19,9 +19,9 @@ struct AppPreferences: Codable, Equatable {
     static func defaults(now: Date = Date()) -> AppPreferences {
         AppPreferences(
             muted: false,
-            showFloatingWindow: true,
-            autoShowOnDone: true,
-            autoShowOnWaiting: true,
+            showFloatingWindow: false,
+            autoShowOnDone: false,
+            autoShowOnWaiting: false,
             updatedAt: now
         )
     }
