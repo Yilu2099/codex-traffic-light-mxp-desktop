@@ -384,6 +384,13 @@ func testFloatingWidgetLayoutKeepsQuotaHudClearOfGreenLight() throws {
     let greenGlow = layout.glowRect(for: .green)
 
     try expect(
+        layout.hudRect.minX >= layout.bodyRect.minX
+            && layout.hudRect.maxX <= layout.bodyRect.maxX
+            && layout.hudRect.minY >= layout.bodyRect.minY
+            && layout.hudRect.maxY <= layout.bodyRect.maxY,
+        "HUD background should stay inside the traffic light body"
+    )
+    try expect(
         greenGlow.minY >= layout.statusRect.maxY + layout.minimumHudGap,
         "green glow should sit above status text by at least \(layout.minimumHudGap)pt"
     )

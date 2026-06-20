@@ -69,6 +69,7 @@ public struct TrafficLightLayout: Equatable, Sendable {
     public var bodyRect: TrafficLightRect
     public var titleRect: TrafficLightRect
     public var lightCenters: [TrafficLightSlot: TrafficLightPoint]
+    public var hudRect: TrafficLightRect
     public var statusRect: TrafficLightRect
     public var quotaRows: [TrafficLightQuotaRowLayout]
     public var lensGlowRadius: Double
@@ -82,6 +83,7 @@ public struct TrafficLightLayout: Equatable, Sendable {
         bodyRect: TrafficLightRect,
         titleRect: TrafficLightRect,
         lightCenters: [TrafficLightSlot: TrafficLightPoint],
+        hudRect: TrafficLightRect,
         statusRect: TrafficLightRect,
         quotaRows: [TrafficLightQuotaRowLayout],
         lensGlowRadius: Double,
@@ -94,6 +96,7 @@ public struct TrafficLightLayout: Equatable, Sendable {
         self.bodyRect = bodyRect
         self.titleRect = titleRect
         self.lightCenters = lightCenters
+        self.hudRect = hudRect
         self.statusRect = statusRect
         self.quotaRows = quotaRows
         self.lensGlowRadius = lensGlowRadius
@@ -104,18 +107,18 @@ public struct TrafficLightLayout: Equatable, Sendable {
     }
 
     public static let `default`: TrafficLightLayout = {
-        let width = 96.0
-        let height = 292.0
-        let bodyInsetX = 12.0
-        let bodyInsetY = 9.0
-        let contentX = 16.0
-        let contentWidth = 64.0
-        let labelWidth = 28.0
-        let gap = 4.0
+        let width = 92.0
+        let height = 282.0
+        let bodyInsetX = 10.0
+        let bodyInsetY = 8.0
+        let contentX = 18.0
+        let contentWidth = 56.0
+        let labelWidth = 23.0
+        let gap = 3.0
         let valueWidth = contentWidth - labelWidth - gap
 
         func quotaRow(label: String, baseY: Double) -> TrafficLightQuotaRowLayout {
-            let textRect = TrafficLightRect(x: contentX, y: baseY + 4, width: contentWidth, height: 11)
+            let textRect = TrafficLightRect(x: contentX, y: baseY + 4, width: contentWidth, height: 10)
             return TrafficLightQuotaRowLayout(
                 label: label,
                 textRect: textRect,
@@ -138,19 +141,20 @@ public struct TrafficLightLayout: Equatable, Sendable {
                 width: width - bodyInsetX * 2,
                 height: height - bodyInsetY * 2
             ),
-            titleRect: TrafficLightRect(x: 0, y: height - 32, width: width, height: 20),
+            titleRect: TrafficLightRect(x: 0, y: height - 31, width: width, height: 18),
             lightCenters: [
-                .red: TrafficLightPoint(x: width / 2, y: height - 68),
-                .yellow: TrafficLightPoint(x: width / 2, y: height - 128),
+                .red: TrafficLightPoint(x: width / 2, y: height - 66),
+                .yellow: TrafficLightPoint(x: width / 2, y: height - 126),
                 .green: TrafficLightPoint(x: width / 2, y: 108)
             ],
-            statusRect: TrafficLightRect(x: 14, y: 51, width: width - 28, height: 16),
+            hudRect: TrafficLightRect(x: 14, y: 12, width: 64, height: 58),
+            statusRect: TrafficLightRect(x: 18, y: 53, width: 56, height: 13),
             quotaRows: [
-                quotaRow(label: "5小时", baseY: 31),
-                quotaRow(label: "1周", baseY: 15)
+                quotaRow(label: "5小时", baseY: 34),
+                quotaRow(label: "1周", baseY: 20)
             ],
-            lensGlowRadius: 31,
-            lensBulbRadius: 21,
+            lensGlowRadius: 29,
+            lensBulbRadius: 19,
             minimumHudGap: 8,
             bottomSafeInset: 5,
             minimumPercentTextWidth: 24

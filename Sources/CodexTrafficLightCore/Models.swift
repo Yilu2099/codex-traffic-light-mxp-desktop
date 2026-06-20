@@ -12,9 +12,9 @@ public enum LightState: String, Codable, Equatable, CaseIterable, CustomStringCo
     public var label: String {
         switch self {
         case .idle: return "空闲"
-        case .working: return "正在干活"
-        case .done: return "可以验收"
-        case .waiting: return "等你回复"
+        case .working: return "工作中"
+        case .done: return "已完成"
+        case .waiting: return "待确认"
         case .quit: return "退出"
         }
     }
