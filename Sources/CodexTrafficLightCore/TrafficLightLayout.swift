@@ -104,18 +104,18 @@ public struct TrafficLightLayout: Equatable, Sendable {
     }
 
     public static let `default`: TrafficLightLayout = {
-        let width = 88.0
+        let width = 96.0
         let height = 292.0
         let bodyInsetX = 12.0
         let bodyInsetY = 9.0
-        let contentX = 17.0
-        let contentWidth = 54.0
-        let labelWidth = 24.0
-        let gap = 3.0
+        let contentX = 16.0
+        let contentWidth = 64.0
+        let labelWidth = 28.0
+        let gap = 4.0
         let valueWidth = contentWidth - labelWidth - gap
 
         func quotaRow(label: String, baseY: Double) -> TrafficLightQuotaRowLayout {
-            let textRect = TrafficLightRect(x: contentX, y: baseY + 5, width: contentWidth, height: 12)
+            let textRect = TrafficLightRect(x: contentX, y: baseY + 4, width: contentWidth, height: 11)
             return TrafficLightQuotaRowLayout(
                 label: label,
                 textRect: textRect,
@@ -126,7 +126,7 @@ public struct TrafficLightLayout: Equatable, Sendable {
                     width: valueWidth,
                     height: textRect.height
                 ),
-                progressRect: TrafficLightRect(x: contentX, y: baseY, width: contentWidth, height: 3)
+                progressRect: TrafficLightRect(x: contentX, y: baseY, width: contentWidth, height: 2.5)
             )
         }
 
@@ -144,10 +144,10 @@ public struct TrafficLightLayout: Equatable, Sendable {
                 .yellow: TrafficLightPoint(x: width / 2, y: height - 128),
                 .green: TrafficLightPoint(x: width / 2, y: 108)
             ],
-            statusRect: TrafficLightRect(x: 8, y: 50, width: width - 16, height: 18),
+            statusRect: TrafficLightRect(x: 14, y: 51, width: width - 28, height: 16),
             quotaRows: [
-                quotaRow(label: "5小时", baseY: 30),
-                quotaRow(label: "1周", baseY: 14)
+                quotaRow(label: "5小时", baseY: 31),
+                quotaRow(label: "1周", baseY: 15)
             ],
             lensGlowRadius: 31,
             lensBulbRadius: 21,

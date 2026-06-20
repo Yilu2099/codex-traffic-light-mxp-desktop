@@ -72,6 +72,37 @@ func testExpiredDoneDoesNotParticipateInAggregate() throws {
     try expectEqual(snapshot.computedAggregate(now: now), .idle, "expired done should not participate in aggregate")
 }
 
+func testExpiredWorkingDoesNotParticipateInAggregate() throws {
+    let now = Date(timeIntervalSince1970: 1_000)
+    let snapshot = StateSnapshot(
+        aggregateState: .idle,
+        updatedAt: now,
+        tasks: [
+            "task-working": TaskState(state: .working, workspace: "/tmp/a", source: "test", hookEventName: nil, message: nil, updatedAt: now.addingTimeInterval(-91))
+        ]
+    )
+
+    try expectEqual(snapshot.computedAggregate(now: now, workingTTL: 90), .idle, "expired working should not participate in aggregate")
+}
+
+func testPruningExpiredTasksRemovesStaleWorking() throws {
+    let now = Date(timeIntervalSince1970: 1_000)
+    let snapshot = StateSnapshot(
+        aggregateState: .working,
+        updatedAt: now.addingTimeInterval(-100),
+        tasks: [
+            "fresh-working": TaskState(state: .working, workspace: "/tmp/a", source: "test", hookEventName: nil, message: nil, updatedAt: now.addingTimeInterval(-10)),
+            "stale-working": TaskState(state: .working, workspace: "/tmp/b", source: "test", hookEventName: nil, message: nil, updatedAt: now.addingTimeInterval(-91))
+        ]
+    )
+
+    let pruned = snapshot.pruningExpiredTasks(now: now, workingTTL: 90)
+
+    try expectEqual(pruned.tasks["fresh-working"]?.state, .working, "fresh working should remain")
+    try expectEqual(pruned.tasks["stale-working"] == nil, true, "stale working should be pruned")
+    try expectEqual(pruned.aggregateState, .working, "fresh working should keep aggregate working")
+}
+
 func testHookMapping() throws {
     try expectEqual(HookMapper.state(for: HookEvent(name: "UserPromptSubmit")), .working, "prompt submit should map to working")
     try expectEqual(HookMapper.state(for: HookEvent(name: "PreToolUse")), .working, "pre tool use should map to working")
@@ -441,7 +472,7 @@ func testHookBridgeUpdatesTaskAndQuotaFromPayload() throws {
         input: input,
         fallbackName: "PreToolUse",
         store: store,
-        now: Date(timeIntervalSince1970: 8_000)
+        now: Date()
     )
     let snapshot = store.read()
 
@@ -872,6 +903,8 @@ let tests: [(String, () throws -> Void)] = [
     ("working wins without waiting", testWorkingWinsWhenNoWaitingTaskExists),
     ("recent done wins", testRecentDoneWinsWhenNoWaitingOrWorkingTaskExists),
     ("expired done idles", testExpiredDoneDoesNotParticipateInAggregate),
+    ("expired working idles", testExpiredWorkingDoesNotParticipateInAggregate),
+    ("pruning removes stale working", testPruningExpiredTasksRemovesStaleWorking),
     ("hook mapping", testHookMapping),
     ("command contract", testCommandContract),
     ("quota snapshot clamps", testQuotaSnapshotClampsPercentValues),

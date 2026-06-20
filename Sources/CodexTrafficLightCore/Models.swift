@@ -113,11 +113,15 @@ public struct StateSnapshot: Codable, Equatable {
         StateSnapshot(aggregateState: .idle, updatedAt: now, tasks: [:])
     }
 
-    public func computedAggregate(now: Date = Date(), doneTTL: TimeInterval = Defaults.doneAutoIdleSeconds) -> LightState {
+    public func computedAggregate(
+        now: Date = Date(),
+        doneTTL: TimeInterval = Defaults.doneAutoIdleSeconds,
+        workingTTL: TimeInterval = Defaults.workingAutoIdleSeconds
+    ) -> LightState {
         if tasks.values.contains(where: { $0.state == .waiting }) {
             return .waiting
         }
-        if tasks.values.contains(where: { $0.state == .working }) {
+        if tasks.values.contains(where: { $0.state == .working && now.timeIntervalSince($0.updatedAt) <= workingTTL }) {
             return .working
         }
         let hasRecentDone = tasks.values.contains { task in
@@ -126,17 +130,31 @@ public struct StateSnapshot: Codable, Equatable {
         return hasRecentDone ? .done : .idle
     }
 
-    public func pruningExpiredDone(now: Date = Date(), doneTTL: TimeInterval = Defaults.doneAutoIdleSeconds) -> StateSnapshot {
+    public func pruningExpiredTasks(
+        now: Date = Date(),
+        doneTTL: TimeInterval = Defaults.doneAutoIdleSeconds,
+        workingTTL: TimeInterval = Defaults.workingAutoIdleSeconds
+    ) -> StateSnapshot {
         let activeTasks = tasks.filter { _, task in
-            guard task.state == .done else { return true }
-            return now.timeIntervalSince(task.updatedAt) <= doneTTL
+            switch task.state {
+            case .done:
+                return now.timeIntervalSince(task.updatedAt) <= doneTTL
+            case .working:
+                return now.timeIntervalSince(task.updatedAt) <= workingTTL
+            case .idle, .waiting, .quit:
+                return true
+            }
         }
         return StateSnapshot(
-            aggregateState: StateSnapshot(aggregateState: aggregateState, updatedAt: updatedAt, quota: quota, tasks: activeTasks).computedAggregate(now: now, doneTTL: doneTTL),
+            aggregateState: StateSnapshot(aggregateState: aggregateState, updatedAt: updatedAt, quota: quota, tasks: activeTasks).computedAggregate(now: now, doneTTL: doneTTL, workingTTL: workingTTL),
             updatedAt: now,
             quota: quota,
             tasks: activeTasks
         )
+    }
+
+    public func pruningExpiredDone(now: Date = Date(), doneTTL: TimeInterval = Defaults.doneAutoIdleSeconds) -> StateSnapshot {
+        pruningExpiredTasks(now: now, doneTTL: doneTTL)
     }
 }
 
@@ -159,13 +177,22 @@ public enum Defaults {
         return 10
     }()
 
+    public static let workingAutoIdleSeconds: TimeInterval = {
+        if let raw = ProcessInfo.processInfo.environment["CODEX_LIGHT_WORKING_IDLE_SECONDS"],
+           let seconds = TimeInterval(raw),
+           seconds > 0 {
+            return seconds
+        }
+        return 90
+    }()
+
     public static let appServerQuotaRefreshSeconds: TimeInterval = {
         if let raw = ProcessInfo.processInfo.environment["CODEX_LIGHT_APP_SERVER_QUOTA_REFRESH_SECONDS"],
            let seconds = TimeInterval(raw),
            seconds > 0 {
             return seconds
         }
-        return 5 * 60
+        return 60
     }()
 }
 

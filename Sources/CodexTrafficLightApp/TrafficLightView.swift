@@ -48,6 +48,7 @@ final class TrafficLightView: NSView {
         for (light, center) in centers {
             drawLens(center: center, light: light, active: isVisible(light))
         }
+        drawHudBackground()
         drawStatusAndQuota()
     }
 
@@ -90,10 +91,10 @@ final class TrafficLightView: NSView {
         let paragraph = NSMutableParagraphStyle()
         paragraph.alignment = .center
         let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.roundedSystemFont(ofSize: 12, weight: .semibold),
-            .foregroundColor: NSColor.white.withAlphaComponent(0.78),
-            .kern: 0.15,
-            .shadow: NSShadow.softTextShadow(alpha: 0.55),
+            .font: NSFont.roundedSystemFont(ofSize: 11.4, weight: .bold),
+            .foregroundColor: NSColor.white.withAlphaComponent(0.82),
+            .kern: 0,
+            .shadow: NSShadow.softTextShadow(alpha: 0.48),
             .paragraphStyle: paragraph
         ]
         state.label.draw(in: layout.statusRect.nsRect, withAttributes: attributes)
@@ -119,14 +120,14 @@ final class TrafficLightView: NSView {
         valueParagraph.alignment = .right
 
         let labelAttributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.roundedSystemFont(ofSize: 7.5, weight: .semibold),
-            .foregroundColor: NSColor.white.withAlphaComponent(0.62),
+            .font: NSFont.roundedSystemFont(ofSize: 7.4, weight: .medium),
+            .foregroundColor: NSColor.white.withAlphaComponent(0.60),
             .shadow: NSShadow.softTextShadow(alpha: 0.35),
             .paragraphStyle: labelParagraph
         ]
         let valueAttributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.monospacedDigitSystemFont(ofSize: 8.2, weight: .bold),
-            .foregroundColor: NSColor.white.withAlphaComponent(percent == nil ? 0.42 : 0.86),
+            .font: NSFont.monospacedDigitSystemFont(ofSize: 8.8, weight: .semibold),
+            .foregroundColor: NSColor.white.withAlphaComponent(percent == nil ? 0.42 : 0.88),
             .shadow: NSShadow.softTextShadow(alpha: 0.40),
             .paragraphStyle: valueParagraph
         ]
@@ -147,8 +148,24 @@ final class TrafficLightView: NSView {
             height: barRect.height
         )
         let fillPath = NSBezierPath(roundedRect: fillRect, xRadius: 1.5, yRadius: 1.5)
-        accent.withAlphaComponent(0.72).setFill()
+        accent.withAlphaComponent(0.76).setFill()
         fillPath.fill()
+    }
+
+    private func drawHudBackground() {
+        guard let firstRow = layout.quotaRows.first,
+              let lastRow = layout.quotaRows.last else { return }
+        let minX = min(layout.statusRect.minX, firstRow.progressRect.minX) - 5
+        let maxX = max(layout.statusRect.maxX, firstRow.progressRect.maxX) + 5
+        let minY = lastRow.progressRect.minY - 5
+        let maxY = layout.statusRect.maxY + 3
+        let rect = NSRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+        let path = NSBezierPath(roundedRect: rect, xRadius: 9, yRadius: 9)
+        NSColor.black.withAlphaComponent(0.18).setFill()
+        path.fill()
+        NSColor.white.withAlphaComponent(0.06).setStroke()
+        path.lineWidth = 0.8
+        path.stroke()
     }
 
     private func drawLens(center: NSPoint, light: TrafficLightSlot, active: Bool) {
