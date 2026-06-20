@@ -104,14 +104,14 @@ public struct TrafficLightLayout: Equatable, Sendable {
     }
 
     public static let `default`: TrafficLightLayout = {
-        let width = 116.0
-        let height = 388.0
-        let bodyInsetX = 16.0
-        let bodyInsetY = 12.0
-        let contentX = 24.0
-        let contentWidth = 68.0
-        let labelWidth = 30.0
-        let gap = 4.0
+        let width = 88.0
+        let height = 292.0
+        let bodyInsetX = 12.0
+        let bodyInsetY = 9.0
+        let contentX = 17.0
+        let contentWidth = 54.0
+        let labelWidth = 24.0
+        let gap = 3.0
         let valueWidth = contentWidth - labelWidth - gap
 
         func quotaRow(label: String, baseY: Double) -> TrafficLightQuotaRowLayout {
@@ -138,22 +138,22 @@ public struct TrafficLightLayout: Equatable, Sendable {
                 width: width - bodyInsetX * 2,
                 height: height - bodyInsetY * 2
             ),
-            titleRect: TrafficLightRect(x: 0, y: height - 42, width: width, height: 24),
+            titleRect: TrafficLightRect(x: 0, y: height - 32, width: width, height: 20),
             lightCenters: [
-                .red: TrafficLightPoint(x: width / 2, y: height - 94),
-                .yellow: TrafficLightPoint(x: width / 2, y: height - 174),
-                .green: TrafficLightPoint(x: width / 2, y: 134)
+                .red: TrafficLightPoint(x: width / 2, y: height - 68),
+                .yellow: TrafficLightPoint(x: width / 2, y: height - 128),
+                .green: TrafficLightPoint(x: width / 2, y: 108)
             ],
-            statusRect: TrafficLightRect(x: 8, y: 62, width: width - 16, height: 22),
+            statusRect: TrafficLightRect(x: 8, y: 50, width: width - 16, height: 18),
             quotaRows: [
-                quotaRow(label: "5小时", baseY: 42),
-                quotaRow(label: "1周", baseY: 22)
+                quotaRow(label: "5小时", baseY: 30),
+                quotaRow(label: "1周", baseY: 14)
             ],
-            lensGlowRadius: 42,
-            lensBulbRadius: 29,
+            lensGlowRadius: 31,
+            lensBulbRadius: 21,
             minimumHudGap: 8,
-            bottomSafeInset: 6,
-            minimumPercentTextWidth: 30
+            bottomSafeInset: 5,
+            minimumPercentTextWidth: 24
         )
     }()
 

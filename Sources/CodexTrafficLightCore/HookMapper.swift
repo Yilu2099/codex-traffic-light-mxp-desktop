@@ -73,7 +73,7 @@ public enum HookMapper {
         switch event.name {
         case "UserPromptSubmit", "PreToolUse":
             return .working
-        case "PermissionRequest":
+        case "PermissionRequest", "Notification":
             return .waiting
         case "Stop", "SubagentStop":
             return looksWaiting(event.lastAssistantMessage) ? .waiting : .done

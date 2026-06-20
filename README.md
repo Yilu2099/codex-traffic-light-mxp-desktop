@@ -205,6 +205,85 @@ tail -n 50 "$HOME/Library/Application Support/CodexTrafficLight/hook-mxp.log"
 
 如果日志里没有 `event=Stop`，说明 Codex 这一轮没有调用结束 hook；如果有 `event=Stop state=done result=ok`，但灯仍然是黄灯，再检查是否还有其他任务处于 `working`。如果日志里一直是 `quota=none`，说明当前 hook payload 没有带额度字段。
 
+## 接入 Codex Desktop 兜底监控
+
+Codex Desktop / app-server 会话有时不经过 CLI hook dispatcher。可以安装一个本机 LaunchAgent，轮询 Codex 本地日志数据库：检测到正在运行的桌面 turn 时写入黄灯，日志停止一小段时间后写入绿灯。
+
+```bash
+./install-codex-desktop-monitor.command
+```
+
+监控脚本安装到：
+
+```text
+~/.codex/bin/codex-light-codex-monitor
+```
+
+LaunchAgent 安装到：
+
+```text
+~/Library/LaunchAgents/com.codex.traffic-light-codex-monitor.plist
+```
+
+## 接入 Claude Code
+
+Claude Code hooks 也可以直接复用本工具的命令。把下面配置合并到 `~/.claude/settings.json` 的 `hooks` 字段即可：
+
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          { "type": "command", "command": "$HOME/.codex/bin/codex-light-hook-mxp UserPromptSubmit", "timeout": 5 }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "",
+        "hooks": [
+          { "type": "command", "command": "$HOME/.codex/bin/codex-light-hook-mxp PreToolUse", "timeout": 5 }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "matcher": "",
+        "hooks": [
+          { "type": "command", "command": "$HOME/.codex/bin/codex-light-hook-mxp PermissionRequest", "timeout": 5 }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "",
+        "hooks": [
+          { "type": "command", "command": "$HOME/.codex/bin/codex-light-hook-mxp Notification", "timeout": 5 }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          { "type": "command", "command": "$HOME/.codex/bin/codex-light-hook-mxp Stop", "timeout": 5 }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "",
+        "hooks": [
+          { "type": "command", "command": "$HOME/.codex/bin/codex-light-hook-mxp SubagentStop", "timeout": 5 }
+        ]
+      }
+    ]
+  }
+}
+```
+
 ## 端到端验证
 
 项目内置一个轻量测试 runner：

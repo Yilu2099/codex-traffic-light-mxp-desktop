@@ -74,21 +74,21 @@ final class StatusBarController {
     @objc private func quit() { delegate?.statusBarDidRequestQuit() }
 
     private func makeStatusImage(state: LightState) -> NSImage {
-        let size = NSSize(width: 34, height: 18)
+        let size = NSSize(width: 28, height: 16)
         let image = NSImage(size: size)
         image.lockFocus()
         NSColor.clear.setFill()
         NSRect(origin: .zero, size: size).fill()
 
         let lights: [(LightState, NSColor, CGFloat)] = [
-            (.waiting, NSColor(hex: "#f3423b"), 7),
-            (.working, NSColor(hex: "#ffd441"), 17),
-            (.done, NSColor(hex: "#55d34d"), 27)
+            (.waiting, NSColor(hex: "#f3423b"), 6),
+            (.working, NSColor(hex: "#ffd441"), 14),
+            (.done, NSColor(hex: "#55d34d"), 22)
         ]
         for (lightState, color, x) in lights {
             let active = state == lightState
             color.withAlphaComponent(active ? 1.0 : 0.20).setFill()
-            NSBezierPath(ovalIn: NSRect(x: x - 5, y: 4, width: 10, height: 10)).fill()
+            NSBezierPath(ovalIn: NSRect(x: x - 4, y: 4, width: 8, height: 8)).fill()
         }
         image.unlockFocus()
         image.isTemplate = false

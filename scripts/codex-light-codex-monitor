@@ -1,0 +1,56 @@
+#!/bin/zsh
+set -euo pipefail
+
+STATE_TASK="codex-appserver-monitor"
+CODEX_HOME_DIR="${CODEX_HOME:-$HOME/.codex}"
+LOG_DB="$CODEX_HOME_DIR/logs_2.sqlite"
+STATE_DB="$CODEX_HOME_DIR/state_5.sqlite"
+STATE_CMD="$HOME/.codex/bin/codex-light-mxp"
+POLL_SECONDS="${CODEX_LIGHT_MONITOR_POLL_SECONDS:-2}"
+ACTIVE_WINDOW_SECONDS="${CODEX_LIGHT_MONITOR_ACTIVE_WINDOW_SECONDS:-12}"
+STALE_CLEAR_SECONDS="${CODEX_LIGHT_MONITOR_STALE_CLEAR_SECONDS:-18}"
+
+last_active=0
+
+while true; do
+  now="$(date +%s)"
+  if [[ -r "$LOG_DB" && -r "$STATE_DB" && -x "$STATE_CMD" ]]; then
+    row="$(
+      sqlite3 -separator $'\t' "$LOG_DB" "
+        attach database '$STATE_DB' as state_db;
+        select
+          coalesce(l.thread_id, ''),
+          coalesce(t.cwd, ''),
+          max(l.ts)
+        from logs l
+        left join state_db.threads t on t.id = l.thread_id
+        where l.ts >= ($now - $ACTIVE_WINDOW_SECONDS)
+          and l.thread_id is not null
+          and (
+            l.feedback_log_body like '%session_task.turn%'
+            or l.feedback_log_body like '%run_sampling_request%'
+            or l.feedback_log_body like '%response.output_item.added%'
+            or l.feedback_log_body like '%response.function_call_arguments%'
+          )
+        group by l.thread_id
+        order by max(l.ts) desc
+        limit 1;
+      " 2>/dev/null || true
+    )"
+
+    if [[ -n "$row" ]]; then
+      thread_id="${row%%$'\t'*}"
+      rest="${row#*$'\t'}"
+      cwd="${rest%%$'\t'*}"
+      [[ -z "$thread_id" ]] && thread_id="$STATE_TASK"
+      [[ -z "$cwd" || "$cwd" == "$rest" ]] && cwd="$PWD"
+      "$STATE_CMD" --task "$STATE_TASK" --workspace "$cwd" working >/dev/null 2>&1 || true
+      last_active="$now"
+    elif (( last_active > 0 && now - last_active >= STALE_CLEAR_SECONDS )); then
+      "$STATE_CMD" --task "$STATE_TASK" done >/dev/null 2>&1 || true
+      last_active=0
+    fi
+  fi
+
+  sleep "$POLL_SECONDS"
+done

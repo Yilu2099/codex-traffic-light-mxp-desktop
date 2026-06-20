@@ -11,7 +11,7 @@ final class FloatingLightWindow {
         let size = NSSize(width: layout.windowSize.x, height: layout.windowSize.y)
         view = TrafficLightView(frame: NSRect(origin: .zero, size: size))
         window = NSWindow(
-            contentRect: NSRect(x: 1280, y: 450, width: size.width, height: size.height),
+            contentRect: FloatingLightWindow.preferredFrame(size: size),
             styleMask: [.borderless],
             backing: .buffered,
             defer: false
@@ -39,7 +39,7 @@ final class FloatingLightWindow {
         view.state = state
         view.quota = quota
         if show {
-            window.makeKeyAndOrderFront(nil)
+            showWindow()
         }
     }
 
@@ -51,7 +51,31 @@ final class FloatingLightWindow {
         if window.isVisible {
             hide()
         } else {
-            window.makeKeyAndOrderFront(nil)
+            showWindow()
         }
+    }
+
+    private func showWindow() {
+        ensureOnScreen()
+        window.orderFrontRegardless()
+    }
+
+    private func ensureOnScreen() {
+        guard let screen = window.screen ?? NSScreen.main else { return }
+        let visible = screen.visibleFrame.insetBy(dx: 12, dy: 12)
+        if visible.intersects(window.frame) {
+            return
+        }
+        window.setFrame(FloatingLightWindow.preferredFrame(size: window.frame.size, screen: screen), display: true)
+    }
+
+    private static func preferredFrame(size: NSSize, screen: NSScreen? = NSScreen.main) -> NSRect {
+        let visible = (screen ?? NSScreen.main)?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        return NSRect(
+            x: visible.maxX - size.width - 24,
+            y: visible.maxY - size.height - 64,
+            width: size.width,
+            height: size.height
+        )
     }
 }
