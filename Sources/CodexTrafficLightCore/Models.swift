@@ -66,12 +66,16 @@ public struct TaskState: Codable, Equatable {
 public struct QuotaSnapshot: Codable, Equatable {
     public var fiveHourRemainingPercent: Int
     public var weeklyRemainingPercent: Int
+    public var fiveHourResetsAt: Date?
+    public var weeklyResetsAt: Date?
     public var source: String
     public var updatedAt: Date
 
     enum CodingKeys: String, CodingKey {
         case fiveHourRemainingPercent = "five_hour_remaining_percent"
         case weeklyRemainingPercent = "weekly_remaining_percent"
+        case fiveHourResetsAt = "five_hour_resets_at"
+        case weeklyResetsAt = "weekly_resets_at"
         case source
         case updatedAt = "updated_at"
     }
@@ -79,11 +83,15 @@ public struct QuotaSnapshot: Codable, Equatable {
     public init(
         fiveHourRemainingPercent: Int,
         weeklyRemainingPercent: Int,
+        fiveHourResetsAt: Date? = nil,
+        weeklyResetsAt: Date? = nil,
         source: String,
         updatedAt: Date
     ) {
         self.fiveHourRemainingPercent = min(100, max(0, fiveHourRemainingPercent))
         self.weeklyRemainingPercent = min(100, max(0, weeklyRemainingPercent))
+        self.fiveHourResetsAt = fiveHourResetsAt
+        self.weeklyResetsAt = weeklyResetsAt
         self.source = source
         self.updatedAt = updatedAt
     }

@@ -77,6 +77,7 @@ public enum CodexAppServerQuotaMapper {
 
     public static func quotaValues(from data: Data) throws -> QuotaValues {
         let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .secondsSince1970
         let response: AppServerRateLimitsResponse
         do {
             response = try decoder.decode(AppServerRateLimitsResponse.self, from: data)
@@ -114,7 +115,9 @@ public enum CodexAppServerQuotaMapper {
         }
         return QuotaValues(
             fiveHourRemainingPercent: remainingPercent(fromUsedPercent: fiveHourWindow.usedPercent),
-            weeklyRemainingPercent: remainingPercent(fromUsedPercent: weeklyWindow.usedPercent)
+            weeklyRemainingPercent: remainingPercent(fromUsedPercent: weeklyWindow.usedPercent),
+            fiveHourResetsAt: fiveHourWindow.resetsAt,
+            weeklyResetsAt: weeklyWindow.resetsAt
         )
     }
 
@@ -326,6 +329,8 @@ public struct CodexAppServerQuotaCollector {
         return try store.updateQuota(
             fiveHourPercent: quota.fiveHourRemainingPercent,
             weeklyPercent: quota.weeklyRemainingPercent,
+            fiveHourResetsAt: quota.fiveHourResetsAt,
+            weeklyResetsAt: quota.weeklyResetsAt,
             source: Self.source,
             now: now
         )
@@ -507,6 +512,7 @@ private struct AppServerRateLimitSnapshot: Decodable {
 private struct AppServerRateLimitWindow: Decodable {
     var usedPercent: Double
     var windowDurationMins: Int?
+    var resetsAt: Date?
 }
 
 private final class LockedDataBuffer: @unchecked Sendable {

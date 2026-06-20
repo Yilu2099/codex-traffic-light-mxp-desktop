@@ -118,6 +118,7 @@ codex-light-mxp quota --stdin --json
 - `quota --stdin`：从标准输入读取 JSON，提取 `five_hour_remaining_percent` / `weekly_remaining_percent` 或 `fiveHourRemainingPercent` / `weeklyRemainingPercent`。
 
 App 启动后会自动尝试采集一次额度，之后每 60 秒轮询一次。采集依赖 Codex CLI 的实验性 `app-server` 协议；如果 Codex 升级导致协议变化或网络波动，采集失败时会保留上一次额度，不会清空现有显示。
+如果 5 小时或 1 周窗口剩余额度为 `0%`，且 app-server 返回了对应 `resetsAt` 时间，菜单栏会显示“还有多久”恢复，而不是显示绝对更新时间。
 
 `quota --app-server` 会为 Codex app-server 冷启动留出更宽的时间：
 

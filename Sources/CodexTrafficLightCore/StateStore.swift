@@ -90,6 +90,8 @@ public final class StateStore {
     public func updateQuota(
         fiveHourPercent: Int,
         weeklyPercent: Int,
+        fiveHourResetsAt: Date? = nil,
+        weeklyResetsAt: Date? = nil,
         source: String,
         now: Date = Date()
     ) throws -> StateSnapshot {
@@ -97,6 +99,8 @@ public final class StateStore {
         snapshot.quota = QuotaSnapshot(
             fiveHourRemainingPercent: fiveHourPercent,
             weeklyRemainingPercent: weeklyPercent,
+            fiveHourResetsAt: fiveHourResetsAt,
+            weeklyResetsAt: weeklyResetsAt,
             source: source,
             updatedAt: now
         )

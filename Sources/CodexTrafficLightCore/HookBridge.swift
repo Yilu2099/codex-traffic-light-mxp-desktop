@@ -44,6 +44,8 @@ public enum HookBridge {
             snapshot = try store.updateQuota(
                 fiveHourPercent: quota.fiveHourRemainingPercent,
                 weeklyPercent: quota.weeklyRemainingPercent,
+                fiveHourResetsAt: quota.fiveHourResetsAt,
+                weeklyResetsAt: quota.weeklyResetsAt,
                 source: "codex-hook",
                 now: now
             )

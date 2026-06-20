@@ -60,12 +60,36 @@ final class StatusBarController {
 
     private func quotaText(for quota: QuotaSnapshot?) -> String {
         guard let quota else { return "暂无数据" }
-        return "5小时 \(quota.fiveHourRemainingPercent)% · 1周 \(quota.weeklyRemainingPercent)%"
+        return "\(quotaWindowText(label: "5小时", percent: quota.fiveHourRemainingPercent, resetsAt: quota.fiveHourResetsAt)) · \(quotaWindowText(label: "1周", percent: quota.weeklyRemainingPercent, resetsAt: quota.weeklyResetsAt))"
     }
 
     private func statusBarQuotaText(for quota: QuotaSnapshot?) -> String {
         guard let quota else { return " 5h -- · 1周 --" }
-        return " 5h \(quota.fiveHourRemainingPercent)% · 1周 \(quota.weeklyRemainingPercent)%"
+        return " \(quotaWindowText(label: "5h", percent: quota.fiveHourRemainingPercent, resetsAt: quota.fiveHourResetsAt)) · \(quotaWindowText(label: "1周", percent: quota.weeklyRemainingPercent, resetsAt: quota.weeklyResetsAt))"
+    }
+
+    private func quotaWindowText(label: String, percent: Int, resetsAt: Date?) -> String {
+        if percent <= 0, let resetsAt {
+            return "\(label) \(relativeResetText(until: resetsAt))"
+        }
+        return "\(label) \(percent)%"
+    }
+
+    private func relativeResetText(until resetsAt: Date, now: Date = Date()) -> String {
+        let seconds = max(0, Int(resetsAt.timeIntervalSince(now).rounded(.up)))
+        if seconds <= 0 {
+            return "即将恢复"
+        }
+        let days = seconds / 86_400
+        let hours = (seconds % 86_400) / 3_600
+        let minutes = (seconds % 3_600) / 60
+        if days > 0 {
+            return "还有\(days)天\(hours)小时"
+        }
+        if hours > 0 {
+            return "还有\(hours)小时\(minutes)分"
+        }
+        return "还有\(max(1, minutes))分"
     }
 
     @objc private func setWorking() { delegate?.statusBarDidRequestState(.working) }

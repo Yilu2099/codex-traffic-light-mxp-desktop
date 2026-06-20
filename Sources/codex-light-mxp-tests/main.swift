@@ -158,6 +158,24 @@ func testQuotaSnapshotClampsPercentValues() throws {
     try expectEqual(low.weeklyRemainingPercent, 0, "weekly quota should clamp low values")
 }
 
+func testQuotaSnapshotStoresResetDates() throws {
+    let updatedAt = Date(timeIntervalSince1970: 1_234)
+    let fiveHourReset = Date(timeIntervalSince1970: 1_700)
+    let weeklyReset = Date(timeIntervalSince1970: 2_400)
+
+    let quota = QuotaSnapshot(
+        fiveHourRemainingPercent: 0,
+        weeklyRemainingPercent: 0,
+        fiveHourResetsAt: fiveHourReset,
+        weeklyResetsAt: weeklyReset,
+        source: "test",
+        updatedAt: updatedAt
+    )
+
+    try expectEqual(quota.fiveHourResetsAt, fiveHourReset, "five hour reset date should be stored")
+    try expectEqual(quota.weeklyResetsAt, weeklyReset, "weekly reset date should be stored")
+}
+
 func testQuotaExtractorReadsTopLevelSnakeCase() throws {
     let data = """
     {
@@ -226,6 +244,26 @@ func testQuotaExtractorRequiresBothWindows() throws {
     """.data(using: .utf8)!
 
     try expectEqual(QuotaExtractor.extract(from: data) == nil, true, "extractor should ignore incomplete quota data")
+}
+
+func testQuotaExtractorReadsZeroPercentAndResetDates() throws {
+    let data = """
+    {
+      "quota": {
+        "five_hour_remaining_percent": 0,
+        "weekly_remaining_percent": 0,
+        "five_hour_resets_at": 1781189000,
+        "weekly_resets_at": 1781275400
+      }
+    }
+    """.data(using: .utf8)!
+
+    let quota = QuotaExtractor.extract(from: data)
+
+    try expectEqual(quota?.fiveHourRemainingPercent, 0, "extractor should read exhausted 5 hour quota")
+    try expectEqual(quota?.weeklyRemainingPercent, 0, "extractor should read exhausted weekly quota")
+    try expectEqual(quota?.fiveHourResetsAt, Date(timeIntervalSince1970: 1_781_189_000), "extractor should read five hour reset date")
+    try expectEqual(quota?.weeklyResetsAt, Date(timeIntervalSince1970: 1_781_275_400), "extractor should read weekly reset date")
 }
 
 func testStateSnapshotDecodesOldJSONWithoutQuota() throws {
@@ -356,6 +394,8 @@ func testUpdateQuotaPreservesTasksAndAggregateState() throws {
     let snapshot = try store.updateQuota(
         fiveHourPercent: 72,
         weeklyPercent: 48,
+        fiveHourResetsAt: now.addingTimeInterval(301),
+        weeklyResetsAt: now.addingTimeInterval(10_081),
         source: "test",
         now: now.addingTimeInterval(1)
     )
@@ -367,6 +407,8 @@ func testUpdateQuotaPreservesTasksAndAggregateState() throws {
     try expectEqual(snapshot.quota?.weeklyRemainingPercent, 48, "quota update should set weekly percent")
     try expectEqual(snapshot.quota?.source, "test", "quota update should set source")
     try expectEqual(snapshot.quota?.updatedAt, now.addingTimeInterval(1), "quota update should set quota updatedAt")
+    try expectEqual(snapshot.quota?.fiveHourResetsAt, now.addingTimeInterval(301), "quota update should set five hour reset date")
+    try expectEqual(snapshot.quota?.weeklyResetsAt, now.addingTimeInterval(10_081), "quota update should set weekly reset date")
 }
 
 func testClearPreservesQuota() throws {
@@ -626,6 +668,18 @@ func testAppServerQuotaMapperClampsRemainingPercent() throws {
 
     try expectEqual(quota.fiveHourRemainingPercent, 100, "mapper should clamp remaining above 100")
     try expectEqual(quota.weeklyRemainingPercent, 0, "mapper should clamp remaining below 0")
+}
+
+func testAppServerQuotaMapperReadsResetTimes() throws {
+    let codex = appServerSnapshot(primaryUsed: 100, primaryDuration: 300, secondaryUsed: 100, secondaryDuration: 10_080)
+    let data = appServerRateLimitsResponse(rateLimitsByLimitId: #"{"codex": \#(codex)}"#)
+
+    let quota = try CodexAppServerQuotaMapper.quotaValues(from: data)
+
+    try expectEqual(quota.fiveHourRemainingPercent, 0, "mapper should read exhausted 5 hour quota")
+    try expectEqual(quota.weeklyRemainingPercent, 0, "mapper should read exhausted weekly quota")
+    try expectEqual(quota.fiveHourResetsAt, Date(timeIntervalSince1970: 1_781_189_000), "mapper should read five hour reset date")
+    try expectEqual(quota.weeklyResetsAt, Date(timeIntervalSince1970: 1_781_189_000), "mapper should read weekly reset date")
 }
 
 func testAppServerQuotaMapperRequiresBothWindows() throws {
@@ -938,10 +992,12 @@ let tests: [(String, () throws -> Void)] = [
     ("hook mapping", testHookMapping),
     ("command contract", testCommandContract),
     ("quota snapshot clamps", testQuotaSnapshotClampsPercentValues),
+    ("quota snapshot stores reset dates", testQuotaSnapshotStoresResetDates),
     ("quota extractor reads top-level snake case", testQuotaExtractorReadsTopLevelSnakeCase),
     ("quota extractor reads nested camel case and clamps", testQuotaExtractorReadsNestedCamelCaseAndClamps),
     ("quota extractor reads quota and rate limits nesting", testQuotaExtractorReadsQuotaAndRateLimitsNesting),
     ("quota extractor requires both windows", testQuotaExtractorRequiresBothWindows),
+    ("quota extractor reads zero percent and reset dates", testQuotaExtractorReadsZeroPercentAndResetDates),
     ("old JSON decodes without quota", testStateSnapshotDecodesOldJSONWithoutQuota),
     ("state store clear and idle", testStateStoreClearAndIdleTaskRemoval),
     ("state JSON keys", testStateFileUsesPlannedJSONKeys),
@@ -956,6 +1012,7 @@ let tests: [(String, () throws -> Void)] = [
     ("app-server quota mapper reads codex limit", testAppServerQuotaMapperReadsCodexLimitByExactDurations),
     ("app-server quota mapper falls back top-level", testAppServerQuotaMapperFallsBackToTopLevelRateLimits),
     ("app-server quota mapper clamps remaining", testAppServerQuotaMapperClampsRemainingPercent),
+    ("app-server quota mapper reads reset times", testAppServerQuotaMapperReadsResetTimes),
     ("app-server quota mapper requires both windows", testAppServerQuotaMapperRequiresBothWindows),
     ("app-server quota mapper falls back primary secondary", testAppServerQuotaMapperFallsBackToPrimarySecondaryWhenDurationsAreMissing),
     ("app-server quota mapper ignores individual limit", testAppServerQuotaMapperIgnoresIndividualLimitRemainingPercent),

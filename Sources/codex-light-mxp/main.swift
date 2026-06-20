@@ -106,6 +106,8 @@ do {
             let snapshot = try store.updateQuota(
                 fiveHourPercent: quota.fiveHourRemainingPercent,
                 weeklyPercent: quota.weeklyRemainingPercent,
+                fiveHourResetsAt: quota.fiveHourResetsAt,
+                weeklyResetsAt: quota.weeklyResetsAt,
                 source: "cli"
             )
             try printSnapshot(snapshot, json: options.json)
