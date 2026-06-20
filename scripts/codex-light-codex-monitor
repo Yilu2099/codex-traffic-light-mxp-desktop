@@ -8,7 +8,7 @@ STATE_DB="$CODEX_HOME_DIR/state_5.sqlite"
 STATE_CMD="$HOME/.codex/bin/codex-light-mxp"
 POLL_SECONDS="${CODEX_LIGHT_MONITOR_POLL_SECONDS:-2}"
 ACTIVE_WINDOW_SECONDS="${CODEX_LIGHT_MONITOR_ACTIVE_WINDOW_SECONDS:-6}"
-STALE_CLEAR_SECONDS="${CODEX_LIGHT_MONITOR_STALE_CLEAR_SECONDS:-10}"
+DONE_AFTER_IDLE_SECONDS="${CODEX_LIGHT_MONITOR_DONE_AFTER_IDLE_SECONDS:-${CODEX_LIGHT_MONITOR_STALE_CLEAR_SECONDS:-10}}"
 
 last_active=0
 
@@ -46,8 +46,8 @@ while true; do
       [[ -z "$cwd" || "$cwd" == "$rest" ]] && cwd="$PWD"
       "$STATE_CMD" --task "$STATE_TASK" --workspace "$cwd" working >/dev/null 2>&1 || true
       last_active="$now"
-    elif (( last_active > 0 && now - last_active >= STALE_CLEAR_SECONDS )); then
-      "$STATE_CMD" --task "$STATE_TASK" idle >/dev/null 2>&1 || true
+    elif (( last_active > 0 && now - last_active >= DONE_AFTER_IDLE_SECONDS )); then
+      "$STATE_CMD" --task "$STATE_TASK" done >/dev/null 2>&1 || true
       last_active=0
     fi
   fi
