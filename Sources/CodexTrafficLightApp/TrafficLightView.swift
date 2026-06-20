@@ -48,7 +48,6 @@ final class TrafficLightView: NSView {
         for (light, center) in centers {
             drawLens(center: center, light: light, active: isVisible(light))
         }
-        drawHudBackground()
         drawStatusAndQuota()
     }
 
@@ -139,7 +138,7 @@ final class TrafficLightView: NSView {
 
         let barRect = row.progressRect.nsRect
         let barPath = NSBezierPath(roundedRect: barRect, xRadius: 1.5, yRadius: 1.5)
-        NSColor.white.withAlphaComponent(0.10).setFill()
+        NSColor.white.withAlphaComponent(0.13).setFill()
         barPath.fill()
 
         guard let clampedPercent, clampedPercent > 0 else { return }
@@ -152,20 +151,6 @@ final class TrafficLightView: NSView {
         let fillPath = NSBezierPath(roundedRect: fillRect, xRadius: 1.5, yRadius: 1.5)
         accent.withAlphaComponent(0.72).setFill()
         fillPath.fill()
-    }
-
-    private func drawHudBackground() {
-        let rect = layout.hudRect.nsRect
-        let path = NSBezierPath(roundedRect: rect, xRadius: 10, yRadius: 10)
-        NSColor.black.withAlphaComponent(0.20).setFill()
-        path.fill()
-        NSColor.white.withAlphaComponent(0.055).setStroke()
-        path.lineWidth = 0.8
-        path.stroke()
-
-        let accentRect = NSRect(x: rect.minX + 10, y: rect.maxY - 6, width: rect.width - 20, height: 1)
-        color(for: activeLight() ?? .green).withAlphaComponent(state == .idle ? 0.14 : 0.34).setFill()
-        NSBezierPath(roundedRect: accentRect, xRadius: 0.5, yRadius: 0.5).fill()
     }
 
     private func drawLens(center: NSPoint, light: TrafficLightSlot, active: Bool) {

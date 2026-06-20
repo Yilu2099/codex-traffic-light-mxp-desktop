@@ -103,12 +103,30 @@ func testPruningExpiredTasksRemovesStaleWorking() throws {
     try expectEqual(pruned.aggregateState, .working, "fresh working should keep aggregate working")
 }
 
+func testExpiredWaitingDoesNotBlockWorking() throws {
+    let now = Date(timeIntervalSince1970: 1_000)
+    let snapshot = StateSnapshot(
+        aggregateState: .waiting,
+        updatedAt: now,
+        tasks: [
+            "stale-waiting": TaskState(state: .waiting, workspace: "/tmp/a", source: "test", hookEventName: nil, message: nil, updatedAt: now.addingTimeInterval(-301)),
+            "fresh-working": TaskState(state: .working, workspace: "/tmp/b", source: "test", hookEventName: nil, message: nil, updatedAt: now.addingTimeInterval(-10))
+        ]
+    )
+
+    let pruned = snapshot.pruningExpiredTasks(now: now, workingTTL: 90, waitingTTL: 300)
+
+    try expectEqual(pruned.tasks["stale-waiting"] == nil, true, "stale waiting should be pruned")
+    try expectEqual(pruned.aggregateState, .working, "fresh working should win after stale waiting expires")
+}
+
 func testHookMapping() throws {
     try expectEqual(HookMapper.state(for: HookEvent(name: "UserPromptSubmit")), .working, "prompt submit should map to working")
     try expectEqual(HookMapper.state(for: HookEvent(name: "PreToolUse")), .working, "pre tool use should map to working")
     try expectEqual(HookMapper.state(for: HookEvent(name: "PermissionRequest")), .waiting, "permission request should map to waiting")
     try expectEqual(HookMapper.state(for: HookEvent(name: "Stop", lastAssistantMessage: "Implemented and verified.")), .done, "stop should map to done")
     try expectEqual(HookMapper.state(for: HookEvent(name: "Stop", lastAssistantMessage: "需要你确认授权后我才能继续。")), .waiting, "waiting Chinese text should map stop to waiting")
+    try expectEqual(HookMapper.state(for: HookEvent(name: "Stop", lastAssistantMessage: "已生成配置文件，需要在系统设置里确认一次安装。")), .done, "system-settings confirmation instructions should not make stop waiting")
     try expectEqual(HookMapper.state(for: HookEvent(name: "SubagentStop", lastAssistantMessage: "Waiting for user approval.")), .waiting, "waiting English text should map subagent stop to waiting")
 }
 
@@ -233,7 +251,7 @@ func testStateStoreClearAndIdleTaskRemoval() throws {
     let directory = URL(fileURLWithPath: NSTemporaryDirectory())
         .appendingPathComponent("codex-light-mxp-tests-\(UUID().uuidString)", isDirectory: true)
     let store = StateStore(stateURL: directory.appendingPathComponent("state.json"))
-    let now = Date(timeIntervalSince1970: 2_000)
+    let now = Date()
 
     _ = try store.updateTask(
         taskID: "task-1",
@@ -324,7 +342,7 @@ func testUpdateQuotaPreservesTasksAndAggregateState() throws {
     let directory = URL(fileURLWithPath: NSTemporaryDirectory())
         .appendingPathComponent("codex-light-mxp-quota-update-tests-\(UUID().uuidString)", isDirectory: true)
     let store = StateStore(stateURL: directory.appendingPathComponent("state.json"))
-    let now = Date(timeIntervalSince1970: 6_000)
+    let now = Date()
     _ = try store.updateTask(
         taskID: "task-1",
         state: .waiting,
@@ -495,7 +513,7 @@ func testHookBridgeQuotaOnlyEventDoesNotCreateTask() throws {
     let directory = URL(fileURLWithPath: NSTemporaryDirectory())
         .appendingPathComponent("codex-light-mxp-quota-only-hook-tests-\(UUID().uuidString)", isDirectory: true)
     let store = StateStore(stateURL: directory.appendingPathComponent("state.json"))
-    let now = Date(timeIntervalSince1970: 9_000)
+    let now = Date()
     _ = try store.updateTask(
         taskID: "task-1",
         state: .waiting,
@@ -912,6 +930,7 @@ let tests: [(String, () throws -> Void)] = [
     ("expired done idles", testExpiredDoneDoesNotParticipateInAggregate),
     ("expired working idles", testExpiredWorkingDoesNotParticipateInAggregate),
     ("pruning removes stale working", testPruningExpiredTasksRemovesStaleWorking),
+    ("expired waiting does not block working", testExpiredWaitingDoesNotBlockWorking),
     ("hook mapping", testHookMapping),
     ("command contract", testCommandContract),
     ("quota snapshot clamps", testQuotaSnapshotClampsPercentValues),

@@ -116,9 +116,10 @@ public struct StateSnapshot: Codable, Equatable {
     public func computedAggregate(
         now: Date = Date(),
         doneTTL: TimeInterval = Defaults.doneAutoIdleSeconds,
-        workingTTL: TimeInterval = Defaults.workingAutoIdleSeconds
+        workingTTL: TimeInterval = Defaults.workingAutoIdleSeconds,
+        waitingTTL: TimeInterval = Defaults.waitingAutoIdleSeconds
     ) -> LightState {
-        if tasks.values.contains(where: { $0.state == .waiting }) {
+        if tasks.values.contains(where: { $0.state == .waiting && now.timeIntervalSince($0.updatedAt) <= waitingTTL }) {
             return .waiting
         }
         if tasks.values.contains(where: { $0.state == .working && now.timeIntervalSince($0.updatedAt) <= workingTTL }) {
@@ -133,7 +134,8 @@ public struct StateSnapshot: Codable, Equatable {
     public func pruningExpiredTasks(
         now: Date = Date(),
         doneTTL: TimeInterval = Defaults.doneAutoIdleSeconds,
-        workingTTL: TimeInterval = Defaults.workingAutoIdleSeconds
+        workingTTL: TimeInterval = Defaults.workingAutoIdleSeconds,
+        waitingTTL: TimeInterval = Defaults.waitingAutoIdleSeconds
     ) -> StateSnapshot {
         let activeTasks = tasks.filter { _, task in
             switch task.state {
@@ -141,12 +143,14 @@ public struct StateSnapshot: Codable, Equatable {
                 return now.timeIntervalSince(task.updatedAt) <= doneTTL
             case .working:
                 return now.timeIntervalSince(task.updatedAt) <= workingTTL
-            case .idle, .waiting, .quit:
+            case .waiting:
+                return now.timeIntervalSince(task.updatedAt) <= waitingTTL
+            case .idle, .quit:
                 return true
             }
         }
         return StateSnapshot(
-            aggregateState: StateSnapshot(aggregateState: aggregateState, updatedAt: updatedAt, quota: quota, tasks: activeTasks).computedAggregate(now: now, doneTTL: doneTTL, workingTTL: workingTTL),
+            aggregateState: StateSnapshot(aggregateState: aggregateState, updatedAt: updatedAt, quota: quota, tasks: activeTasks).computedAggregate(now: now, doneTTL: doneTTL, workingTTL: workingTTL, waitingTTL: waitingTTL),
             updatedAt: now,
             quota: quota,
             tasks: activeTasks
@@ -184,6 +188,15 @@ public enum Defaults {
             return seconds
         }
         return 90
+    }()
+
+    public static let waitingAutoIdleSeconds: TimeInterval = {
+        if let raw = ProcessInfo.processInfo.environment["CODEX_LIGHT_WAITING_IDLE_SECONDS"],
+           let seconds = TimeInterval(raw),
+           seconds > 0 {
+            return seconds
+        }
+        return 5 * 60
     }()
 
     public static let appServerQuotaRefreshSeconds: TimeInterval = {
