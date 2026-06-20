@@ -42,7 +42,7 @@ final class StatusBarController {
         menu.addItem(withTitle: "黄灯：工作中", action: #selector(setWorking), keyEquivalent: "")
         menu.addItem(withTitle: "绿灯：已完成", action: #selector(setDone), keyEquivalent: "")
         menu.addItem(withTitle: "红灯：待确认", action: #selector(setWaiting), keyEquivalent: "")
-        menu.addItem(withTitle: "全暗：空闲", action: #selector(setIdle), keyEquivalent: "")
+        menu.addItem(withTitle: "黑灯：空闲", action: #selector(setIdle), keyEquivalent: "")
         menu.addItem(withTitle: "清空失联任务", action: #selector(clear), keyEquivalent: "")
         menu.addItem(.separator())
         menu.addItem(withTitle: "退出", action: #selector(quit), keyEquivalent: "")
@@ -64,8 +64,8 @@ final class StatusBarController {
     }
 
     private func statusBarQuotaText(for quota: QuotaSnapshot?) -> String {
-        guard let quota else { return " 5h -- · 1w --" }
-        return " 5h \(quota.fiveHourRemainingPercent)% · 1w \(quota.weeklyRemainingPercent)%"
+        guard let quota else { return " 5h -- · 1周 --" }
+        return " 5h \(quota.fiveHourRemainingPercent)% · 1周 \(quota.weeklyRemainingPercent)%"
     }
 
     @objc private func setWorking() { delegate?.statusBarDidRequestState(.working) }
@@ -96,11 +96,11 @@ final class StatusBarController {
             color = NSColor(hex: "#55d34d")
             alpha = 1.0
         case .idle, .quit:
-            color = NSColor(hex: "#89919a")
-            alpha = 0.55
+            color = NSColor(hex: "#111418")
+            alpha = 1.0
         }
 
-        color.withAlphaComponent(0.18).setFill()
+        color.withAlphaComponent(state == .idle || state == .quit ? 0.70 : 0.18).setFill()
         NSBezierPath(ovalIn: NSRect(x: 1, y: 1, width: 14, height: 14)).fill()
         color.withAlphaComponent(alpha).setFill()
         NSBezierPath(ovalIn: NSRect(x: 4, y: 4, width: 8, height: 8)).fill()
