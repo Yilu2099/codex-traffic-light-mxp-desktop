@@ -76,7 +76,7 @@ public enum HookMapper {
         case "PermissionRequest", "Notification":
             return .waiting
         case "Stop", "SubagentStop":
-            return looksWaiting(event.lastAssistantMessage) ? .waiting : .done
+            return .done
         default:
             return .idle
         }

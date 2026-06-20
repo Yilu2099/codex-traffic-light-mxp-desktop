@@ -125,9 +125,9 @@ func testHookMapping() throws {
     try expectEqual(HookMapper.state(for: HookEvent(name: "PreToolUse")), .working, "pre tool use should map to working")
     try expectEqual(HookMapper.state(for: HookEvent(name: "PermissionRequest")), .waiting, "permission request should map to waiting")
     try expectEqual(HookMapper.state(for: HookEvent(name: "Stop", lastAssistantMessage: "Implemented and verified.")), .done, "stop should map to done")
-    try expectEqual(HookMapper.state(for: HookEvent(name: "Stop", lastAssistantMessage: "需要你确认授权后我才能继续。")), .waiting, "waiting Chinese text should map stop to waiting")
+    try expectEqual(HookMapper.state(for: HookEvent(name: "Stop", lastAssistantMessage: "需要你确认授权后我才能继续。")), .done, "stop should not infer waiting from assistant text")
     try expectEqual(HookMapper.state(for: HookEvent(name: "Stop", lastAssistantMessage: "已生成配置文件，需要在系统设置里确认一次安装。")), .done, "system-settings confirmation instructions should not make stop waiting")
-    try expectEqual(HookMapper.state(for: HookEvent(name: "SubagentStop", lastAssistantMessage: "Waiting for user approval.")), .waiting, "waiting English text should map subagent stop to waiting")
+    try expectEqual(HookMapper.state(for: HookEvent(name: "SubagentStop", lastAssistantMessage: "Waiting for user approval.")), .done, "subagent stop should not infer waiting from assistant text")
 }
 
 func testCommandContract() throws {
