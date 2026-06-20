@@ -60,22 +60,47 @@ final class StatusBarController {
 
     private func quotaText(for quota: QuotaSnapshot?) -> String {
         guard let quota else { return "暂无数据" }
-        return "\(quotaWindowText(label: "5小时", percent: quota.fiveHourRemainingPercent, resetsAt: quota.fiveHourResetsAt)) · \(quotaWindowText(label: "1周", percent: quota.weeklyRemainingPercent, resetsAt: quota.weeklyResetsAt))"
+        return priorityQuotaText(for: quota, compact: false)
     }
 
     private func statusBarQuotaText(for quota: QuotaSnapshot?) -> String {
         guard let quota else { return " 5h -- · 1周 --" }
-        return " \(quotaWindowText(label: "5h", percent: quota.fiveHourRemainingPercent, resetsAt: quota.fiveHourResetsAt)) · \(quotaWindowText(label: "1周", percent: quota.weeklyRemainingPercent, resetsAt: quota.weeklyResetsAt))"
+        return " \(priorityQuotaText(for: quota, compact: true))"
     }
 
-    private func quotaWindowText(label: String, percent: Int, resetsAt: Date?) -> String {
-        if percent <= 0, let resetsAt {
-            return "\(label) \(relativeResetText(until: resetsAt))"
+    private func priorityQuotaText(for quota: QuotaSnapshot, compact: Bool) -> String {
+        if quota.weeklyRemainingPercent <= 0 {
+            return resetQuotaText(
+                label: "1周",
+                resetsAt: quota.weeklyResetsAt,
+                fallback: "等待周额度恢复",
+                unitStyle: .daysAndHours
+            )
         }
-        return "\(label) \(percent)%"
+        if quota.fiveHourRemainingPercent <= 0 {
+            return resetQuotaText(
+                label: compact ? "5h" : "5小时",
+                resetsAt: quota.fiveHourResetsAt,
+                fallback: compact ? "等待5h恢复" : "等待5小时额度恢复",
+                unitStyle: .hoursAndMinutes
+            )
+        }
+        return compact
+            ? "5h \(quota.fiveHourRemainingPercent)% · 1周 \(quota.weeklyRemainingPercent)%"
+            : "5小时 \(quota.fiveHourRemainingPercent)% · 1周 \(quota.weeklyRemainingPercent)%"
     }
 
-    private func relativeResetText(until resetsAt: Date, now: Date = Date()) -> String {
+    private enum ResetUnitStyle {
+        case hoursAndMinutes
+        case daysAndHours
+    }
+
+    private func resetQuotaText(label: String, resetsAt: Date?, fallback: String, unitStyle: ResetUnitStyle) -> String {
+        guard let resetsAt else { return fallback }
+        return "\(label) \(relativeResetText(until: resetsAt, unitStyle: unitStyle))"
+    }
+
+    private func relativeResetText(until resetsAt: Date, now: Date = Date(), unitStyle: ResetUnitStyle) -> String {
         let seconds = max(0, Int(resetsAt.timeIntervalSince(now).rounded(.up)))
         if seconds <= 0 {
             return "即将恢复"
@@ -83,13 +108,16 @@ final class StatusBarController {
         let days = seconds / 86_400
         let hours = (seconds % 86_400) / 3_600
         let minutes = (seconds % 3_600) / 60
-        if days > 0 {
+        switch unitStyle {
+        case .daysAndHours:
             return "还有\(days)天\(hours)小时"
-        }
-        if hours > 0 {
+        case .hoursAndMinutes:
+            let totalHours = seconds / 3_600
+            if totalHours > 0 {
+                return "还有\(totalHours)小时\(minutes)分"
+            }
             return "还有\(hours)小时\(minutes)分"
         }
-        return "还有\(max(1, minutes))分"
     }
 
     @objc private func setWorking() { delegate?.statusBarDidRequestState(.working) }
