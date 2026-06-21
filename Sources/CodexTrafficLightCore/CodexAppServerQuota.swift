@@ -385,17 +385,30 @@ public struct ProcessCodexAppServerTransport: CodexAppServerTransport {
         process.standardError = error
 
         let responseBuffer = LockedDataBuffer()
+        let errorBuffer = LockedDataBuffer()
         output.fileHandleForReading.readabilityHandler = { handle in
             let chunk = handle.availableData
-            guard !chunk.isEmpty else { return }
+            guard !chunk.isEmpty else {
+                handle.readabilityHandler = nil
+                return
+            }
             responseBuffer.append(chunk)
+        }
+        error.fileHandleForReading.readabilityHandler = { handle in
+            let chunk = handle.availableData
+            guard !chunk.isEmpty else {
+                handle.readabilityHandler = nil
+                return
+            }
+            errorBuffer.append(chunk)
         }
 
         do {
             try process.run()
-        } catch {
+        } catch let launchError {
             output.fileHandleForReading.readabilityHandler = nil
-            throw CodexAppServerQuotaError.launchFailed(String(describing: error))
+            error.fileHandleForReading.readabilityHandler = nil
+            throw CodexAppServerQuotaError.launchFailed(String(describing: launchError))
         }
 
         let initialize = try CodexAppServerJSONRPCLineCodec.encodeRequest(
@@ -423,10 +436,11 @@ public struct ProcessCodexAppServerTransport: CodexAppServerTransport {
                 initialized = true
                 break
             }
-            Thread.sleep(forTimeInterval: 0.05)
+            Thread.sleep(forTimeInterval: 0.2)
         }
         guard initialized else {
             output.fileHandleForReading.readabilityHandler = nil
+            error.fileHandleForReading.readabilityHandler = nil
             process.terminate()
             throw CodexAppServerQuotaError.initializeTimedOut(timeout: initializeTimeout)
         }
@@ -443,15 +457,17 @@ public struct ProcessCodexAppServerTransport: CodexAppServerTransport {
             if let messages = try? CodexAppServerJSONRPCLineCodec.decodeMessages(from: currentBuffer),
                let result = try? CodexAppServerJSONRPCLineCodec.resultData(forID: 2, in: messages) {
                 output.fileHandleForReading.readabilityHandler = nil
+                error.fileHandleForReading.readabilityHandler = nil
                 process.terminate()
                 return result
             }
-            Thread.sleep(forTimeInterval: 0.05)
+            Thread.sleep(forTimeInterval: 0.2)
         }
 
         output.fileHandleForReading.readabilityHandler = nil
+        error.fileHandleForReading.readabilityHandler = nil
         process.terminate()
-        let stderr = String(data: error.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+        let stderr = String(data: errorBuffer.snapshot(), encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if let stderr, !stderr.isEmpty {
             throw CodexAppServerQuotaError.processFailed(stderr)

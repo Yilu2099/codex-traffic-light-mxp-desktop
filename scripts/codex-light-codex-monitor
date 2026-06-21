@@ -9,12 +9,39 @@ STATE_CMD="$HOME/.codex/bin/codex-light-mxp"
 POLL_SECONDS="${CODEX_LIGHT_MONITOR_POLL_SECONDS:-2}"
 ACTIVE_WINDOW_SECONDS="${CODEX_LIGHT_MONITOR_ACTIVE_WINDOW_SECONDS:-6}"
 DONE_AFTER_IDLE_SECONDS="${CODEX_LIGHT_MONITOR_DONE_AFTER_IDLE_SECONDS:-${CODEX_LIGHT_MONITOR_STALE_CLEAR_SECONDS:-10}}"
+QUOTA_REFRESH_SECONDS="${CODEX_LIGHT_MONITOR_QUOTA_REFRESH_SECONDS:-60}"
+QUOTA_TIMEOUT_SECONDS="${CODEX_LIGHT_MONITOR_QUOTA_TIMEOUT_SECONDS:-180}"
 
 last_active=0
+last_quota_refresh=0
+quota_pid=0
+quota_started_at=0
 
 while true; do
   now="$(date +%s)"
   if [[ -r "$LOG_DB" && -r "$STATE_DB" && -x "$STATE_CMD" ]]; then
+    if (( quota_pid > 0 )); then
+      if ! kill -0 "$quota_pid" >/dev/null 2>&1; then
+        wait "$quota_pid" >/dev/null 2>&1 || true
+        quota_pid=0
+        quota_started_at=0
+      elif (( QUOTA_TIMEOUT_SECONDS > 0 && now - quota_started_at >= QUOTA_TIMEOUT_SECONDS )); then
+        kill "$quota_pid" >/dev/null 2>&1 || true
+        wait "$quota_pid" >/dev/null 2>&1 || true
+        quota_pid=0
+        quota_started_at=0
+      fi
+    fi
+
+    if (( QUOTA_REFRESH_SECONDS > 0 && now - last_quota_refresh >= QUOTA_REFRESH_SECONDS )); then
+      if (( quota_pid <= 0 )); then
+        "$STATE_CMD" quota --app-server --json >/dev/null 2>&1 &
+        quota_pid="$!"
+        quota_started_at="$now"
+        last_quota_refresh="$now"
+      fi
+    fi
+
     row="$(
       sqlite3 -separator $'\t' "$LOG_DB" "
         attach database '$STATE_DB' as state_db;

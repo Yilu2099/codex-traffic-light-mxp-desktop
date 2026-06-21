@@ -56,7 +56,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let backgroundStore = StateStore(stateURL: stateURL)
             do {
-                let transport = ProcessCodexAppServerTransport(initializeTimeout: 12, rateLimitsTimeout: 8)
+                let transport = ProcessCodexAppServerTransport(initializeTimeout: 50, rateLimitsTimeout: 20)
                 let collector = CodexAppServerQuotaCollector(
                     transport: transport,
                     retryPolicy: CodexAppServerRetryPolicy(retries: 0)
