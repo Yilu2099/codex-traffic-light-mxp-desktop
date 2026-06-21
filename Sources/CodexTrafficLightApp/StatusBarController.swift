@@ -64,7 +64,7 @@ final class StatusBarController {
     }
 
     private func statusBarQuotaText(for quota: QuotaSnapshot?) -> String {
-        guard let quota else { return " 5h -- · 1周 --" }
+        guard let quota else { return " 5H -- · 1周 --" }
         return " \(priorityQuotaText(for: quota, compact: true))"
     }
 
@@ -79,14 +79,18 @@ final class StatusBarController {
         }
         if quota.fiveHourRemainingPercent <= 0 {
             return resetQuotaText(
-                label: compact ? "5h" : "5小时",
+                label: compact ? "5H" : "5小时",
                 resetsAt: quota.fiveHourResetsAt,
-                fallback: compact ? "等待5h恢复" : "等待5小时额度恢复",
+                fallback: compact ? "等待5H恢复" : "等待5小时额度恢复",
                 unitStyle: .hoursAndMinutes
             )
         }
+        if compact && quota.weeklyRemainingPercent < 95 {
+            let refreshText = refreshSuffixText(until: quota.fiveHourResetsAt)
+            return "5H \(quota.fiveHourRemainingPercent)% · \(refreshText)"
+        }
         return compact
-            ? "5h \(quota.fiveHourRemainingPercent)% · 1周 \(quota.weeklyRemainingPercent)%"
+            ? "5H \(quota.fiveHourRemainingPercent)% · 1周 \(quota.weeklyRemainingPercent)%"
             : "5小时 \(quota.fiveHourRemainingPercent)% · 1周 \(quota.weeklyRemainingPercent)%"
     }
 
@@ -118,6 +122,11 @@ final class StatusBarController {
             }
             return "还有\(hours)小时\(minutes)分"
         }
+    }
+
+    private func refreshSuffixText(until resetsAt: Date?) -> String {
+        guard let resetsAt else { return "等待刷新时间" }
+        return "\(relativeResetText(until: resetsAt, unitStyle: .hoursAndMinutes))刷新"
     }
 
     private func quotaDetailLines(for quota: QuotaSnapshot?) -> [String] {
