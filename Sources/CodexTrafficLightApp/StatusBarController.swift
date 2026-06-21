@@ -94,34 +94,13 @@ final class StatusBarController {
             : "5小时 \(quota.fiveHourRemainingPercent)% · 1周 \(quota.weeklyRemainingPercent)%"
     }
 
-    private enum ResetUnitStyle {
-        case hoursAndMinutes
-        case daysAndHours
-    }
-
-    private func resetQuotaText(label: String, resetsAt: Date?, fallback: String, unitStyle: ResetUnitStyle) -> String {
+    private func resetQuotaText(label: String, resetsAt: Date?, fallback: String, unitStyle: QuotaResetUnitStyle) -> String {
         guard let resetsAt else { return fallback }
         return "\(label) \(relativeResetText(until: resetsAt, unitStyle: unitStyle))"
     }
 
-    private func relativeResetText(until resetsAt: Date, now: Date = Date(), unitStyle: ResetUnitStyle) -> String {
-        let seconds = max(0, Int(resetsAt.timeIntervalSince(now).rounded(.up)))
-        if seconds <= 0 {
-            return "即将恢复"
-        }
-        let days = seconds / 86_400
-        let hours = (seconds % 86_400) / 3_600
-        let minutes = (seconds % 3_600) / 60
-        switch unitStyle {
-        case .daysAndHours:
-            return "还有\(days)天\(hours)小时"
-        case .hoursAndMinutes:
-            let totalHours = seconds / 3_600
-            if totalHours > 0 {
-                return "还有\(totalHours)小时\(minutes)分"
-            }
-            return "还有\(hours)小时\(minutes)分"
-        }
+    private func relativeResetText(until resetsAt: Date, now: Date = Date(), unitStyle: QuotaResetUnitStyle) -> String {
+        QuotaDisplayFormatter.relativeResetText(until: resetsAt, now: now, unitStyle: unitStyle)
     }
 
     private func refreshSuffixText(until resetsAt: Date?) -> String {
@@ -149,7 +128,7 @@ final class StatusBarController {
         ]
     }
 
-    private func quotaDetailLine(label: String, displayLabel: String, percent: Int, resetsAt: Date?, unitStyle: ResetUnitStyle) -> String {
+    private func quotaDetailLine(label: String, displayLabel: String, percent: Int, resetsAt: Date?, unitStyle: QuotaResetUnitStyle) -> String {
         guard let resetsAt else {
             return "\(label)：\(percent)% · 未返回恢复时间"
         }
@@ -158,11 +137,7 @@ final class StatusBarController {
     }
 
     private func absoluteDateTimeText(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "zh_CN")
-        formatter.timeZone = .current
-        formatter.dateFormat = "MM月dd日 HH:mm"
-        return formatter.string(from: date)
+        QuotaDisplayFormatter.absoluteDateTimeText(date)
     }
 
     private func quotaDetailMenuItem(for quota: QuotaSnapshot?) -> NSMenuItem {
@@ -194,7 +169,7 @@ final class StatusBarController {
         ]
     }
 
-    private func quotaRow(label: String, percent: Int, resetsAt: Date?, unitStyle: ResetUnitStyle) -> QuotaDetailRow {
+    private func quotaRow(label: String, percent: Int, resetsAt: Date?, unitStyle: QuotaResetUnitStyle) -> QuotaDetailRow {
         guard let resetsAt else {
             return QuotaDetailRow(label: label, percent: "\(percent)%", resetTime: "--", remaining: "未返回时间")
         }

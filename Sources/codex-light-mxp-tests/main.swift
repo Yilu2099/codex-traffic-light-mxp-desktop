@@ -981,6 +981,47 @@ func testQuotaRefreshCoordinatorThrottlesRepeatedFailureLogs() throws {
     try expectEqual(afterSuccess != nil, true, "success should reset failure throttle")
 }
 
+func testQuotaDisplayFormatterOmitsZeroUnits() throws {
+    let now = Date(timeIntervalSince1970: 10_000)
+
+    try expectEqual(
+        QuotaDisplayFormatter.relativeResetText(until: now.addingTimeInterval(30), now: now, unitStyle: .daysAndHours),
+        "还有1分",
+        "days-and-hours style should not show 0天0小时"
+    )
+    try expectEqual(
+        QuotaDisplayFormatter.relativeResetText(until: now.addingTimeInterval(3_600), now: now, unitStyle: .daysAndHours),
+        "还有1小时",
+        "days-and-hours style should omit 0天"
+    )
+    try expectEqual(
+        QuotaDisplayFormatter.relativeResetText(until: now.addingTimeInterval(86_400), now: now, unitStyle: .daysAndHours),
+        "还有1天",
+        "days-and-hours style should omit 0小时"
+    )
+    try expectEqual(
+        QuotaDisplayFormatter.relativeResetText(until: now.addingTimeInterval(30), now: now, unitStyle: .hoursAndMinutes),
+        "还有1分",
+        "hours-and-minutes style should not show 0小时0分"
+    )
+}
+
+func testQuotaDisplayFormatterUsesNaturalChineseDate() throws {
+    var components = DateComponents()
+    components.calendar = Calendar(identifier: .gregorian)
+    components.timeZone = TimeZone(secondsFromGMT: 8 * 3_600)
+    components.year = 2026
+    components.month = 6
+    components.day = 3
+    components.hour = 9
+    components.minute = 5
+
+    let date = components.date!
+    let text = QuotaDisplayFormatter.absoluteDateTimeText(date, timeZone: components.timeZone!)
+
+    try expectEqual(text, "6月3日 09:05", "date text should not zero-pad month or day")
+}
+
 let tests: [(String, () throws -> Void)] = [
     ("waiting wins over working and done", testWaitingTaskWinsOverWorkingAndDone),
     ("working wins without waiting", testWorkingWinsWhenNoWaitingTaskExists),
@@ -1026,7 +1067,9 @@ let tests: [(String, () throws -> Void)] = [
     ("app-server quota collector retries and succeeds", testAppServerQuotaCollectorRetriesTwiceAndSucceedsOnThirdAttempt),
     ("app-server quota collector exhausts retries", testAppServerQuotaCollectorFailsAfterThreeAttemptsAndPreservesQuota),
     ("quota refresh coordinator prevents concurrent refreshes", testQuotaRefreshCoordinatorPreventsConcurrentRefreshes),
-    ("quota refresh coordinator throttles repeated logs", testQuotaRefreshCoordinatorThrottlesRepeatedFailureLogs)
+    ("quota refresh coordinator throttles repeated logs", testQuotaRefreshCoordinatorThrottlesRepeatedFailureLogs),
+    ("quota display formatter omits zero units", testQuotaDisplayFormatterOmitsZeroUnits),
+    ("quota display formatter uses natural date", testQuotaDisplayFormatterUsesNaturalChineseDate)
 ]
 
 var failures = 0
