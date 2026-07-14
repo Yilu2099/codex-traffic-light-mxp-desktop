@@ -356,16 +356,37 @@ public struct ProcessCodexAppServerTransport: CodexAppServerTransport {
     }
 
     public static func defaultCodexBinary() -> String {
-        if let configured = ProcessInfo.processInfo.environment["CODEX_TRAFFIC_LIGHT_CODEX_BIN"],
-           !configured.isEmpty {
-            return configured
-        }
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let localCodex = home.appendingPathComponent(".local/bin/codex").path
-        if FileManager.default.isExecutableFile(atPath: localCodex) {
-            return localCodex
+        for candidate in codexBinaryCandidates() {
+            if FileManager.default.isExecutableFile(atPath: candidate) {
+                return candidate
+            }
         }
         return "codex"
+    }
+
+    public static func codexBinaryCandidates(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) -> [String] {
+        var candidates: [String] = []
+
+        if let configured = environment["CODEX_TRAFFIC_LIGHT_CODEX_BIN"],
+           !configured.isEmpty {
+            candidates.append(configured)
+        }
+
+        candidates.append(homeDirectory.appendingPathComponent(".local/bin/codex").path)
+        candidates.append("/Applications/ChatGPT.app/Contents/Resources/codex")
+        candidates.append(homeDirectory.appendingPathComponent("Applications/ChatGPT.app/Contents/Resources/codex").path)
+        candidates.append("/Applications/Codex.app/Contents/Resources/codex")
+        candidates.append(homeDirectory.appendingPathComponent("Applications/Codex.app/Contents/Resources/codex").path)
+
+        for directory in (environment["PATH"] ?? "").split(separator: ":") where !directory.isEmpty {
+            candidates.append(URL(fileURLWithPath: String(directory)).appendingPathComponent("codex").path)
+        }
+
+        var seen = Set<String>()
+        return candidates.filter { seen.insert($0).inserted }
     }
 
     public func readRateLimits() throws -> Data {

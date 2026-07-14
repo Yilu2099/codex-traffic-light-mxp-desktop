@@ -852,6 +852,23 @@ func testAppServerQuotaErrorsDescribeSpecificTimeouts() throws {
     )
 }
 
+func testAppServerCodexBinaryCandidatesCoverInstalledAppsAndPath() throws {
+    let home = URL(fileURLWithPath: "/Users/tester", isDirectory: true)
+    let candidates = ProcessCodexAppServerTransport.codexBinaryCandidates(
+        environment: [
+            "CODEX_TRAFFIC_LIGHT_CODEX_BIN": "/custom/codex",
+            "PATH": "/opt/homebrew/bin:/usr/local/bin"
+        ],
+        homeDirectory: home
+    )
+
+    try expectEqual(candidates.first, "/custom/codex", "configured Codex path should have highest priority")
+    try expect(candidates.contains("/Users/tester/.local/bin/codex"), "candidates should include user-local Codex")
+    try expect(candidates.contains("/Applications/ChatGPT.app/Contents/Resources/codex"), "candidates should include ChatGPT bundled Codex")
+    try expect(candidates.contains("/Users/tester/Applications/ChatGPT.app/Contents/Resources/codex"), "candidates should include user Applications ChatGPT Codex")
+    try expect(candidates.contains("/opt/homebrew/bin/codex"), "candidates should include PATH Codex")
+}
+
 final class SequencedAppServerTransport: CodexAppServerTransport {
     private var results: [Result<Data, Error>]
     private(set) var attempts = 0
@@ -1046,6 +1063,7 @@ let tests: [(String, () throws -> Void)] = [
     ("app-server quota collector uses transport fixture", testAppServerQuotaCollectorUsesTransportFixture),
     ("app-server quota collector preserves old quota on failure", testAppServerQuotaCollectorPropagatesMissingQuotaWithoutClearingStore),
     ("app-server quota errors describe specific timeouts", testAppServerQuotaErrorsDescribeSpecificTimeouts),
+    ("app-server Codex binary candidates cover target machine", testAppServerCodexBinaryCandidatesCoverInstalledAppsAndPath),
     ("app-server quota collector retries and succeeds", testAppServerQuotaCollectorRetriesTwiceAndSucceedsOnThirdAttempt),
     ("app-server quota collector exhausts retries", testAppServerQuotaCollectorFailsAfterThreeAttemptsAndPreservesQuota),
     ("quota refresh coordinator prevents concurrent refreshes", testQuotaRefreshCoordinatorPreventsConcurrentRefreshes),

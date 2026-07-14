@@ -333,6 +333,8 @@ CODEX_TRAFFIC_LIGHT_STATE_PATH="$STATE" codex-light-mxp status
 ./install-autostart.command
 ```
 
+安装脚本会在当前 Mac 上自动定位 Codex 可执行文件，并把绝对路径写入 LaunchAgent，不会沿用开发机的路径。程序运行时也会扫描 `~/.local/bin`、ChatGPT/Codex 应用内置目录和 `PATH` 作为兜底。如需指定特定版本，可在安装前设置 `CODEX_TRAFFIC_LIGHT_CODEX_BIN`。
+
 移除开机自启：
 
 ```bash
