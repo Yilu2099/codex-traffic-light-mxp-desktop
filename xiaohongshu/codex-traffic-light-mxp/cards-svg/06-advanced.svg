@@ -57,7 +57,7 @@
   
 
     <text x="82" y="492" font-family="-apple-system, BlinkMacSystemFont, PingFang SC, Hiragino Sans GB, Noto Sans CJK SC, sans-serif" font-size="28" font-weight="800" fill="#5d6470" text-anchor="start" letter-spacing="0">
-      <tspan x="82" dy="0">通过 Codex app-server 读取 5 小时和 1 周剩余额度。</tspan>
+      <tspan x="82" dy="0">通过 Codex app-server 读取周剩余额度。</tspan>
     </text>
   
 
@@ -69,8 +69,8 @@
       <text x="178" y="150" font-family="-apple-system, BlinkMacSystemFont, PingFang SC, Hiragino Sans GB, Noto Sans CJK SC, sans-serif" font-size="34" font-weight="900" fill="#151515">需要你处理</text>
       <text x="180" y="186" font-family="SFMono-Regular, Menlo, Consolas, monospace" font-size="18" font-weight="700" fill="#5d6470">PermissionRequest</text>
       <rect x="38" y="232" width="354" height="18" rx="9" fill="#f0f2f5"/>
-      <rect x="38" y="232" width="248" height="18" rx="9" fill="#35c96f"/>
-      <text x="38" y="268" font-family="-apple-system, BlinkMacSystemFont, PingFang SC, Hiragino Sans GB, Noto Sans CJK SC, sans-serif" font-size="15" font-weight="700" fill="#5d6470">5 小时额度 72% · 1 周额度 48%</text>
+      <rect x="38" y="232" width="170" height="18" rx="9" fill="#35c96f"/>
+      <text x="38" y="268" font-family="-apple-system, BlinkMacSystemFont, PingFang SC, Hiragino Sans GB, Noto Sans CJK SC, sans-serif" font-size="15" font-weight="700" fill="#5d6470">周额度 48%</text>
     </g>
   
 
@@ -78,13 +78,13 @@
           <rect width="320" height="120" rx="26" fill="#ffffff" stroke="#ebe2d6"/>
           <rect x="24" y="26" width="10" height="68" rx="5" fill="#ff4b4b"/>
           <text x="52" y="58" font-family="-apple-system, BlinkMacSystemFont, PingFang SC, Hiragino Sans GB, Noto Sans CJK SC, sans-serif" font-size="24" font-weight="900" fill="#151515">app-server 采集</text>
-          <text x="52" y="88" font-family="-apple-system, BlinkMacSystemFont, PingFang SC, Hiragino Sans GB, Noto Sans CJK SC, sans-serif" font-size="18" font-weight="700" fill="#5d6470">读取 5 小时 / 1 周额度</text>
+          <text x="52" y="88" font-family="-apple-system, BlinkMacSystemFont, PingFang SC, Hiragino Sans GB, Noto Sans CJK SC, sans-serif" font-size="18" font-weight="700" fill="#5d6470">读取 Codex 周额度</text>
         </g>
       
         <g transform="translate(438 845)" filter="url(#smallShadow)">
           <rect width="320" height="120" rx="26" fill="#ffffff" stroke="#ebe2d6"/>
           <rect x="24" y="26" width="10" height="68" rx="5" fill="#ffd33d"/>
-          <text x="52" y="58" font-family="-apple-system, BlinkMacSystemFont, PingFang SC, Hiragino Sans GB, Noto Sans CJK SC, sans-serif" font-size="24" font-weight="900" fill="#151515">5 分钟轮询</text>
+          <text x="52" y="58" font-family="-apple-system, BlinkMacSystemFont, PingFang SC, Hiragino Sans GB, Noto Sans CJK SC, sans-serif" font-size="24" font-weight="900" fill="#151515">60 秒轮询</text>
           <text x="52" y="88" font-family="-apple-system, BlinkMacSystemFont, PingFang SC, Hiragino Sans GB, Noto Sans CJK SC, sans-serif" font-size="18" font-weight="700" fill="#5d6470">启动后自动刷新</text>
         </g>
       

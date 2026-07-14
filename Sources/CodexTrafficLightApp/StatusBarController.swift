@@ -5,6 +5,7 @@ import CodexTrafficLightCore
 protocol StatusBarControllerDelegate: AnyObject {
     func statusBarDidRequestState(_ state: LightState)
     func statusBarDidRequestClear()
+    func statusBarDidRequestToggleFloatingWindow()
     func statusBarDidRequestToggleMute()
     func statusBarDidRequestQuit()
 }
@@ -37,6 +38,7 @@ final class StatusBarController {
         menu.addItem(withTitle: "当前：\(state.label)", action: nil, keyEquivalent: "")
         menu.addItem(quotaDetailMenuItem(for: quota))
         menu.addItem(.separator())
+        menu.addItem(withTitle: "显示/隐藏红绿灯", action: #selector(toggleFloatingWindow), keyEquivalent: "")
         menu.addItem(withTitle: muted ? "恢复提示音" : "静音提示音", action: #selector(toggleMute), keyEquivalent: "")
         menu.addItem(.separator())
         menu.addItem(withTitle: "黄灯：工作中", action: #selector(setWorking), keyEquivalent: "")
@@ -60,38 +62,24 @@ final class StatusBarController {
 
     private func quotaText(for quota: QuotaSnapshot?) -> String {
         guard let quota else { return "暂无数据" }
-        return priorityQuotaText(for: quota, compact: false)
+        return priorityQuotaText(for: quota)
     }
 
     private func statusBarQuotaText(for quota: QuotaSnapshot?) -> String {
-        guard let quota else { return " 5H -- · 1周 --" }
-        return " \(priorityQuotaText(for: quota, compact: true))"
+        guard let quota else { return " 周额度 --" }
+        return " \(priorityQuotaText(for: quota))"
     }
 
-    private func priorityQuotaText(for quota: QuotaSnapshot, compact: Bool) -> String {
+    private func priorityQuotaText(for quota: QuotaSnapshot) -> String {
         if quota.weeklyRemainingPercent <= 0 {
             return resetQuotaText(
-                label: "1周",
+                label: "周额度",
                 resetsAt: quota.weeklyResetsAt,
                 fallback: "等待周额度恢复",
                 unitStyle: .daysAndHours
             )
         }
-        if quota.fiveHourRemainingPercent <= 0 {
-            return resetQuotaText(
-                label: compact ? "5H" : "5小时",
-                resetsAt: quota.fiveHourResetsAt,
-                fallback: compact ? "等待5H恢复" : "等待5小时额度恢复",
-                unitStyle: .hoursAndMinutes
-            )
-        }
-        if compact && quota.weeklyRemainingPercent < 95 {
-            let refreshText = refreshSuffixText(until: quota.fiveHourResetsAt)
-            return "5H \(quota.fiveHourRemainingPercent)% · \(refreshText)"
-        }
-        return compact
-            ? "5H \(quota.fiveHourRemainingPercent)% · 1周 \(quota.weeklyRemainingPercent)%"
-            : "5小时 \(quota.fiveHourRemainingPercent)% · 1周 \(quota.weeklyRemainingPercent)%"
+        return "周额度 \(quota.weeklyRemainingPercent)%"
     }
 
     private func resetQuotaText(label: String, resetsAt: Date?, fallback: String, unitStyle: QuotaResetUnitStyle) -> String {
@@ -103,24 +91,12 @@ final class StatusBarController {
         QuotaDisplayFormatter.relativeResetText(until: resetsAt, now: now, unitStyle: unitStyle)
     }
 
-    private func refreshSuffixText(until resetsAt: Date?) -> String {
-        guard let resetsAt else { return "等待刷新时间" }
-        return "\(relativeResetText(until: resetsAt, unitStyle: .hoursAndMinutes))刷新"
-    }
-
     private func quotaDetailLines(for quota: QuotaSnapshot?) -> [String] {
-        guard let quota else { return ["5小时：暂无恢复时间", "1周：暂无恢复时间"] }
+        guard let quota else { return ["周额度：暂无恢复时间"] }
         return [
             quotaDetailLine(
-                label: "5小时",
-                displayLabel: "5小时",
-                percent: quota.fiveHourRemainingPercent,
-                resetsAt: quota.fiveHourResetsAt,
-                unitStyle: .hoursAndMinutes
-            ),
-            quotaDetailLine(
-                label: "1周",
-                displayLabel: "1周　",
+                label: "周额度",
+                displayLabel: "周额度",
                 percent: quota.weeklyRemainingPercent,
                 resetsAt: quota.weeklyResetsAt,
                 unitStyle: .daysAndHours
@@ -149,19 +125,12 @@ final class StatusBarController {
     private func quotaRows(for quota: QuotaSnapshot?) -> [QuotaDetailRow] {
         guard let quota else {
             return [
-                QuotaDetailRow(label: "5小时", percent: "--", resetTime: "--", remaining: "暂无数据"),
-                QuotaDetailRow(label: "1周", percent: "--", resetTime: "--", remaining: "暂无数据")
+                QuotaDetailRow(label: "周额度", percent: "--", resetTime: "--", remaining: "暂无数据")
             ]
         }
         return [
             quotaRow(
-                label: "5小时",
-                percent: quota.fiveHourRemainingPercent,
-                resetsAt: quota.fiveHourResetsAt,
-                unitStyle: .hoursAndMinutes
-            ),
-            quotaRow(
-                label: "1周",
+                label: "周额度",
                 percent: quota.weeklyRemainingPercent,
                 resetsAt: quota.weeklyResetsAt,
                 unitStyle: .daysAndHours
@@ -186,6 +155,7 @@ final class StatusBarController {
     @objc private func setWaiting() { delegate?.statusBarDidRequestState(.waiting) }
     @objc private func setIdle() { delegate?.statusBarDidRequestState(.idle) }
     @objc private func clear() { delegate?.statusBarDidRequestClear() }
+    @objc private func toggleFloatingWindow() { delegate?.statusBarDidRequestToggleFloatingWindow() }
     @objc private func toggleMute() { delegate?.statusBarDidRequestToggleMute() }
     @objc private func quit() { delegate?.statusBarDidRequestQuit() }
 
@@ -235,7 +205,7 @@ private final class QuotaDetailMenuView: NSView {
 
     init(rows: [QuotaDetailRow]) {
         self.rows = rows
-        super.init(frame: NSRect(x: 0, y: 0, width: 372, height: 96))
+        super.init(frame: NSRect(x: 0, y: 0, width: 372, height: 72))
         wantsLayer = true
     }
 
@@ -257,7 +227,7 @@ private final class QuotaDetailMenuView: NSView {
         drawHeader(in: card)
         drawSeparator(in: card, y: card.maxY - 30)
 
-        for (index, row) in rows.prefix(2).enumerated() {
+        for (index, row) in rows.prefix(1).enumerated() {
             draw(row: row, index: index, in: card)
         }
     }
@@ -272,9 +242,6 @@ private final class QuotaDetailMenuView: NSView {
 
     private func draw(row: QuotaDetailRow, index: Int, in card: NSRect) {
         let y = card.maxY - 53 - CGFloat(index * 25)
-        if index == 1 {
-            drawSeparator(in: card, y: y + 21)
-        }
         drawText(row.label, in: labelColumn(in: card, y: y, height: 18), attributes: bodyAttributes(weight: .semibold, alignment: .left))
         drawText(row.percent, in: percentColumn(in: card, y: y, height: 18), attributes: monoAttributes(alignment: .center))
         drawText(row.resetTime, in: resetColumn(in: card, y: y, height: 18), attributes: monoAttributes(alignment: .left))

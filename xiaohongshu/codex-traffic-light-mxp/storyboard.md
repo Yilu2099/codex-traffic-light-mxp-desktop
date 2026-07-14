@@ -33,11 +33,11 @@
 
 最新这版还把额度显示补得更完整了。
 
-浮窗底部可以看到 Codex 5 小时和 1 周剩余额度百分比；App 启动后会自动尝试采集一次，之后每 5 分钟轮询一次。
+浮窗底部可以看到 Codex 周剩余额度百分比；App 启动后会自动尝试采集一次，之后每 60 秒轮询一次。
 
 如果本机 Codex app-server 暂时没返回额度，它会保留上一次成功结果，不会突然把显示清空成 `--`。
 
-我也留了 CLI 兜底：可以用 `quota --app-server` 主动采集，也可以用 `quota --five-hour 72 --weekly 48` 或 `quota --stdin` 手动写入。
+我也留了 CLI 兜底：可以用 `quota --app-server` 主动采集，也可以用 `quota --weekly 48` 或 `quota --stdin` 手动写入。
 
 适合跟我一样经常开着 Codex 做事的人。
 

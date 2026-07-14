@@ -34,7 +34,7 @@ public indirect enum CodexAppServerQuotaError: Error, CustomStringConvertible {
         case .retryExhausted(let attempts, let lastError):
             return "App-server quota failed after \(attempts) attempts: \(lastError.description)"
         case .missingQuota:
-            return "App-server response did not include Codex 5-hour and weekly quota"
+            return "App-server response did not include Codex weekly quota"
         }
     }
 
@@ -72,7 +72,6 @@ public indirect enum CodexAppServerQuotaError: Error, CustomStringConvertible {
 }
 
 public enum CodexAppServerQuotaMapper {
-    private static let fiveHourDurationMins = 300
     private static let weeklyDurationMins = 10_080
 
     public static func quotaValues(from data: Data) throws -> QuotaValues {
@@ -105,27 +104,26 @@ public enum CodexAppServerQuotaMapper {
 
     private static func quotaValues(from snapshot: AppServerRateLimitSnapshot) -> QuotaValues? {
         let windows = [snapshot.primary, snapshot.secondary].compactMap { $0 }
-        let fiveHourWindow = windows.first { $0.windowDurationMins == fiveHourDurationMins }
-            ?? fallbackWindow(snapshot.primary, duration: fiveHourDurationMins)
         let weeklyWindow = windows.first { $0.windowDurationMins == weeklyDurationMins }
-            ?? fallbackWindow(snapshot.secondary, duration: weeklyDurationMins)
+            ?? fallbackWeeklyWindow(in: snapshot)
 
-        guard let fiveHourWindow, let weeklyWindow else {
+        guard let weeklyWindow else {
             return nil
         }
         return QuotaValues(
-            fiveHourRemainingPercent: remainingPercent(fromUsedPercent: fiveHourWindow.usedPercent),
             weeklyRemainingPercent: remainingPercent(fromUsedPercent: weeklyWindow.usedPercent),
-            fiveHourResetsAt: fiveHourWindow.resetsAt,
             weeklyResetsAt: weeklyWindow.resetsAt
         )
     }
 
-    private static func fallbackWindow(_ window: AppServerRateLimitWindow?, duration: Int) -> AppServerRateLimitWindow? {
-        guard let window, window.windowDurationMins == nil else {
-            return nil
+    private static func fallbackWeeklyWindow(in snapshot: AppServerRateLimitSnapshot) -> AppServerRateLimitWindow? {
+        if let secondary = snapshot.secondary, secondary.windowDurationMins == nil {
+            return secondary
         }
-        return window
+        if snapshot.secondary == nil, let primary = snapshot.primary, primary.windowDurationMins == nil {
+            return primary
+        }
+        return nil
     }
 
     private static func remainingPercent(fromUsedPercent usedPercent: Double) -> Int {
@@ -327,9 +325,7 @@ public struct CodexAppServerQuotaCollector {
     public func fetchAndUpdate(store: StateStore = StateStore(), now: Date = Date()) throws -> StateSnapshot {
         let quota = try fetchQuota()
         return try store.updateQuota(
-            fiveHourPercent: quota.fiveHourRemainingPercent,
             weeklyPercent: quota.weeklyRemainingPercent,
-            fiveHourResetsAt: quota.fiveHourResetsAt,
             weeklyResetsAt: quota.weeklyResetsAt,
             source: Self.source,
             now: now

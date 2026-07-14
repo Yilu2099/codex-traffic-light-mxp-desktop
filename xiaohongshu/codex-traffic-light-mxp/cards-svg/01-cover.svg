@@ -95,8 +95,8 @@
       <text x="178" y="150" font-family="-apple-system, BlinkMacSystemFont, PingFang SC, Hiragino Sans GB, Noto Sans CJK SC, sans-serif" font-size="34" font-weight="900" fill="#151515">需要你处理</text>
       <text x="180" y="186" font-family="SFMono-Regular, Menlo, Consolas, monospace" font-size="18" font-weight="700" fill="#5d6470">PermissionRequest</text>
       <rect x="38" y="232" width="354" height="18" rx="9" fill="#f0f2f5"/>
-      <rect x="38" y="232" width="248" height="18" rx="9" fill="#35c96f"/>
-      <text x="38" y="268" font-family="-apple-system, BlinkMacSystemFont, PingFang SC, Hiragino Sans GB, Noto Sans CJK SC, sans-serif" font-size="15" font-weight="700" fill="#5d6470">5 小时额度 72% · 1 周额度 48%</text>
+      <rect x="38" y="232" width="170" height="18" rx="9" fill="#35c96f"/>
+      <text x="38" y="268" font-family="-apple-system, BlinkMacSystemFont, PingFang SC, Hiragino Sans GB, Noto Sans CJK SC, sans-serif" font-size="15" font-weight="700" fill="#5d6470">周额度 48%</text>
     </g>
   
 

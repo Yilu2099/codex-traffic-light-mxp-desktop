@@ -140,53 +140,43 @@ func testQuotaSnapshotClampsPercentValues() throws {
     let updatedAt = Date(timeIntervalSince1970: 1_234)
 
     let high = QuotaSnapshot(
-        fiveHourRemainingPercent: 125,
         weeklyRemainingPercent: 101,
         source: "test",
         updatedAt: updatedAt
     )
-    try expectEqual(high.fiveHourRemainingPercent, 100, "five hour quota should clamp high values")
     try expectEqual(high.weeklyRemainingPercent, 100, "weekly quota should clamp high values")
 
     let low = QuotaSnapshot(
-        fiveHourRemainingPercent: -10,
         weeklyRemainingPercent: -1,
         source: "test",
         updatedAt: updatedAt
     )
-    try expectEqual(low.fiveHourRemainingPercent, 0, "five hour quota should clamp low values")
     try expectEqual(low.weeklyRemainingPercent, 0, "weekly quota should clamp low values")
 }
 
 func testQuotaSnapshotStoresResetDates() throws {
     let updatedAt = Date(timeIntervalSince1970: 1_234)
-    let fiveHourReset = Date(timeIntervalSince1970: 1_700)
     let weeklyReset = Date(timeIntervalSince1970: 2_400)
 
     let quota = QuotaSnapshot(
-        fiveHourRemainingPercent: 0,
         weeklyRemainingPercent: 0,
-        fiveHourResetsAt: fiveHourReset,
         weeklyResetsAt: weeklyReset,
         source: "test",
         updatedAt: updatedAt
     )
 
-    try expectEqual(quota.fiveHourResetsAt, fiveHourReset, "five hour reset date should be stored")
     try expectEqual(quota.weeklyResetsAt, weeklyReset, "weekly reset date should be stored")
 }
 
 func testQuotaExtractorReadsTopLevelSnakeCase() throws {
     let data = """
     {
-      "five_hour_remaining_percent": 72,
       "weekly_remaining_percent": 48
     }
     """.data(using: .utf8)!
 
     let values = QuotaExtractor.extract(from: data)
 
-    try expectEqual(values?.fiveHourRemainingPercent, 72, "extractor should read snake_case five hour percent")
     try expectEqual(values?.weeklyRemainingPercent, 48, "extractor should read snake_case weekly percent")
 }
 
@@ -194,7 +184,6 @@ func testQuotaExtractorReadsNestedCamelCaseAndClamps() throws {
     let data = """
     {
       "rateLimits": {
-        "fiveHourRemainingPercent": 125,
         "weeklyRemainingPercent": -4
       }
     }
@@ -202,7 +191,6 @@ func testQuotaExtractorReadsNestedCamelCaseAndClamps() throws {
 
     let values = QuotaExtractor.extract(from: data)
 
-    try expectEqual(values?.fiveHourRemainingPercent, 100, "extractor should clamp high five hour percent")
     try expectEqual(values?.weeklyRemainingPercent, 0, "extractor should clamp low weekly percent")
 }
 
@@ -211,7 +199,6 @@ func testQuotaExtractorReadsQuotaAndRateLimitsNesting() throws {
     {
       "metadata": {
         "quota": {
-          "five_hour_remaining_percent": 64,
           "weekly_remaining_percent": 36
         }
       }
@@ -221,24 +208,21 @@ func testQuotaExtractorReadsQuotaAndRateLimitsNesting() throws {
     {
       "payload": {
         "rate_limits": {
-          "five_hour_remaining_percent": "61",
           "weekly_remaining_percent": "35"
         }
       }
     }
     """.data(using: .utf8)!
 
-    try expectEqual(QuotaExtractor.extract(from: quotaData)?.fiveHourRemainingPercent, 64, "extractor should recurse into quota objects")
     try expectEqual(QuotaExtractor.extract(from: quotaData)?.weeklyRemainingPercent, 36, "extractor should recurse into quota objects")
-    try expectEqual(QuotaExtractor.extract(from: rateLimitsData)?.fiveHourRemainingPercent, 61, "extractor should recurse into rate_limits objects")
     try expectEqual(QuotaExtractor.extract(from: rateLimitsData)?.weeklyRemainingPercent, 35, "extractor should parse numeric string percents")
 }
 
-func testQuotaExtractorRequiresBothWindows() throws {
+func testQuotaExtractorRequiresWeeklyQuota() throws {
     let data = """
     {
       "quota": {
-        "five_hour_remaining_percent": 72
+        "unrelated_remaining_percent": 72
       }
     }
     """.data(using: .utf8)!
@@ -250,9 +234,7 @@ func testQuotaExtractorReadsZeroPercentAndResetDates() throws {
     let data = """
     {
       "quota": {
-        "five_hour_remaining_percent": 0,
         "weekly_remaining_percent": 0,
-        "five_hour_resets_at": 1781189000,
         "weekly_resets_at": 1781275400
       }
     }
@@ -260,9 +242,7 @@ func testQuotaExtractorReadsZeroPercentAndResetDates() throws {
 
     let quota = QuotaExtractor.extract(from: data)
 
-    try expectEqual(quota?.fiveHourRemainingPercent, 0, "extractor should read exhausted 5 hour quota")
     try expectEqual(quota?.weeklyRemainingPercent, 0, "extractor should read exhausted weekly quota")
-    try expectEqual(quota?.fiveHourResetsAt, Date(timeIntervalSince1970: 1_781_189_000), "extractor should read five hour reset date")
     try expectEqual(quota?.weeklyResetsAt, Date(timeIntervalSince1970: 1_781_275_400), "extractor should read weekly reset date")
 }
 
@@ -283,6 +263,31 @@ func testStateSnapshotDecodesOldJSONWithoutQuota() throws {
     try expectEqual(snapshot.updatedAt, Date(timeIntervalSince1970: 1_000), "old JSON should decode updated_at")
     try expectEqual(snapshot.tasks.isEmpty, true, "old JSON should decode tasks")
     try expectEqual(snapshot.quota == nil, true, "old JSON without quota should decode nil quota")
+}
+
+func testStateSnapshotDecodesLegacyDualWindowQuota() throws {
+    let data = """
+    {
+      "aggregate_state": "idle",
+      "updated_at": 1000,
+      "quota": {
+        "five_hour_remaining_percent": 72,
+        "five_hour_resets_at": 1700,
+        "weekly_remaining_percent": 48,
+        "weekly_resets_at": 2400,
+        "source": "legacy",
+        "updated_at": 1000
+      },
+      "tasks": {}
+    }
+    """.data(using: .utf8)!
+
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .secondsSince1970
+    let snapshot = try decoder.decode(StateSnapshot.self, from: data)
+
+    try expectEqual(snapshot.quota?.weeklyRemainingPercent, 48, "legacy state should preserve weekly quota")
+    try expectEqual(snapshot.quota?.weeklyResetsAt, Date(timeIntervalSince1970: 2_400), "legacy state should preserve weekly reset date")
 }
 
 func testStateStoreClearAndIdleTaskRemoval() throws {
@@ -392,9 +397,7 @@ func testUpdateQuotaPreservesTasksAndAggregateState() throws {
     )
 
     let snapshot = try store.updateQuota(
-        fiveHourPercent: 72,
         weeklyPercent: 48,
-        fiveHourResetsAt: now.addingTimeInterval(301),
         weeklyResetsAt: now.addingTimeInterval(10_081),
         source: "test",
         now: now.addingTimeInterval(1)
@@ -403,11 +406,9 @@ func testUpdateQuotaPreservesTasksAndAggregateState() throws {
     try expectEqual(snapshot.aggregateState, .waiting, "quota update should preserve aggregate state")
     try expectEqual(snapshot.tasks.count, 1, "quota update should preserve tasks")
     try expectEqual(snapshot.tasks["task-1"]?.state, .waiting, "quota update should preserve task state")
-    try expectEqual(snapshot.quota?.fiveHourRemainingPercent, 72, "quota update should set five hour percent")
     try expectEqual(snapshot.quota?.weeklyRemainingPercent, 48, "quota update should set weekly percent")
     try expectEqual(snapshot.quota?.source, "test", "quota update should set source")
     try expectEqual(snapshot.quota?.updatedAt, now.addingTimeInterval(1), "quota update should set quota updatedAt")
-    try expectEqual(snapshot.quota?.fiveHourResetsAt, now.addingTimeInterval(301), "quota update should set five hour reset date")
     try expectEqual(snapshot.quota?.weeklyResetsAt, now.addingTimeInterval(10_081), "quota update should set weekly reset date")
 }
 
@@ -426,7 +427,6 @@ func testClearPreservesQuota() throws {
         now: now
     )
     let withQuota = try store.updateQuota(
-        fiveHourPercent: 34,
         weeklyPercent: 88,
         source: "test",
         now: now.addingTimeInterval(1)
@@ -513,12 +513,12 @@ func testHookLogLineIncludesQuotaSummary() throws {
         workspace: "/tmp/project",
         result: "ok",
         detail: nil,
-        quotaSummary: "72/48"
+        quotaSummary: "48"
     )
 
     let line = HookLogger.format(entry)
 
-    if !line.contains("quota=72/48") {
+    if !line.contains("quota=48") {
         throw TestFailure(description: "hook log line should include quota summary: \(line)")
     }
 }
@@ -533,7 +533,6 @@ func testHookBridgeUpdatesTaskAndQuotaFromPayload() throws {
       "session_id": "abc",
       "cwd": "/tmp/project",
       "quota": {
-        "fiveHourRemainingPercent": 71,
         "weeklyRemainingPercent": 47
       }
     }
@@ -547,10 +546,9 @@ func testHookBridgeUpdatesTaskAndQuotaFromPayload() throws {
     )
     let snapshot = store.read()
 
-    try expectEqual(result.quotaSummary, "71/47", "hook bridge should report quota summary")
+    try expectEqual(result.quotaSummary, "47", "hook bridge should report quota summary")
     try expectEqual(snapshot.aggregateState, .working, "hook bridge should preserve task mapping")
     try expectEqual(snapshot.tasks["session:abc"]?.state, .working, "hook bridge should update task")
-    try expectEqual(snapshot.quota?.fiveHourRemainingPercent, 71, "hook bridge should update five hour quota")
     try expectEqual(snapshot.quota?.weeklyRemainingPercent, 47, "hook bridge should update weekly quota")
     try expectEqual(snapshot.quota?.source, "codex-hook", "hook bridge should mark quota source")
 }
@@ -573,7 +571,6 @@ func testHookBridgeQuotaOnlyEventDoesNotCreateTask() throws {
     {
       "hook_event_name": "account/rateLimits/updated",
       "rate_limits": {
-        "five_hour_remaining_percent": 69,
         "weekly_remaining_percent": 45
       }
     }
@@ -590,7 +587,6 @@ func testHookBridgeQuotaOnlyEventDoesNotCreateTask() throws {
     try expectEqual(result.updatedTask, false, "quota-only event should not update a task")
     try expectEqual(snapshot.tasks.count, 1, "quota-only event should not create a task")
     try expectEqual(snapshot.aggregateState, .waiting, "quota-only event should not change aggregate priority")
-    try expectEqual(snapshot.quota?.fiveHourRemainingPercent, 69, "quota-only event should update five hour quota")
     try expectEqual(snapshot.quota?.weeklyRemainingPercent, 45, "quota-only event should update weekly quota")
 }
 
@@ -637,7 +633,7 @@ func appServerSnapshot(
 }
 
 func testAppServerQuotaMapperReadsCodexLimitByExactDurations() throws {
-    let codex = appServerSnapshot(primaryUsed: 28, primaryDuration: 300, secondaryUsed: 52, secondaryDuration: 10_080)
+    let codex = appServerSnapshot(primaryUsed: 52, primaryDuration: 10_080)
     let fallback = appServerSnapshot(primaryUsed: 80, primaryDuration: 300, secondaryUsed: 90, secondaryDuration: 10_080)
     let data = appServerRateLimitsResponse(
         rateLimitsByLimitId: #"{"other": \#(fallback), "codex": \#(codex)}"#,
@@ -646,7 +642,6 @@ func testAppServerQuotaMapperReadsCodexLimitByExactDurations() throws {
 
     let quota = try CodexAppServerQuotaMapper.quotaValues(from: data)
 
-    try expectEqual(quota.fiveHourRemainingPercent, 72, "mapper should prefer codex 5 hour window")
     try expectEqual(quota.weeklyRemainingPercent, 48, "mapper should prefer codex weekly window")
 }
 
@@ -656,7 +651,6 @@ func testAppServerQuotaMapperFallsBackToTopLevelRateLimits() throws {
 
     let quota = try CodexAppServerQuotaMapper.quotaValues(from: data)
 
-    try expectEqual(quota.fiveHourRemainingPercent, 61, "mapper should read top-level 5 hour window")
     try expectEqual(quota.weeklyRemainingPercent, 35, "mapper should read top-level weekly window")
 }
 
@@ -666,7 +660,6 @@ func testAppServerQuotaMapperClampsRemainingPercent() throws {
 
     let quota = try CodexAppServerQuotaMapper.quotaValues(from: data)
 
-    try expectEqual(quota.fiveHourRemainingPercent, 100, "mapper should clamp remaining above 100")
     try expectEqual(quota.weeklyRemainingPercent, 0, "mapper should clamp remaining below 0")
 }
 
@@ -676,13 +669,11 @@ func testAppServerQuotaMapperReadsResetTimes() throws {
 
     let quota = try CodexAppServerQuotaMapper.quotaValues(from: data)
 
-    try expectEqual(quota.fiveHourRemainingPercent, 0, "mapper should read exhausted 5 hour quota")
     try expectEqual(quota.weeklyRemainingPercent, 0, "mapper should read exhausted weekly quota")
-    try expectEqual(quota.fiveHourResetsAt, Date(timeIntervalSince1970: 1_781_189_000), "mapper should read five hour reset date")
     try expectEqual(quota.weeklyResetsAt, Date(timeIntervalSince1970: 1_781_189_000), "mapper should read weekly reset date")
 }
 
-func testAppServerQuotaMapperRequiresBothWindows() throws {
+func testAppServerQuotaMapperRequiresWeeklyWindow() throws {
     let codex = appServerSnapshot(primaryUsed: 28, primaryDuration: 300, secondaryUsed: nil, secondaryDuration: nil)
     let data = appServerRateLimitsResponse(rateLimitsByLimitId: #"{"codex": \#(codex)}"#)
 
@@ -694,13 +685,12 @@ func testAppServerQuotaMapperRequiresBothWindows() throws {
     }
 }
 
-func testAppServerQuotaMapperFallsBackToPrimarySecondaryWhenDurationsAreMissing() throws {
+func testAppServerQuotaMapperFallsBackToSecondaryWhenDurationsAreMissing() throws {
     let codex = appServerSnapshot(primaryUsed: 30, primaryDuration: nil, secondaryUsed: 55, secondaryDuration: nil)
     let data = appServerRateLimitsResponse(rateLimitsByLimitId: #"{"codex": \#(codex)}"#)
 
     let quota = try CodexAppServerQuotaMapper.quotaValues(from: data)
 
-    try expectEqual(quota.fiveHourRemainingPercent, 70, "mapper should use primary as 5 hour when durations are missing")
     try expectEqual(quota.weeklyRemainingPercent, 45, "mapper should use secondary as weekly when durations are missing")
 }
 
@@ -710,7 +700,6 @@ func testAppServerQuotaMapperIgnoresIndividualLimitRemainingPercent() throws {
 
     let quota = try CodexAppServerQuotaMapper.quotaValues(from: data)
 
-    try expectEqual(quota.fiveHourRemainingPercent, 72, "mapper should not use individual limit for 5 hour quota")
     try expectEqual(quota.weeklyRemainingPercent, 48, "mapper should not use individual limit for weekly quota")
 }
 
@@ -757,7 +746,6 @@ func testAppServerJSONRPCFramerDecodesMessagesAndFindsTargetResponse() throws {
     let quota = try CodexAppServerQuotaMapper.quotaValues(from: target)
 
     try expectEqual(messages.count, 2, "framer should decode both framed messages")
-    try expectEqual(quota.fiveHourRemainingPercent, 72, "framer should select target response result")
     try expectEqual(quota.weeklyRemainingPercent, 48, "framer should select target response result")
 }
 
@@ -801,7 +789,6 @@ func testAppServerJSONRPCLineCodecDecodesMessagesAndFindsTargetResponse() throws
     let quota = try CodexAppServerQuotaMapper.quotaValues(from: target)
 
     try expectEqual(messages.count, 2, "line codec should decode each newline-delimited JSON message")
-    try expectEqual(quota.fiveHourRemainingPercent, 70, "line codec should select target response result")
     try expectEqual(quota.weeklyRemainingPercent, 95, "line codec should select target response result")
 }
 
@@ -820,7 +807,6 @@ func testAppServerQuotaCollectorUsesTransportFixture() throws {
 
     let quota = try collector.fetchQuota()
 
-    try expectEqual(quota.fiveHourRemainingPercent, 72, "collector should return mapped 5 hour quota")
     try expectEqual(quota.weeklyRemainingPercent, 48, "collector should return mapped weekly quota")
 }
 
@@ -829,7 +815,6 @@ func testAppServerQuotaCollectorPropagatesMissingQuotaWithoutClearingStore() thr
         .appendingPathComponent("codex-light-mxp-app-server-failure-tests-\(UUID().uuidString)", isDirectory: true)
     let store = StateStore(stateURL: directory.appendingPathComponent("state.json"))
     _ = try store.updateQuota(
-        fiveHourPercent: 12,
         weeklyPercent: 34,
         source: "previous",
         now: Date(timeIntervalSince1970: 10_000)
@@ -845,7 +830,6 @@ func testAppServerQuotaCollectorPropagatesMissingQuotaWithoutClearingStore() thr
     }
 
     let snapshot = store.read()
-    try expectEqual(snapshot.quota?.fiveHourRemainingPercent, 12, "failed app-server fetch should keep previous 5 hour quota")
     try expectEqual(snapshot.quota?.weeklyRemainingPercent, 34, "failed app-server fetch should keep previous weekly quota")
     try expectEqual(snapshot.quota?.source, "previous", "failed app-server fetch should keep previous quota source")
 }
@@ -904,7 +888,6 @@ func testAppServerQuotaCollectorRetriesTwiceAndSucceedsOnThirdAttempt() throws {
 
     try expectEqual(transport.attempts, 3, "collector should try once plus two retries")
     try expectEqual(sleeps, [1, 3], "collector should use planned retry backoff")
-    try expectEqual(quota.fiveHourRemainingPercent, 72, "collector should return quota from successful retry")
     try expectEqual(quota.weeklyRemainingPercent, 48, "collector should return quota from successful retry")
 }
 
@@ -913,7 +896,6 @@ func testAppServerQuotaCollectorFailsAfterThreeAttemptsAndPreservesQuota() throw
         .appendingPathComponent("codex-light-mxp-app-server-retry-failure-tests-\(UUID().uuidString)", isDirectory: true)
     let store = StateStore(stateURL: directory.appendingPathComponent("state.json"))
     _ = try store.updateQuota(
-        fiveHourPercent: 12,
         weeklyPercent: 34,
         source: "previous",
         now: Date(timeIntervalSince1970: 11_000)
@@ -939,7 +921,6 @@ func testAppServerQuotaCollectorFailsAfterThreeAttemptsAndPreservesQuota() throw
 
     let snapshot = store.read()
     try expectEqual(transport.attempts, 3, "collector should stop after three attempts")
-    try expectEqual(snapshot.quota?.fiveHourRemainingPercent, 12, "failed retries should keep previous 5 hour quota")
     try expectEqual(snapshot.quota?.weeklyRemainingPercent, 34, "failed retries should keep previous weekly quota")
     try expectEqual(snapshot.quota?.source, "previous", "failed retries should keep previous quota source")
 }
@@ -1037,9 +1018,10 @@ let tests: [(String, () throws -> Void)] = [
     ("quota extractor reads top-level snake case", testQuotaExtractorReadsTopLevelSnakeCase),
     ("quota extractor reads nested camel case and clamps", testQuotaExtractorReadsNestedCamelCaseAndClamps),
     ("quota extractor reads quota and rate limits nesting", testQuotaExtractorReadsQuotaAndRateLimitsNesting),
-    ("quota extractor requires both windows", testQuotaExtractorRequiresBothWindows),
+    ("quota extractor requires weekly quota", testQuotaExtractorRequiresWeeklyQuota),
     ("quota extractor reads zero percent and reset dates", testQuotaExtractorReadsZeroPercentAndResetDates),
     ("old JSON decodes without quota", testStateSnapshotDecodesOldJSONWithoutQuota),
+    ("legacy dual-window quota decodes", testStateSnapshotDecodesLegacyDualWindowQuota),
     ("state store clear and idle", testStateStoreClearAndIdleTaskRemoval),
     ("state JSON keys", testStateFileUsesPlannedJSONKeys),
     ("read preserves quit", testReadPreservesQuitAggregateState),
@@ -1054,8 +1036,8 @@ let tests: [(String, () throws -> Void)] = [
     ("app-server quota mapper falls back top-level", testAppServerQuotaMapperFallsBackToTopLevelRateLimits),
     ("app-server quota mapper clamps remaining", testAppServerQuotaMapperClampsRemainingPercent),
     ("app-server quota mapper reads reset times", testAppServerQuotaMapperReadsResetTimes),
-    ("app-server quota mapper requires both windows", testAppServerQuotaMapperRequiresBothWindows),
-    ("app-server quota mapper falls back primary secondary", testAppServerQuotaMapperFallsBackToPrimarySecondaryWhenDurationsAreMissing),
+    ("app-server quota mapper requires weekly window", testAppServerQuotaMapperRequiresWeeklyWindow),
+    ("app-server quota mapper falls back to secondary", testAppServerQuotaMapperFallsBackToSecondaryWhenDurationsAreMissing),
     ("app-server quota mapper ignores individual limit", testAppServerQuotaMapperIgnoresIndividualLimitRemainingPercent),
     ("app-server JSON-RPC framer builds request", testAppServerJSONRPCFramerBuildsContentLengthRequest),
     ("app-server JSON-RPC framer decodes target response", testAppServerJSONRPCFramerDecodesMessagesAndFindsTargetResponse),
