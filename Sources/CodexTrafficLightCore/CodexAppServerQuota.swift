@@ -34,7 +34,7 @@ public indirect enum CodexAppServerQuotaError: Error, CustomStringConvertible {
         case .retryExhausted(let attempts, let lastError):
             return "App-server quota failed after \(attempts) attempts: \(lastError.description)"
         case .missingQuota:
-            return "App-server response did not include Codex 5-hour and weekly quota"
+            return "App-server response did not include Codex weekly quota"
         }
     }
 
@@ -72,7 +72,6 @@ public indirect enum CodexAppServerQuotaError: Error, CustomStringConvertible {
 }
 
 public enum CodexAppServerQuotaMapper {
-    private static let fiveHourDurationMins = 300
     private static let weeklyDurationMins = 10_080
 
     public static func quotaValues(from data: Data) throws -> QuotaValues {
@@ -105,27 +104,26 @@ public enum CodexAppServerQuotaMapper {
 
     private static func quotaValues(from snapshot: AppServerRateLimitSnapshot) -> QuotaValues? {
         let windows = [snapshot.primary, snapshot.secondary].compactMap { $0 }
-        let fiveHourWindow = windows.first { $0.windowDurationMins == fiveHourDurationMins }
-            ?? fallbackWindow(snapshot.primary, duration: fiveHourDurationMins)
         let weeklyWindow = windows.first { $0.windowDurationMins == weeklyDurationMins }
-            ?? fallbackWindow(snapshot.secondary, duration: weeklyDurationMins)
+            ?? fallbackWeeklyWindow(in: snapshot)
 
-        guard let fiveHourWindow, let weeklyWindow else {
+        guard let weeklyWindow else {
             return nil
         }
         return QuotaValues(
-            fiveHourRemainingPercent: remainingPercent(fromUsedPercent: fiveHourWindow.usedPercent),
             weeklyRemainingPercent: remainingPercent(fromUsedPercent: weeklyWindow.usedPercent),
-            fiveHourResetsAt: fiveHourWindow.resetsAt,
             weeklyResetsAt: weeklyWindow.resetsAt
         )
     }
 
-    private static func fallbackWindow(_ window: AppServerRateLimitWindow?, duration: Int) -> AppServerRateLimitWindow? {
-        guard let window, window.windowDurationMins == nil else {
-            return nil
+    private static func fallbackWeeklyWindow(in snapshot: AppServerRateLimitSnapshot) -> AppServerRateLimitWindow? {
+        if let secondary = snapshot.secondary, secondary.windowDurationMins == nil {
+            return secondary
         }
-        return window
+        if snapshot.secondary == nil, let primary = snapshot.primary, primary.windowDurationMins == nil {
+            return primary
+        }
+        return nil
     }
 
     private static func remainingPercent(fromUsedPercent usedPercent: Double) -> Int {
@@ -327,9 +325,7 @@ public struct CodexAppServerQuotaCollector {
     public func fetchAndUpdate(store: StateStore = StateStore(), now: Date = Date()) throws -> StateSnapshot {
         let quota = try fetchQuota()
         return try store.updateQuota(
-            fiveHourPercent: quota.fiveHourRemainingPercent,
             weeklyPercent: quota.weeklyRemainingPercent,
-            fiveHourResetsAt: quota.fiveHourResetsAt,
             weeklyResetsAt: quota.weeklyResetsAt,
             source: Self.source,
             now: now
@@ -360,16 +356,37 @@ public struct ProcessCodexAppServerTransport: CodexAppServerTransport {
     }
 
     public static func defaultCodexBinary() -> String {
-        if let configured = ProcessInfo.processInfo.environment["CODEX_TRAFFIC_LIGHT_CODEX_BIN"],
-           !configured.isEmpty {
-            return configured
-        }
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let localCodex = home.appendingPathComponent(".local/bin/codex").path
-        if FileManager.default.isExecutableFile(atPath: localCodex) {
-            return localCodex
+        for candidate in codexBinaryCandidates() {
+            if FileManager.default.isExecutableFile(atPath: candidate) {
+                return candidate
+            }
         }
         return "codex"
+    }
+
+    public static func codexBinaryCandidates(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) -> [String] {
+        var candidates: [String] = []
+
+        if let configured = environment["CODEX_TRAFFIC_LIGHT_CODEX_BIN"],
+           !configured.isEmpty {
+            candidates.append(configured)
+        }
+
+        candidates.append(homeDirectory.appendingPathComponent(".local/bin/codex").path)
+        candidates.append("/Applications/ChatGPT.app/Contents/Resources/codex")
+        candidates.append(homeDirectory.appendingPathComponent("Applications/ChatGPT.app/Contents/Resources/codex").path)
+        candidates.append("/Applications/Codex.app/Contents/Resources/codex")
+        candidates.append(homeDirectory.appendingPathComponent("Applications/Codex.app/Contents/Resources/codex").path)
+
+        for directory in (environment["PATH"] ?? "").split(separator: ":") where !directory.isEmpty {
+            candidates.append(URL(fileURLWithPath: String(directory)).appendingPathComponent("codex").path)
+        }
+
+        var seen = Set<String>()
+        return candidates.filter { seen.insert($0).inserted }
     }
 
     public func readRateLimits() throws -> Data {
@@ -380,9 +397,35 @@ public struct ProcessCodexAppServerTransport: CodexAppServerTransport {
         let input = Pipe()
         let output = Pipe()
         let error = Pipe()
+        var didLaunch = false
         process.standardInput = input
         process.standardOutput = output
         process.standardError = error
+
+        defer {
+            // A menu-bar process calls this repeatedly for days. Explicitly close
+            // every pipe endpoint so Process/Pipe callbacks cannot retain three
+            // descriptors after each refresh.
+            try? input.fileHandleForWriting.close()
+            if didLaunch {
+                if process.isRunning {
+                    process.terminate()
+                }
+                process.waitUntilExit()
+            }
+            output.fileHandleForReading.readabilityHandler = nil
+            error.fileHandleForReading.readabilityHandler = nil
+            for handle in [
+                input.fileHandleForReading,
+                input.fileHandleForWriting,
+                output.fileHandleForReading,
+                output.fileHandleForWriting,
+                error.fileHandleForReading,
+                error.fileHandleForWriting
+            ] {
+                try? handle.close()
+            }
+        }
 
         let responseBuffer = LockedDataBuffer()
         let errorBuffer = LockedDataBuffer()
@@ -405,9 +448,8 @@ public struct ProcessCodexAppServerTransport: CodexAppServerTransport {
 
         do {
             try process.run()
+            didLaunch = true
         } catch let launchError {
-            output.fileHandleForReading.readabilityHandler = nil
-            error.fileHandleForReading.readabilityHandler = nil
             throw CodexAppServerQuotaError.launchFailed(String(describing: launchError))
         }
 
@@ -439,9 +481,6 @@ public struct ProcessCodexAppServerTransport: CodexAppServerTransport {
             Thread.sleep(forTimeInterval: 0.2)
         }
         guard initialized else {
-            output.fileHandleForReading.readabilityHandler = nil
-            error.fileHandleForReading.readabilityHandler = nil
-            process.terminate()
             throw CodexAppServerQuotaError.initializeTimedOut(timeout: initializeTimeout)
         }
 
@@ -456,17 +495,11 @@ public struct ProcessCodexAppServerTransport: CodexAppServerTransport {
 
             if let messages = try? CodexAppServerJSONRPCLineCodec.decodeMessages(from: currentBuffer),
                let result = try? CodexAppServerJSONRPCLineCodec.resultData(forID: 2, in: messages) {
-                output.fileHandleForReading.readabilityHandler = nil
-                error.fileHandleForReading.readabilityHandler = nil
-                process.terminate()
                 return result
             }
             Thread.sleep(forTimeInterval: 0.2)
         }
 
-        output.fileHandleForReading.readabilityHandler = nil
-        error.fileHandleForReading.readabilityHandler = nil
-        process.terminate()
         let stderr = String(data: errorBuffer.snapshot(), encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if let stderr, !stderr.isEmpty {

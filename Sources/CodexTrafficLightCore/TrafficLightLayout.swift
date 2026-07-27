@@ -107,14 +107,14 @@ public struct TrafficLightLayout: Equatable, Sendable {
     }
 
     public static let `default`: TrafficLightLayout = {
-        let width = 360.0
-        let height = 165.0
+        let width = 160.0
+        let height = 520.0
         let bodyInsetX = 8.0
         let bodyInsetY = 8.0
 
         func quotaRow(label: String, x: Double, baseY: Double, width: Double, labelWidth: Double, gap: Double) -> TrafficLightQuotaRowLayout {
             let valueWidth = width - labelWidth - gap
-            let textRect = TrafficLightRect(x: x, y: baseY + 12, width: width, height: 26)
+            let textRect = TrafficLightRect(x: x, y: baseY + 18, width: width, height: 26)
             return TrafficLightQuotaRowLayout(
                 label: label,
                 textRect: textRect,
@@ -125,7 +125,7 @@ public struct TrafficLightLayout: Equatable, Sendable {
                     width: valueWidth,
                     height: textRect.height
                 ),
-                progressRect: TrafficLightRect(x: x, y: baseY, width: width, height: 6)
+                progressRect: TrafficLightRect(x: x, y: baseY, width: width, height: 10)
             )
         }
 
@@ -137,22 +137,21 @@ public struct TrafficLightLayout: Equatable, Sendable {
                 width: width - bodyInsetX * 2,
                 height: height - bodyInsetY * 2
             ),
-            titleRect: TrafficLightRect(x: 244, y: 112, width: 86, height: 18),
+            titleRect: TrafficLightRect(x: 10, y: 478, width: 140, height: 18),
             lightCenters: [
-                .red: TrafficLightPoint(x: 78, y: 103),
-                .yellow: TrafficLightPoint(x: 138, y: 103),
-                .green: TrafficLightPoint(x: 198, y: 103)
+                .red: TrafficLightPoint(x: 80, y: 422),
+                .yellow: TrafficLightPoint(x: 80, y: 332),
+                .green: TrafficLightPoint(x: 80, y: 242)
             ],
-            hudRect: TrafficLightRect(x: 22, y: 17, width: 316, height: 132),
-            statusRect: TrafficLightRect(x: 244, y: 86, width: 86, height: 32),
+            hudRect: TrafficLightRect(x: 8, y: 24, width: 144, height: 472),
+            statusRect: TrafficLightRect(x: 8, y: 105, width: 144, height: 48),
             quotaRows: [
-                quotaRow(label: "5小时", x: 54, baseY: 33, width: 136, labelWidth: 64, gap: 12),
-                quotaRow(label: "1周", x: 224, baseY: 33, width: 104, labelWidth: 46, gap: 12)
+                quotaRow(label: "周：", x: 18, baseY: 38, width: 124, labelWidth: 52, gap: 0)
             ],
-            lensGlowRadius: 28,
-            lensBulbRadius: 24,
-            minimumHudGap: 10,
-            bottomSafeInset: 8,
+            lensGlowRadius: 40,
+            lensBulbRadius: 29,
+            minimumHudGap: 12,
+            bottomSafeInset: 14,
             minimumPercentTextWidth: 42
         )
     }()

@@ -39,7 +39,7 @@ timeout = 5
 statusMessage = "Codex traffic light: subagent done"
 
 # Optional: enable this only if your Codex version emits a stable quota/rate-limit hook event
-# with five_hour_remaining_percent + weekly_remaining_percent or camelCase equivalents.
+# with weekly_remaining_percent or its camelCase equivalent.
 #
 # [[hooks."account/rateLimits/updated"]]
 # [[hooks."account/rateLimits/updated".hooks]]

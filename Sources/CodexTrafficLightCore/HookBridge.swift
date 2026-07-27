@@ -42,9 +42,7 @@ public enum HookBridge {
 
         if let quota {
             snapshot = try store.updateQuota(
-                fiveHourPercent: quota.fiveHourRemainingPercent,
                 weeklyPercent: quota.weeklyRemainingPercent,
-                fiveHourResetsAt: quota.fiveHourResetsAt,
                 weeklyResetsAt: quota.weeklyResetsAt,
                 source: "codex-hook",
                 now: now

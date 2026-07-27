@@ -88,18 +88,14 @@ public final class StateStore {
 
     @discardableResult
     public func updateQuota(
-        fiveHourPercent: Int,
         weeklyPercent: Int,
-        fiveHourResetsAt: Date? = nil,
         weeklyResetsAt: Date? = nil,
         source: String,
         now: Date = Date()
     ) throws -> StateSnapshot {
         var snapshot = read().pruningExpiredDone(now: now)
         snapshot.quota = QuotaSnapshot(
-            fiveHourRemainingPercent: fiveHourPercent,
             weeklyRemainingPercent: weeklyPercent,
-            fiveHourResetsAt: fiveHourResetsAt,
             weeklyResetsAt: weeklyResetsAt,
             source: source,
             updatedAt: now

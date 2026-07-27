@@ -7,7 +7,6 @@ struct CLIOptions {
     var json = false
     var stdin = false
     var appServer = false
-    var fiveHourPercent: Int?
     var weeklyPercent: Int?
     var command: String?
 }
@@ -16,7 +15,7 @@ func usage() {
     FileHandle.standardError.write(
         """
         Usage: \(CommandContract.lightCommandName) [--task <task-id>] [--workspace <path>] [--json] <working|done|waiting|idle|status|clear|quit>
-               \(CommandContract.lightCommandName) \(CommandContract.quotaCommandName) --five-hour <0-100> --weekly <0-100> [--json]
+               \(CommandContract.lightCommandName) \(CommandContract.quotaCommandName) --weekly <0-100> [--json]
                \(CommandContract.lightCommandName) \(CommandContract.quotaCommandName) --stdin [--json]
                \(CommandContract.lightCommandName) \(CommandContract.quotaCommandName) --app-server [--json]
 
@@ -44,12 +43,6 @@ func parse(_ arguments: [String]) throws -> CLIOptions {
             options.stdin = true
         case "--app-server":
             options.appServer = true
-        case "--five-hour":
-            index += 1
-            guard index < arguments.count, let value = Int(arguments[index]) else {
-                throw StateStoreError.invalidState("--five-hour requires an integer")
-            }
-            options.fiveHourPercent = value
         case "--weekly":
             index += 1
             guard index < arguments.count, let value = Int(arguments[index]) else {
@@ -101,26 +94,22 @@ do {
         } else if options.stdin {
             let input = FileHandle.standardInput.readDataToEndOfFile()
             guard let quota = QuotaExtractor.extract(from: input) else {
-                throw StateStoreError.invalidState("quota --stdin requires JSON with five-hour and weekly remaining percent")
+                throw StateStoreError.invalidState("quota --stdin requires JSON with weekly remaining percent")
             }
             let snapshot = try store.updateQuota(
-                fiveHourPercent: quota.fiveHourRemainingPercent,
                 weeklyPercent: quota.weeklyRemainingPercent,
-                fiveHourResetsAt: quota.fiveHourResetsAt,
                 weeklyResetsAt: quota.weeklyResetsAt,
                 source: "cli"
             )
             try printSnapshot(snapshot, json: options.json)
-        } else if let fiveHour = options.fiveHourPercent,
-                  let weekly = options.weeklyPercent {
+        } else if let weekly = options.weeklyPercent {
             let snapshot = try store.updateQuota(
-                fiveHourPercent: fiveHour,
                 weeklyPercent: weekly,
                 source: "cli"
             )
             try printSnapshot(snapshot, json: options.json)
         } else {
-            throw StateStoreError.invalidState("quota requires --five-hour and --weekly")
+            throw StateStoreError.invalidState("quota requires --weekly")
         }
     case "quit":
         let taskID = ContextResolver.taskID(explicitTaskID: options.taskID, workspace: options.workspace)

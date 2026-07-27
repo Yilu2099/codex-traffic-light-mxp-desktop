@@ -16,28 +16,63 @@ final class TrafficLightView: NSView {
     var waitingAlertActive = false {
         didSet { needsDisplay = true }
     }
+    var breathingPhase: CGFloat = 0 {
+        didSet { needsDisplay = true }
+    }
     var onDrag: ((NSPoint) -> Void)?
+    var onResize: ((CGFloat) -> Void)?
     var onToggleVisibility: (() -> Void)?
 
+    private enum DragMode {
+        case move
+        case resize
+    }
+
     private var dragStart: NSPoint?
+    private var dragMode: DragMode = .move
 
     override var acceptsFirstResponder: Bool { true }
+
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        addCursorRect(
+            NSRect(x: bounds.maxX - 28, y: 0, width: 28, height: 28),
+            cursor: .resizeLeftRight
+        )
+    }
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         NSColor.clear.setFill()
         dirtyRect.fill()
 
+        let scale = min(
+            bounds.width / CGFloat(layout.windowSize.x),
+            bounds.height / CGFloat(layout.windowSize.y)
+        )
+        let scaledWidth = CGFloat(layout.windowSize.x) * scale
+        let scaledHeight = CGFloat(layout.windowSize.y) * scale
+        let offset = NSPoint(
+            x: (bounds.width - scaledWidth) / 2,
+            y: (bounds.height - scaledHeight) / 2
+        )
+        NSGraphicsContext.saveGraphicsState()
+        let transform = NSAffineTransform()
+        transform.translateX(by: offset.x, yBy: offset.y)
+        transform.scale(by: scale)
+        transform.concat()
+
         let body = layout.bodyRect.nsRect
         drawRoundedGradient(
             body,
-            radius: 46,
-            top: NSColor(hex: "#30363a"),
-            bottom: NSColor(hex: "#161a1f"),
-            stroke: NSColor.white.withAlphaComponent(0.20),
+            radius: 40,
+            top: NSColor(hex: "#353a42"),
+            bottom: NSColor(hex: "#16191e"),
+            stroke: NSColor.white.withAlphaComponent(0.18),
             width: 1
         )
 
+        drawSignalHousing()
         drawPanelDividers()
 
         let centers: [(TrafficLightSlot, NSPoint)] = [
@@ -49,6 +84,8 @@ final class TrafficLightView: NSView {
             drawLens(center: center, light: light, active: isVisible(light))
         }
         drawStatusAndQuota()
+        NSGraphicsContext.restoreGraphicsState()
+        drawResizeHandle()
     }
 
     private func activeLight() -> TrafficLightSlot? {
@@ -73,46 +110,22 @@ final class TrafficLightView: NSView {
         }
     }
 
-    private func drawTitle() {
+    private func drawStatusAndQuota() {
         let paragraph = NSMutableParagraphStyle()
         paragraph.alignment = .center
+        let stateColor = activeLight().map { color(for: $0) } ?? NSColor.white
         let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.roundedSystemFont(ofSize: 12.5, weight: .medium),
-            .foregroundColor: NSColor.white.withAlphaComponent(0.42),
-            .kern: 0,
-            .shadow: NSShadow.softTextShadow(alpha: 0.25),
-            .paragraphStyle: paragraph
-        ]
-        "Agent 正在运行".draw(in: layout.titleRect.nsRect, withAttributes: attributes)
-    }
-
-    private func drawStatusAndQuota() {
-        drawTitle()
-
-        let paragraph = NSMutableParagraphStyle()
-        paragraph.alignment = .left
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.roundedSystemFont(ofSize: 23, weight: .semibold),
-            .foregroundColor: NSColor.white.withAlphaComponent(0.84),
-            .kern: 0,
-            .shadow: NSShadow.softTextShadow(alpha: 0.38),
+            .font: NSFont.roundedSystemFont(ofSize: 34, weight: .bold),
+            .foregroundColor: stateColor.withAlphaComponent(activeLight() == nil ? 0.56 : 0.96),
+            .kern: 0.6,
+            .shadow: NSShadow.softTextShadow(alpha: 0.42),
             .paragraphStyle: paragraph
         ]
 
-        if let active = activeLight() {
-            let dot = NSRect(x: layout.statusRect.minX - 24, y: layout.statusRect.minY + 12, width: 14, height: 14)
-            color(for: active).withAlphaComponent(0.95).setFill()
-            NSBezierPath(ovalIn: dot).fill()
-        }
         state.label.draw(in: layout.statusRect.nsRect, withAttributes: attributes)
 
         drawQuotaRow(
             row: layout.quotaRows[0],
-            percent: quota?.fiveHourRemainingPercent,
-            accent: NSColor(hex: "#61d6c7")
-        )
-        drawQuotaRow(
-            row: layout.quotaRows[1],
             percent: quota?.weeklyRemainingPercent,
             accent: NSColor(hex: "#8bd96b")
         )
@@ -121,32 +134,22 @@ final class TrafficLightView: NSView {
     private func drawQuotaRow(row: TrafficLightQuotaRowLayout, percent: Int?, accent: NSColor) {
         let clampedPercent = percent.map { min(max($0, 0), 100) }
         let value = clampedPercent.map { "\($0)%" } ?? "--"
-        let labelParagraph = NSMutableParagraphStyle()
-        labelParagraph.alignment = .left
-        let valueParagraph = NSMutableParagraphStyle()
-        valueParagraph.alignment = .right
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .center
 
-        let labelAttributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.roundedSystemFont(ofSize: 20, weight: .semibold),
-            .foregroundColor: NSColor.white.withAlphaComponent(0.82),
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.roundedSystemFont(ofSize: 23, weight: .bold),
+            .foregroundColor: NSColor.white.withAlphaComponent(percent == nil ? 0.48 : 0.92),
             .kern: 0,
-            .shadow: NSShadow.softTextShadow(alpha: 0.30),
-            .paragraphStyle: labelParagraph
-        ]
-        let valueAttributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.monospacedDigitSystemFont(ofSize: 20, weight: .bold),
-            .foregroundColor: NSColor.white.withAlphaComponent(percent == nil ? 0.40 : 0.86),
-            .kern: 0,
-            .shadow: NSShadow.softTextShadow(alpha: 0.32),
-            .paragraphStyle: valueParagraph
+            .shadow: NSShadow.softTextShadow(alpha: 0.34),
+            .paragraphStyle: paragraph
         ]
 
-        row.label.draw(in: row.labelRect.nsRect, withAttributes: labelAttributes)
-        value.draw(in: row.valueRect.nsRect, withAttributes: valueAttributes)
+        "\(row.label)\(value)".draw(in: row.textRect.nsRect, withAttributes: attributes)
 
         let barRect = row.progressRect.nsRect
-        let barPath = NSBezierPath(roundedRect: barRect, xRadius: 3, yRadius: 3)
-        NSColor.white.withAlphaComponent(0.12).setFill()
+        let barPath = NSBezierPath(roundedRect: barRect, xRadius: 5, yRadius: 5)
+        NSColor.white.withAlphaComponent(0.18).setFill()
         barPath.fill()
 
         guard let clampedPercent, clampedPercent > 0 else { return }
@@ -156,38 +159,47 @@ final class TrafficLightView: NSView {
             width: barRect.width * CGFloat(clampedPercent) / 100,
             height: barRect.height
         )
-        let fillPath = NSBezierPath(roundedRect: fillRect, xRadius: 3, yRadius: 3)
-        accent.withAlphaComponent(0.72).setFill()
+        let fillPath = NSBezierPath(roundedRect: fillRect, xRadius: 5, yRadius: 5)
+        accent.withAlphaComponent(0.88).setFill()
         fillPath.fill()
     }
 
+    private func drawSignalHousing() {
+        let rect = NSRect(x: 26, y: 194, width: 108, height: 278)
+        let path = NSBezierPath(roundedRect: rect, xRadius: 54, yRadius: 54)
+        NSGraphicsContext.saveGraphicsState()
+        path.addClip()
+        NSGradient(
+            starting: NSColor(hex: "#171a20"),
+            ending: NSColor(hex: "#292e35")
+        )?.draw(in: rect, angle: 90)
+        NSGraphicsContext.restoreGraphicsState()
+
+        NSColor.black.withAlphaComponent(0.55).setStroke()
+        path.lineWidth = 2
+        path.stroke()
+        NSColor.white.withAlphaComponent(0.10).setStroke()
+        let inner = NSBezierPath(roundedRect: rect.insetBy(dx: 3, dy: 3), xRadius: 51, yRadius: 51)
+        inner.lineWidth = 1
+        inner.stroke()
+    }
+
     private func drawPanelDividers() {
-        NSColor.white.withAlphaComponent(0.07).setStroke()
+        NSColor.white.withAlphaComponent(0.12).setStroke()
         let horizontal = NSBezierPath()
-        horizontal.move(to: NSPoint(x: layout.bodyRect.minX + 22, y: 72))
-        horizontal.line(to: NSPoint(x: layout.bodyRect.maxX - 22, y: 72))
+        horizontal.move(to: NSPoint(x: layout.bodyRect.minX + 10, y: 178))
+        horizontal.line(to: NSPoint(x: layout.bodyRect.maxX - 10, y: 178))
         horizontal.lineWidth = 1
         horizontal.stroke()
-
-        let statusDivider = NSBezierPath()
-        statusDivider.move(to: NSPoint(x: 222, y: 88))
-        statusDivider.line(to: NSPoint(x: 222, y: 124))
-        statusDivider.lineWidth = 1
-        statusDivider.stroke()
-
-        let quotaDivider = NSBezierPath()
-        quotaDivider.move(to: NSPoint(x: 206, y: 28))
-        quotaDivider.line(to: NSPoint(x: 206, y: 60))
-        quotaDivider.lineWidth = 1
-        quotaDivider.stroke()
     }
 
     private func drawLens(center: NSPoint, light: TrafficLightSlot, active: Bool) {
         let base = color(for: light)
-        let glowAlpha: CGFloat = active ? 0.14 : 0.02
-        let fillAlpha: CGFloat = active ? 0.96 : 0.20
-        let rimAlpha: CGFloat = active ? 0.36 : 0.12
-        let glowRadius = CGFloat(layout.lensGlowRadius)
+        let pulse = active ? (sin(breathingPhase) + 1) / 2 : 0
+        let glowAlpha: CGFloat = active ? 0.16 + pulse * 0.10 : 0.015
+        let fillAlpha: CGFloat = active ? 0.93 + pulse * 0.05 : 0.24
+        let rimAlpha: CGFloat = active ? 0.48 + pulse * 0.14 : 0.16
+        let glowRadius = CGFloat(layout.lensGlowRadius) + pulse * 3
         let bulbRadius = CGFloat(layout.lensBulbRadius)
 
         base.withAlphaComponent(glowAlpha).setFill()
@@ -196,6 +208,15 @@ final class TrafficLightView: NSView {
             y: center.y - glowRadius,
             width: glowRadius * 2,
             height: glowRadius * 2
+        )).fill()
+
+        let socketRadius = bulbRadius + 6
+        NSColor.black.withAlphaComponent(0.58).setFill()
+        NSBezierPath(ovalIn: NSRect(
+            x: center.x - socketRadius,
+            y: center.y - socketRadius,
+            width: socketRadius * 2,
+            height: socketRadius * 2
         )).fill()
 
         let bulb = NSBezierPath(ovalIn: NSRect(
@@ -208,15 +229,27 @@ final class TrafficLightView: NSView {
         bulb.fill()
 
         base.withAlphaComponent(rimAlpha).setStroke()
-        bulb.lineWidth = 4
+        bulb.lineWidth = 3
         bulb.stroke()
 
         NSColor.black.withAlphaComponent(0.23).setStroke()
         bulb.lineWidth = 1
         bulb.stroke()
 
-        NSColor.white.withAlphaComponent(active ? 0.24 : 0.08).setFill()
-        NSBezierPath(ovalIn: NSRect(x: center.x - 8, y: center.y + 8, width: 14, height: 5)).fill()
+        NSColor.white.withAlphaComponent(active ? 0.26 : 0.07).setFill()
+        NSBezierPath(ovalIn: NSRect(x: center.x - 12, y: center.y + 11, width: 20, height: 7)).fill()
+    }
+
+    private func drawResizeHandle() {
+        guard bounds.width >= 80, bounds.height >= 160 else { return }
+        NSColor.white.withAlphaComponent(0.20).setStroke()
+        for inset in [CGFloat(6), CGFloat(11)] {
+            let path = NSBezierPath()
+            path.move(to: NSPoint(x: bounds.maxX - inset - 5, y: 5))
+            path.line(to: NSPoint(x: bounds.maxX - 5, y: inset + 5))
+            path.lineWidth = 1
+            path.stroke()
+        }
     }
 
     private func drawRoundedGradient(_ rect: NSRect, radius: CGFloat, top: NSColor, bottom: NSColor, stroke: NSColor, width: CGFloat) {
@@ -235,13 +268,23 @@ final class TrafficLightView: NSView {
             onToggleVisibility?()
             return
         }
-        dragStart = event.locationInWindow
+        let location = convert(event.locationInWindow, from: nil)
+        dragMode = location.x >= bounds.maxX - 28 && location.y <= 28 ? .resize : .move
+        dragStart = window?.convertPoint(toScreen: event.locationInWindow) ?? location
     }
 
     override func mouseDragged(with event: NSEvent) {
         guard let dragStart else { return }
-        let current = event.locationInWindow
-        onDrag?(NSPoint(x: current.x - dragStart.x, y: current.y - dragStart.y))
+        let current = window?.convertPoint(toScreen: event.locationInWindow)
+            ?? convert(event.locationInWindow, from: nil)
+        let delta = NSPoint(x: current.x - dragStart.x, y: current.y - dragStart.y)
+        switch dragMode {
+        case .move:
+            onDrag?(delta)
+        case .resize:
+            onResize?(delta.x)
+        }
+        self.dragStart = current
     }
 }
 

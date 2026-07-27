@@ -85,7 +85,7 @@ const cards = [
     id: "06-advanced",
     label: "额度 HUD",
     title: ["额度也能", "自动显示"],
-    subtitle: "通过 Codex app-server 读取 5 小时和 1 周剩余额度。",
+    subtitle: "通过 Codex app-server 读取周剩余额度。",
     bullets: ["多任务聚合：waiting > working > done > idle", "声音提醒：红灯/绿灯有不同提示音", "CLI 控制：status、clear、quota 都能手动调"],
     state: "waiting",
     quota: true
@@ -215,8 +215,8 @@ function floatingWindow(x, y, state) {
       <text x="178" y="150" font-family="${font}" font-size="34" font-weight="900" fill="${colors.ink}">${status[0]}</text>
       <text x="180" y="186" font-family="${mono}" font-size="18" font-weight="700" fill="${colors.muted}">${status[2]}</text>
       <rect x="38" y="232" width="354" height="18" rx="9" fill="#f0f2f5"/>
-      <rect x="38" y="232" width="248" height="18" rx="9" fill="${colors.green}"/>
-      <text x="38" y="268" font-family="${font}" font-size="15" font-weight="700" fill="${colors.muted}">5 小时额度 72% · 1 周额度 48%</text>
+      <rect x="38" y="232" width="170" height="18" rx="9" fill="${colors.green}"/>
+      <text x="38" y="268" font-family="${font}" font-size="15" font-weight="700" fill="${colors.muted}">周额度 48%</text>
     </g>
   `;
 }
@@ -363,8 +363,8 @@ function renderCard(card, index) {
   } else if (card.quota) {
     body.push(floatingWindow(78, 512, "waiting"));
     body.push(featureTiles([
-      ["app-server 采集", "读取 5 小时 / 1 周额度"],
-      ["5 分钟轮询", "启动后自动刷新"],
+      ["app-server 采集", "读取 Codex 周额度"],
+      ["60 秒轮询", "启动后自动刷新"],
       ["失败保留旧值", "不会突然清空成 --"],
       ["CLI 兜底", "app-server / stdin / 手动写"]
     ], 78, 845));

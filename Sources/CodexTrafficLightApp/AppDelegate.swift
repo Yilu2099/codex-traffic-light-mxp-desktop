@@ -13,6 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
     private var currentQuota: QuotaSnapshot?
     private var lastModified = Date.distantPast
     private var blinkTimer: Timer?
+    private var breathingTimer: Timer?
     private var waitingBlinkStopTimer: Timer?
     private var idleTimer: Timer?
     private var quotaTimer: Timer?
@@ -27,10 +28,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
         currentQuota = snapshot.quota
         currentState = snapshot.aggregateState == .quit ? .idle : snapshot.aggregateState
         apply(state: currentState, playPrompt: false, source: .startup)
-        floatingWindow.hide()
 
         Timer.scheduledTimer(timeInterval: 0.25, target: self, selector: #selector(pollStateTimerFired), userInfo: nil, repeats: true)
         blinkTimer = Timer.scheduledTimer(timeInterval: 0.52, target: self, selector: #selector(blinkTimerFired), userInfo: nil, repeats: true)
+        breathingTimer = Timer.scheduledTimer(timeInterval: 1.0 / 30.0, target: self, selector: #selector(breathingTimerFired), userInfo: nil, repeats: true)
         Timer.scheduledTimer(timeInterval: 1.5, target: self, selector: #selector(quotaTimerFired), userInfo: nil, repeats: false)
         quotaTimer = Timer.scheduledTimer(timeInterval: Defaults.appServerQuotaRefreshSeconds, target: self, selector: #selector(quotaTimerFired), userInfo: nil, repeats: true)
     }
@@ -127,7 +128,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
     private func apply(state: LightState, playPrompt: Bool, source: StateSource) {
         currentState = state
         statusBar.apply(state: state, muted: preferences.muted, quota: currentQuota)
-        floatingWindow.hide()
+        floatingWindow.apply(state: state, quota: currentQuota, show: shouldShowFloatingWindow(for: state, source: source))
         soundController.apply(state: state, playPrompt: playPrompt)
 
         if state == .waiting {
@@ -145,27 +146,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
 
     private func updateStatusOnly() {
         statusBar.apply(state: currentState, muted: preferences.muted, quota: currentQuota)
-        floatingWindow.hide()
+        floatingWindow.view.state = currentState
+        floatingWindow.view.quota = currentQuota
+    }
+
+    private func shouldShowFloatingWindow(for state: LightState, source: StateSource) -> Bool {
+        if source == .user { return preferences.showFloatingWindow }
+        switch state {
+        case .waiting:
+            return preferences.autoShowOnWaiting
+        case .done:
+            return preferences.autoShowOnDone
+        case .working, .idle, .quit:
+            return false
+        }
     }
 
     private func startWaitingBlink() {
         waitingBlinkStopTimer?.invalidate()
+        floatingWindow.view.waitingAlertActive = true
+        floatingWindow.view.blinkOn = true
         waitingBlinkStopTimer = Timer.scheduledTimer(timeInterval: Defaults.waitingAlertSeconds, target: self, selector: #selector(waitingBlinkStopTimerFired), userInfo: nil, repeats: false)
     }
 
     private func stopWaitingBlink() {
         waitingBlinkStopTimer?.invalidate()
         waitingBlinkStopTimer = nil
+        floatingWindow.view.waitingAlertActive = false
+        floatingWindow.view.blinkOn = true
     }
 
     @objc private func waitingBlinkStopTimerFired() {
+        floatingWindow.view.waitingAlertActive = false
+        floatingWindow.view.blinkOn = true
     }
 
     @objc private func blinkTimerFired() {
         blink()
     }
 
+    @objc private func breathingTimerFired() {
+        floatingWindow.view.breathingPhase.formTruncatingRemainder(dividingBy: .pi * 2)
+        floatingWindow.view.breathingPhase += 0.052
+    }
+
     private func blink() {
+        guard currentState == .waiting && floatingWindow.view.waitingAlertActive else { return }
+        floatingWindow.view.blinkOn.toggle()
     }
 
     private func startIdleTimer() {
@@ -201,6 +228,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
         apply(state: .idle, playPrompt: false, source: .user)
     }
 
+    func statusBarDidRequestToggleFloatingWindow() {
+        floatingWindow.toggle()
+    }
+
     func statusBarDidRequestToggleMute() {
         preferences.muted.toggle()
         preferences.updatedAt = Date()
@@ -216,6 +247,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
     private func terminate() {
         soundController.stopAll()
         quotaTimer?.invalidate()
+        breathingTimer?.invalidate()
         NSApp.terminate(nil)
     }
 }
