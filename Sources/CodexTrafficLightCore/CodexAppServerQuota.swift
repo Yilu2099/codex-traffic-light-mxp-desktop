@@ -397,9 +397,35 @@ public struct ProcessCodexAppServerTransport: CodexAppServerTransport {
         let input = Pipe()
         let output = Pipe()
         let error = Pipe()
+        var didLaunch = false
         process.standardInput = input
         process.standardOutput = output
         process.standardError = error
+
+        defer {
+            // A menu-bar process calls this repeatedly for days. Explicitly close
+            // every pipe endpoint so Process/Pipe callbacks cannot retain three
+            // descriptors after each refresh.
+            try? input.fileHandleForWriting.close()
+            if didLaunch {
+                if process.isRunning {
+                    process.terminate()
+                }
+                process.waitUntilExit()
+            }
+            output.fileHandleForReading.readabilityHandler = nil
+            error.fileHandleForReading.readabilityHandler = nil
+            for handle in [
+                input.fileHandleForReading,
+                input.fileHandleForWriting,
+                output.fileHandleForReading,
+                output.fileHandleForWriting,
+                error.fileHandleForReading,
+                error.fileHandleForWriting
+            ] {
+                try? handle.close()
+            }
+        }
 
         let responseBuffer = LockedDataBuffer()
         let errorBuffer = LockedDataBuffer()
@@ -422,9 +448,8 @@ public struct ProcessCodexAppServerTransport: CodexAppServerTransport {
 
         do {
             try process.run()
+            didLaunch = true
         } catch let launchError {
-            output.fileHandleForReading.readabilityHandler = nil
-            error.fileHandleForReading.readabilityHandler = nil
             throw CodexAppServerQuotaError.launchFailed(String(describing: launchError))
         }
 
@@ -456,9 +481,6 @@ public struct ProcessCodexAppServerTransport: CodexAppServerTransport {
             Thread.sleep(forTimeInterval: 0.2)
         }
         guard initialized else {
-            output.fileHandleForReading.readabilityHandler = nil
-            error.fileHandleForReading.readabilityHandler = nil
-            process.terminate()
             throw CodexAppServerQuotaError.initializeTimedOut(timeout: initializeTimeout)
         }
 
@@ -473,17 +495,11 @@ public struct ProcessCodexAppServerTransport: CodexAppServerTransport {
 
             if let messages = try? CodexAppServerJSONRPCLineCodec.decodeMessages(from: currentBuffer),
                let result = try? CodexAppServerJSONRPCLineCodec.resultData(forID: 2, in: messages) {
-                output.fileHandleForReading.readabilityHandler = nil
-                error.fileHandleForReading.readabilityHandler = nil
-                process.terminate()
                 return result
             }
             Thread.sleep(forTimeInterval: 0.2)
         }
 
-        output.fileHandleForReading.readabilityHandler = nil
-        error.fileHandleForReading.readabilityHandler = nil
-        process.terminate()
         let stderr = String(data: errorBuffer.snapshot(), encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if let stderr, !stderr.isEmpty {

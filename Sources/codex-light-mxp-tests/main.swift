@@ -869,6 +869,52 @@ func testAppServerCodexBinaryCandidatesCoverInstalledAppsAndPath() throws {
     try expect(candidates.contains("/opt/homebrew/bin/codex"), "candidates should include PATH Codex")
 }
 
+func openFileDescriptorCount() throws -> Int {
+    try FileManager.default.contentsOfDirectory(atPath: "/dev/fd")
+        .compactMap(Int.init)
+        .count
+}
+
+func testProcessAppServerTransportClosesPipesAfterRepeatedReads() throws {
+    let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent("codex-light-mxp-process-transport-tests-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    let fakeCodex = directory.appendingPathComponent("codex")
+    let script = """
+    #!/bin/zsh
+    while IFS= read -r line; do
+      if [[ "$line" == *'"id":1'* ]]; then
+        print -r -- '{"id":1,"result":{}}'
+      elif [[ "$line" == *'"id":2'* ]]; then
+        print -r -- '{"id":2,"result":{"rateLimitsByLimitId":{"codex":{"limitId":"codex","limitName":"Codex","primary":{"usedPercent":28,"windowDurationMins":300,"resetsAt":1781189000},"secondary":{"usedPercent":52,"windowDurationMins":10080,"resetsAt":1781189000},"credits":null,"individualLimit":null,"planType":"plus","rateLimitReachedType":null}}}}'
+      fi
+    done
+    """
+    try script.write(to: fakeCodex, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fakeCodex.path)
+
+    let transport = ProcessCodexAppServerTransport(
+        codexBinary: fakeCodex.path,
+        initializeTimeout: 2,
+        rateLimitsTimeout: 2
+    )
+    let before = try openFileDescriptorCount()
+
+    for _ in 0..<8 {
+        let data = try transport.readRateLimits()
+        let quota = try CodexAppServerQuotaMapper.quotaValues(from: data)
+        try expectEqual(quota.weeklyRemainingPercent, 48, "fake app-server should return weekly quota")
+    }
+
+    let after = try openFileDescriptorCount()
+    try expect(
+        after <= before + 1,
+        "repeated app-server reads should not leak pipe descriptors: before \(before), after \(after)"
+    )
+}
+
 final class SequencedAppServerTransport: CodexAppServerTransport {
     private var results: [Result<Data, Error>]
     private(set) var attempts = 0
@@ -1064,6 +1110,7 @@ let tests: [(String, () throws -> Void)] = [
     ("app-server quota collector preserves old quota on failure", testAppServerQuotaCollectorPropagatesMissingQuotaWithoutClearingStore),
     ("app-server quota errors describe specific timeouts", testAppServerQuotaErrorsDescribeSpecificTimeouts),
     ("app-server Codex binary candidates cover target machine", testAppServerCodexBinaryCandidatesCoverInstalledAppsAndPath),
+    ("app-server process transport closes repeated pipes", testProcessAppServerTransportClosesPipesAfterRepeatedReads),
     ("app-server quota collector retries and succeeds", testAppServerQuotaCollectorRetriesTwiceAndSucceedsOnThirdAttempt),
     ("app-server quota collector exhausts retries", testAppServerQuotaCollectorFailsAfterThreeAttemptsAndPreservesQuota),
     ("quota refresh coordinator prevents concurrent refreshes", testQuotaRefreshCoordinatorPreventsConcurrentRefreshes),
