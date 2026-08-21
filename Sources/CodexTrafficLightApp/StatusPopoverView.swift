@@ -291,8 +291,12 @@ struct StatusPopoverView: View {
         let incoming = Dictionary(uniqueKeysWithValues: (model.ranking?.members ?? []).map { ($0.id.lowercased(), $0) })
         return roster.enumerated().map { index, entry in
             var member = incoming[entry.id] ?? TeamRankingMember(id: entry.id, name: entry.name)
-            member.name = entry.name
-            member.avatar = "/avatars/\(entry.avatar)"
+            if member.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                member.name = entry.name
+            }
+            if member.avatar?.isEmpty != false {
+                member.avatar = "/avatars/\(entry.avatar)"
+            }
             return (index, member)
         }
         .sorted { left, right in
@@ -304,7 +308,9 @@ struct StatusPopoverView: View {
     }
 
     private func displayName(_ member: TeamRankingMember) -> String {
-        roster.first(where: { $0.id == member.id.lowercased() })?.name ?? member.name
+        let serverName = member.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !serverName.isEmpty { return serverName }
+        return roster.first(where: { $0.id == member.id.lowercased() })?.name ?? member.id
     }
 
     private func memberActivity(_ member: TeamRankingMember) -> String {
@@ -340,7 +346,8 @@ struct StatusPopoverView: View {
     }
 
     private func localAvatar(_ member: TeamRankingMember) -> NSImage? {
-        guard let filename = roster.first(where: { $0.id == member.id.lowercased() })?.avatar else { return nil }
+        let serverFilename = member.avatar?.split(separator: "/").last.map(String.init)
+        guard let filename = serverFilename ?? roster.first(where: { $0.id == member.id.lowercased() })?.avatar else { return nil }
         let parts = filename.split(separator: ".", maxSplits: 1).map(String.init)
         guard parts.count == 2 else { return nil }
         let url = Bundle.module.url(forResource: parts[0], withExtension: parts[1], subdirectory: "Avatars")
