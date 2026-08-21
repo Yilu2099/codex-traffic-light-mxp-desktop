@@ -1,12 +1,12 @@
 # Codex Traffic Light MXP
 
-当前内部版本：`v1.2.2`。版本号在 `VERSION` 与 `Sources/CodexTrafficLightCore/ClientUpdate.swift` 两处维护，发布前必须保持一致；状态栏面板底部会低调显示当前版本。
+当前内部版本：`v1.2.3`。版本号在 `VERSION` 与 `Sources/CodexTrafficLightCore/ClientUpdate.swift` 两处维护，发布前必须保持一致；状态栏面板底部会低调显示当前版本。
 
 Codex Traffic Light MXP 是一个 macOS 菜单栏和悬浮交通灯工具，用颜色提示 Codex 当前状态：正在执行、等待你处理、已完成或空闲。
 
 ## 功能概览
 
-- 个人周额度：菜单栏直接显示 Codex 周额度，菜单内显示剩余比例、到期时间。
+- 个人周余额：菜单栏直接显示 Codex 周余额，菜单内显示剩余比例、到期时间。
 - 团队排行榜：点击状态栏后以暖色面板列出今日全部成员、会话数和 Token，点击成员可打开网站详情。
 - 一体化采集：Mac 客户端自行汇总 Token、识别真实硬件型号并同步，不再依赖单独的 Node 采集器。
 - 官方用量：昨日、近 7 天和近 30 天 Token 读取 `account/usage/read`，周额度读取 `account/rateLimits/read`。
@@ -31,7 +31,7 @@ Codex Traffic Light MXP 是一个 macOS 菜单栏和悬浮交通灯工具，用�
 团队排行榜服务器是 https://c.wanhe.cn，我的专属邀请码是 wanhe-xxxxxxxxxxxx。
 如果电脑以前安装过旧版 Codex 用量采集插件，请先停用并清理；然后拉取或更新项目并运行：
 ./install-team.command --server https://c.wanhe.cn --invite wanhe-xxxxxxxxxxxx
-完成后确认 macOS 状态栏已经显示 Codex 周额度，并能在菜单里看到今日团队全部成员和“打开团队排行榜”。不要再询问我的昵称，服务端已经通过邀请码预设好了。
+完成后确认 macOS 状态栏已经显示 Codex 周余额，并能在菜单里看到今日团队全部成员和“打开团队排行榜”。不要再询问我的昵称，服务端已经通过邀请码预设好了。
 ```
 
 安装程序会自动停用旧服务器采集任务并备份旧程序，同时保留新客户端所需的配置和统计缓存。这一次安装会额外注册 `com.codex.traffic-light-mxp-updater`，之后管理员可以从后台暂停、灰度或强制全员更新，成员不再需要重复执行安装对话。

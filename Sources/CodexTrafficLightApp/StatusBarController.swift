@@ -98,9 +98,9 @@ final class StatusBarController {
 
     private func statusBarText(for snapshot: StateSnapshot?) -> String {
         guard let percent = weeklyQuota(from: snapshot)?.remainingPercent else {
-            return "周额度 --"
+            return "周余额 --"
         }
-        return "周额度 \(percent)%"
+        return "周余额 \(percent)%"
     }
 
     private func detailLines(for snapshot: StateSnapshot?) -> [String] {
@@ -108,14 +108,14 @@ final class StatusBarController {
         let percentText = weekly?.remainingPercent.map { "\($0)%" } ?? "--"
         guard let resetsAt = weekly?.resetsAt else {
             return [
-                "周额度剩余：\(percentText)",
+                "周余额：\(percentText)",
                 "距离刷新：暂无数据",
                 "刷新时间：暂无数据"
             ]
         }
 
         return [
-            "周额度剩余：\(percentText)",
+            "周余额：\(percentText)",
             "距离刷新：\(QuotaDisplayFormatter.refreshCountdownText(until: resetsAt))",
             "刷新时间：\(QuotaDisplayFormatter.absoluteDateTimeText(resetsAt))"
         ]

@@ -106,7 +106,7 @@ struct StatusPopoverView: View {
         return VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 5) {
-                    Label("个人周额度", systemImage: "gauge.with.dots.needle.67percent")
+                    Label("个人周余额", systemImage: "gauge.with.dots.needle.67percent")
                         .font(.system(size: 12, weight: .bold))
                         .foregroundStyle(muted)
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
@@ -215,7 +215,7 @@ struct StatusPopoverView: View {
                     Text(memberQuotaText(member))
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(member.weeklyQuota == nil ? muted : green)
-                        .lineLimit(1)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 8)
                 VStack(alignment: .trailing, spacing: 4) {
@@ -348,9 +348,9 @@ struct StatusPopoverView: View {
 
     private func memberQuotaText(_ member: TeamRankingMember) -> String {
         guard let quota = member.weeklyQuota else {
-            return "周额度待同步 · 刷新待更新"
+            return "周余额待同步 · 刷新待更新"
         }
-        return "周额度 \(quota.weeklyRemainingPercent)% · \(memberQuotaResetText(quota.weeklyResetsAt))"
+        return "周余额 \(quota.weeklyRemainingPercent)% · \(memberQuotaResetText(quota.weeklyResetsAt))"
     }
 
     private func memberQuotaResetText(_ value: String?) -> String {
