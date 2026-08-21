@@ -25,7 +25,7 @@ Codex Traffic Light MXP 是一个 macOS 菜单栏和悬浮交通灯工具，用�
 ```text
 请帮我下载安装 GitHub 项目 https://github.com/Yilu2099/codex-traffic-light-mxp-desktop 。
 团队排行榜服务器是 https://c.wanhe.cn，我的专属邀请码是 wanhe-xxxxxxxxxxxx。
-如果电脑以前安装过 `http://38.64.58.86` 的旧采集插件，请先停用并清理；然后拉取或更新项目并运行：
+如果电脑以前安装过旧版 Codex 用量采集插件，请先停用并清理；然后拉取或更新项目并运行：
 ./install-team.command --server https://c.wanhe.cn --invite wanhe-xxxxxxxxxxxx
 完成后确认 macOS 状态栏已经显示 Codex 周额度，并能在菜单里看到今日团队全部成员和“打开团队排行榜”。不要再询问我的昵称，服务端已经通过邀请码预设好了。
 ```

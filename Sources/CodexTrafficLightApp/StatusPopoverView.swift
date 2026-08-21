@@ -200,6 +200,10 @@ struct StatusPopoverView: View {
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(muted)
                         .lineLimit(1)
+                    Text(memberQuotaText(member))
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(member.weeklyQuota == nil ? muted : green)
+                        .lineLimit(1)
                 }
                 Spacer(minLength: 8)
                 VStack(alignment: .trailing, spacing: 4) {
@@ -310,6 +314,29 @@ struct StatusPopoverView: View {
         }
         let detail = member.tokenSource == "today_live" ? "实时更新" : officialDate(member)
         return "\(member.sessions) 次会话 · \(detail)"
+    }
+
+    private func memberQuotaText(_ member: TeamRankingMember) -> String {
+        guard let quota = member.weeklyQuota else {
+            return "额度待同步 · 刷新待更新"
+        }
+        return "额度 \(quota.weeklyRemainingPercent)% · \(memberQuotaResetText(quota.weeklyResetsAt))"
+    }
+
+    private func memberQuotaResetText(_ value: String?) -> String {
+        guard let value else { return "刷新时间待更新" }
+        let precise = ISO8601DateFormatter()
+        precise.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let relaxed = ISO8601DateFormatter()
+        relaxed.formatOptions = [.withInternetDateTime]
+        guard let date = precise.date(from: value) ?? relaxed.date(from: value) else {
+            return "刷新时间待更新"
+        }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.timeZone = .current
+        formatter.dateFormat = "MM/dd HH:mm"
+        return "\(formatter.string(from: date)) 刷新"
     }
 
     private func localAvatar(_ member: TeamRankingMember) -> NSImage? {

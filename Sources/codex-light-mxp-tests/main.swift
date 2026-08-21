@@ -1140,6 +1140,15 @@ func testTeamRankingDecodesLegacyTodayActivity() throws {
     try expectEqual(ranking.members.first?.officialUsage, nil, "legacy ranking may omit official metadata")
 }
 
+func testTeamRankingDecodesMemberWeeklyQuota() throws {
+    let data = """
+    {"updatedAt":"2026-08-21 13:50","members":[{"id":"zlu","name":"张璐","tokens":1200,"sessions":12,"weeklyQuota":{"weeklyRemainingPercent":75,"weeklyUsedPercent":25,"weeklyResetsAt":"2026-08-27T03:33:23.000Z","updatedAt":"2026-08-21T08:50:31.586Z"}}]}
+    """.data(using: .utf8)!
+    let ranking = try JSONDecoder().decode(TeamRankingSnapshot.self, from: data)
+    try expectEqual(ranking.members.first?.weeklyQuota?.weeklyRemainingPercent, 75, "team ranking should expose each member's weekly remaining percent")
+    try expectEqual(ranking.members.first?.weeklyQuota?.weeklyResetsAt, "2026-08-27T03:33:23.000Z", "team ranking should expose each member's weekly reset time")
+}
+
 func testOfficialCodexUsageParsesDailyBuckets() throws {
     let data = """
     {"summary":{"lifetimeTokens":1200,"peakDailyTokens":700},"dailyUsageBuckets":[{"startDate":"2026-08-20","tokens":500},{"startDate":"2026-08-21","tokens":700}],"threadUsage":null}
@@ -1245,6 +1254,7 @@ let tests: [(String, () throws -> Void)] = [
     ("team quota report uses weekly data", testTeamQuotaReportUsesWeeklyPercentAndReset),
     ("team ranking URL uses website origin", testTeamRankingURLUsesWebsiteOrigin),
     ("team ranking decodes legacy today activity", testTeamRankingDecodesLegacyTodayActivity),
+    ("team ranking decodes member weekly quota", testTeamRankingDecodesMemberWeeklyQuota),
     ("official Codex usage parses daily buckets", testOfficialCodexUsageParsesDailyBuckets),
     ("session counter uses filenames only", testSessionCounterReadsTimestampFromFilenameOnly),
     ("today live collector tails appended usage only", testTodayLiveCollectorStartsAtEOFAndCountsOnlyAppendedUsage)

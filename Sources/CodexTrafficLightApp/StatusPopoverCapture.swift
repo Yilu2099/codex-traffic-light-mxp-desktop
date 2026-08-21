@@ -22,7 +22,7 @@ enum StatusPopoverCapture {
         )
         let rankingJSON = """
         {"updatedAt":"2026-08-21 13:36","members":[
-          {"id":"zlu","name":"张璐","avatar":"/avatars/codex-04.png","tokens":1210000000,"sessions":12,"lastActive":"13:13","officialUsage":{"dataThrough":"2026-08-20"},"tokenSource":"today_live","todayLiveUpdatedAt":"2026-08-21T05:36:00Z"},
+          {"id":"zlu","name":"张璐","avatar":"/avatars/codex-04.png","tokens":1210000000,"sessions":12,"lastActive":"13:13","officialUsage":{"dataThrough":"2026-08-20"},"tokenSource":"today_live","todayLiveUpdatedAt":"2026-08-21T05:36:00Z","weeklyQuota":{"weeklyRemainingPercent":78,"weeklyUsedPercent":22,"weeklyResetsAt":"2026-08-27T03:33:00.000Z","updatedAt":"2026-08-21T05:36:00.000Z"}},
           {"id":"lyf","name":"李阳峰","avatar":"/avatars/codex-10.png","tokens":66066000,"sessions":2,"lastActive":"12:36","officialUsage":{"dataThrough":"2026-08-20"},"tokenSource":"today_live","todayLiveUpdatedAt":"2026-08-21T05:35:00Z"}
         ]}
         """

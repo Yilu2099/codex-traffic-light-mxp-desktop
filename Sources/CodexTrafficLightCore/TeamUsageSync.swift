@@ -314,6 +314,7 @@ public struct TeamRankingMember: Codable, Equatable, Sendable {
     public var tokenSource: String?
     public var todayLiveUpdatedAt: String?
     public var avatar: String?
+    public var weeklyQuota: TeamQuotaReport?
 
     public init(
         id: String,
@@ -324,7 +325,8 @@ public struct TeamRankingMember: Codable, Equatable, Sendable {
         officialUsage: OfficialUsageSummary? = nil,
         tokenSource: String? = nil,
         todayLiveUpdatedAt: String? = nil,
-        avatar: String? = nil
+        avatar: String? = nil,
+        weeklyQuota: TeamQuotaReport? = nil
     ) {
         self.id = id
         self.name = name
@@ -335,6 +337,7 @@ public struct TeamRankingMember: Codable, Equatable, Sendable {
         self.tokenSource = tokenSource
         self.todayLiveUpdatedAt = todayLiveUpdatedAt
         self.avatar = avatar
+        self.weeklyQuota = weeklyQuota
     }
 }
 
