@@ -1168,6 +1168,39 @@ func testTeamRankingDecodesMemberWeeklyQuota() throws {
     try expectEqual(ranking.members.first?.weeklyQuota?.weeklyResetsAt, "2026-08-27T03:33:23.000Z", "team ranking should expose each member's weekly reset time")
 }
 
+func testTeamRankingDistinguishesJoinedMemberFromInvitePlaceholder() throws {
+    let data = """
+    {"updatedAt":"2026-08-21 18:30","members":[
+      {"id":"qiubo","name":"仇博","tokens":0,"sessions":0,"joined":true,"tokenSource":"collector","devices":[{"id":"device-1","name":"MacBook Pro"}]},
+      {"id":"yangang","name":"杨昂","tokens":0,"sessions":0,"joined":false,"tokenSource":"collector","devices":[],"officialUsage":null,"weeklyQuota":null}
+    ]}
+    """.data(using: .utf8)!
+    let ranking = try JSONDecoder().decode(TeamRankingSnapshot.self, from: data)
+    try expectEqual(ranking.members[0].hasEverJoined, true, "a registered device means the member has joined even before first usage")
+    try expectEqual(ranking.members[1].hasEverJoined, false, "an invite placeholder without device or usage has not joined")
+    let sorted = ranking.members.sorted {
+        if $0.hasEverJoined != $1.hasEverJoined { return $0.hasEverJoined }
+        if $0.tokens != $1.tokens { return $0.tokens > $1.tokens }
+        return $0.sessions > $1.sessions
+    }
+    try expectEqual(sorted.map(\.id), ["qiubo", "yangang"], "joined members should rank ahead of invite placeholders even with zero tokens")
+}
+
+func testAvatarDiskCachePersistsByRemoteURL() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let cache = AvatarDiskCache(directoryURL: root.appendingPathComponent("avatars"))
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let firstURL = URL(string: "https://c.wanhe.cn/avatars/58.png")!
+    let secondURL = URL(string: "https://c.wanhe.cn/avatars/193.png")!
+    let imageData = Data([0x89, 0x50, 0x4E, 0x47])
+    try cache.store(imageData, for: firstURL)
+
+    try expectEqual(cache.data(for: firstURL), imageData, "avatar cache should return persisted data without a network request")
+    try expect(cache.fileURL(for: firstURL) != cache.fileURL(for: secondURL), "different avatar URLs should use different cache files")
+    try expectEqual(cache.fileURL(for: firstURL).pathExtension, "png", "avatar cache should preserve a safe image extension")
+}
+
 func testOfficialCodexUsageParsesDailyBuckets() throws {
     let data = """
     {"summary":{"lifetimeTokens":1200,"peakDailyTokens":700},"dailyUsageBuckets":[{"startDate":"2026-08-20","tokens":500},{"startDate":"2026-08-21","tokens":700}],"threadUsage":null}
@@ -1275,6 +1308,8 @@ let tests: [(String, () throws -> Void)] = [
     ("team ranking URL uses website origin", testTeamRankingURLUsesWebsiteOrigin),
     ("team ranking decodes legacy today activity", testTeamRankingDecodesLegacyTodayActivity),
     ("team ranking decodes member weekly quota", testTeamRankingDecodesMemberWeeklyQuota),
+    ("team ranking distinguishes joined members", testTeamRankingDistinguishesJoinedMemberFromInvitePlaceholder),
+    ("avatar disk cache persists by URL", testAvatarDiskCachePersistsByRemoteURL),
     ("official Codex usage parses daily buckets", testOfficialCodexUsageParsesDailyBuckets),
     ("session counter uses filenames only", testSessionCounterReadsTimestampFromFilenameOnly),
     ("today live collector tails appended usage only", testTodayLiveCollectorStartsAtEOFAndCountsOnlyAppendedUsage)

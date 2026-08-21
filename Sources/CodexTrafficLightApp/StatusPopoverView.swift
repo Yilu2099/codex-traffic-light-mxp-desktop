@@ -233,15 +233,9 @@ struct StatusPopoverView: View {
                     .resizable()
                     .scaledToFill()
             } else if let url = avatarURL(member) {
-                AsyncImage(url: url) { phase in
-                    if let image = phase.image {
-                        image.resizable().scaledToFill()
-                    } else {
-                        Text(String(displayName(member).prefix(1)))
-                            .font(.system(size: 14, weight: .bold))
-                            .foregroundStyle(ink)
-                    }
-                }
+                PersistentAvatarImage(url: url, fallbackText: String(displayName(member).prefix(1)))
+                    .id(url.absoluteString)
+                    .foregroundStyle(ink)
             } else {
                 Text(String(displayName(member).prefix(1)))
                     .font(.system(size: 14, weight: .bold))
@@ -300,6 +294,7 @@ struct StatusPopoverView: View {
             return (index, member)
         }
         .sorted { left, right in
+            if left.1.hasEverJoined != right.1.hasEverJoined { return left.1.hasEverJoined }
             if left.1.tokens != right.1.tokens { return left.1.tokens > right.1.tokens }
             if left.1.sessions != right.1.sessions { return left.1.sessions > right.1.sessions }
             return left.0 < right.0
@@ -314,7 +309,9 @@ struct StatusPopoverView: View {
     }
 
     private func memberActivity(_ member: TeamRankingMember) -> String {
-        if member.tokens <= 0 && member.sessions <= 0 { return "今日暂无使用" }
+        if member.tokens <= 0 && member.sessions <= 0 {
+            return member.hasEverJoined ? "今日暂无使用" : "还未加入"
+        }
         if let lastActive = member.lastActive, !lastActive.isEmpty, lastActive != "-" {
             return "\(member.sessions) 次会话 · 更新至 \(lastActive)"
         }

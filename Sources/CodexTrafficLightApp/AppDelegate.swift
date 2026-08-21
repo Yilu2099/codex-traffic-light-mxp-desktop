@@ -93,7 +93,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
             do {
                 let ranking = try await Task.detached(priority: .utility) {
                     _ = try await service.sync(quota: quota)
-                    return try await service.fetchRanking(range: "today")
+                    let ranking = try await service.fetchRanking(range: "today")
+                    await PersistentAvatarCachePrefetcher.prefetch(
+                        ranking: ranking,
+                        websiteURL: service.websiteURL
+                    )
+                    return ranking
                 }.value
                 self?.isTeamSyncing = false
                 self?.statusBar.applyTeamRanking(ranking, websiteURL: service.websiteURL, syncDetail: "刚刚同步")
@@ -111,7 +116,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
         let service = TeamUsageSyncService(configuration: configuration)
         Task { [weak self] in
             do {
-                let ranking = try await service.fetchRanking(range: "today")
+                let ranking = try await Task.detached(priority: .utility) {
+                    let ranking = try await service.fetchRanking(range: "today")
+                    await PersistentAvatarCachePrefetcher.prefetch(
+                        ranking: ranking,
+                        websiteURL: service.websiteURL
+                    )
+                    return ranking
+                }.value
                 self?.isTeamRankingRefreshing = false
                 self?.statusBar.applyTeamRanking(ranking, websiteURL: service.websiteURL)
             } catch {

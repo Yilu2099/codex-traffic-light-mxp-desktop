@@ -305,6 +305,10 @@ public struct TeamRankingMember: Codable, Equatable, Sendable {
         public var dataThrough: String?
     }
 
+    public struct DeviceSummary: Codable, Equatable, Sendable {
+        public var id: String
+    }
+
     public var id: String
     public var name: String
     public var tokens: Int
@@ -315,6 +319,8 @@ public struct TeamRankingMember: Codable, Equatable, Sendable {
     public var todayLiveUpdatedAt: String?
     public var avatar: String?
     public var weeklyQuota: TeamQuotaReport?
+    public var devices: [DeviceSummary]?
+    public var joined: Bool?
 
     public init(
         id: String,
@@ -326,7 +332,9 @@ public struct TeamRankingMember: Codable, Equatable, Sendable {
         tokenSource: String? = nil,
         todayLiveUpdatedAt: String? = nil,
         avatar: String? = nil,
-        weeklyQuota: TeamQuotaReport? = nil
+        weeklyQuota: TeamQuotaReport? = nil,
+        devices: [DeviceSummary]? = nil,
+        joined: Bool? = nil
     ) {
         self.id = id
         self.name = name
@@ -338,6 +346,18 @@ public struct TeamRankingMember: Codable, Equatable, Sendable {
         self.todayLiveUpdatedAt = todayLiveUpdatedAt
         self.avatar = avatar
         self.weeklyQuota = weeklyQuota
+        self.devices = devices
+        self.joined = joined
+    }
+
+    public var hasEverJoined: Bool {
+        if let joined { return joined }
+        if tokens > 0 || sessions > 0 { return true }
+        if devices?.isEmpty == false { return true }
+        if officialUsage != nil || weeklyQuota != nil { return true }
+        if todayLiveUpdatedAt?.isEmpty == false { return true }
+        if let tokenSource, !tokenSource.isEmpty, tokenSource != "collector" { return true }
+        return false
     }
 }
 
