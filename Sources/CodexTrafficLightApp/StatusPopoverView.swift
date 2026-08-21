@@ -322,8 +322,10 @@ struct StatusPopoverView: View {
             return member.hasEverJoined ? "今日暂无使用" : "还未加入"
         }
         if member.tokenSource == "today_live" {
-            let recentTime = validLastActive(member) ?? "待同步"
-            return "\(member.sessions) 次会话 · 最近活跃：\(recentTime)"
+            if let recentTime = validLastActive(member) {
+                return "\(member.sessions) 次会话 · 最近活跃：\(recentTime)"
+            }
+            return "\(member.sessions) 次会话"
         }
         if let lastActive = member.lastActive, !lastActive.isEmpty, lastActive != "-" {
             return "\(member.sessions) 次会话 · 更新至 \(lastActive)"
