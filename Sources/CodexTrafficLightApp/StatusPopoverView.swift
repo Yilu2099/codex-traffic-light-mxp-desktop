@@ -209,6 +209,9 @@ struct StatusPopoverView: View {
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(muted)
                         .lineLimit(1)
+                        .minimumScaleFactor(0.82)
+                        .allowsTightening(true)
+                        .layoutPriority(1)
                     Text(memberQuotaText(member))
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(member.weeklyQuota == nil ? muted : green)
@@ -223,6 +226,7 @@ struct StatusPopoverView: View {
                         .font(.system(size: 10, weight: .bold))
                         .foregroundStyle(muted)
                 }
+                .fixedSize(horizontal: true, vertical: false)
                 Image(systemName: "chevron.right")
                     .font(.system(size: 11, weight: .bold))
                     .foregroundStyle(muted.opacity(0.65))
@@ -256,7 +260,7 @@ struct StatusPopoverView: View {
     }
 
     private var privacyNote: some View {
-        Label("仅上传 Token 合计和会话数，不上传 prompt、代码或聊天正文", systemImage: "lock.shield")
+        Label("仅上传 Token、会话数和项目简称，不上传 prompt、代码或聊天正文", systemImage: "lock.shield")
             .font(.system(size: 11, weight: .medium))
             .foregroundStyle(muted)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -274,6 +278,10 @@ struct StatusPopoverView: View {
             .buttonStyle(.borderedProminent)
             .tint(green)
             .disabled(model.websiteURL == nil)
+
+            Text("v\(ClientVersion.current)")
+                .font(.system(size: 9, weight: .medium, design: .monospaced))
+                .foregroundStyle(muted.opacity(0.62))
 
             Button(action: quit) {
                 Image(systemName: "power")

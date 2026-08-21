@@ -291,6 +291,7 @@ public struct TeamUsagePayload: Codable, Equatable, Sendable {
     public var officialUsage: OfficialCodexUsageReport
     public var todayLiveUsage: TodayLiveUsageReport
     public var sessionActivity: [TeamSessionActivity]
+    public var projects: [TeamProjectActivity]
     public var sessions: [TeamUsageSession]
 }
 
@@ -699,6 +700,7 @@ public struct TeamUsageSyncService: Sendable {
             officialUsage: officialUsage,
             todayLiveUsage: todayLiveUsage,
             sessionActivity: sessionActivity,
+            projects: ProjectActivityStore().report(days: configuration.collectDays),
             sessions: []
         )
     }

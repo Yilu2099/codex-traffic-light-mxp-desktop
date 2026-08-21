@@ -1,5 +1,7 @@
 # Codex Traffic Light MXP
 
+当前内部版本：`v1.2.0`。版本号在 `VERSION` 与 `Sources/CodexTrafficLightCore/ClientUpdate.swift` 两处维护，发布前必须保持一致；状态栏面板底部会低调显示当前版本。
+
 Codex Traffic Light MXP 是一个 macOS 菜单栏和悬浮交通灯工具，用颜色提示 Codex 当前状态：正在执行、等待你处理、已完成或空闲。
 
 ## 功能概览
@@ -9,6 +11,7 @@ Codex Traffic Light MXP 是一个 macOS 菜单栏和悬浮交通灯工具，用�
 - 一体化采集：Mac 客户端自行汇总 Token、识别真实硬件型号并同步，不再依赖单独的 Node 采集器。
 - 官方用量：昨日、近 7 天和近 30 天 Token 读取 `account/usage/read`，周额度读取 `account/rateLimits/read`。
 - 今日实时：只从启动之后的文件末尾处理新增 `token_count` 统计行，不回扫历史文件，不保存或上传对话正文；会话次数仍只按记录文件名计数。
+- 项目审计：只把工作区归一成项目简称，会话标识先在本机哈希；不上传完整目录、文件名、prompt、代码或聊天正文。
 - 菜单栏状态灯：常驻 macOS 菜单栏，方便快速查看状态。
 - 悬浮交通灯：在桌面上显示更醒目的状态提示。
 - Codex Hooks 集成：根据 Codex 的 hook 事件自动更新任务状态。

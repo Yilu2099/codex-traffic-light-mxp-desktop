@@ -77,6 +77,11 @@ public enum HookBridge {
             now: now
         )
 
+        if let auditWorkspace = event.workspace ?? event.cwd, !auditWorkspace.isEmpty {
+            let activityURL = store.stateURL.deletingLastPathComponent().appendingPathComponent("project-activity.json")
+            try? ProjectActivityStore(activityURL: activityURL).record(workspace: auditWorkspace, taskID: taskID, now: now)
+        }
+
         return HookBridgeResult(
             eventName: event.name,
             state: state,

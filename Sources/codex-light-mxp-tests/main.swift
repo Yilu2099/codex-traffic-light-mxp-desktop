@@ -1290,6 +1290,28 @@ func testClientUpdateConfigurationUsesTeamServerOrigin() throws {
     try expect(configuration?.manifestURL?.absoluteString.contains("/api/client/macos/update?") == true, "updater should build the manifest endpoint")
 }
 
+func testProjectActivityStoreKeepsOnlySanitizedProjectAudit() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("codex-project-audit-\(UUID().uuidString)")
+    let repository = root.appendingPathComponent("创新局")
+    let subdirectory = repository.appendingPathComponent("server/private")
+    let activityURL = root.appendingPathComponent("support/project-activity.json")
+    try FileManager.default.createDirectory(at: repository.appendingPathComponent(".git"), withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: subdirectory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let store = ProjectActivityStore(activityURL: activityURL)
+    let now = Date(timeIntervalSince1970: 1_800_000_000)
+    try store.record(workspace: subdirectory.path, taskID: "session:sensitive-session-id", now: now)
+    try store.record(workspace: repository.path, taskID: "session:second-session", now: now.addingTimeInterval(60))
+    let report = store.report(days: 30, now: now.addingTimeInterval(120))
+    try expectEqual(report.count, 1, "project audit should merge subdirectories into their repository")
+    try expectEqual(report.first?.name, "创新局", "project audit should upload only the repository name")
+    try expectEqual(report.first?.sessionCount, 2, "project audit should count unique hashed sessions")
+    let stored = try String(contentsOf: activityURL, encoding: .utf8)
+    try expect(!stored.contains(root.path), "project audit ledger must not retain the absolute workspace path")
+    try expect(!stored.contains("sensitive-session-id"), "project audit ledger must hash session identifiers")
+}
+
 let tests: [(String, () throws -> Void)] = [
     ("waiting wins over working and done", testWaitingTaskWinsOverWorkingAndDone),
     ("working wins without waiting", testWorkingWinsWhenNoWaitingTaskExists),
@@ -1353,6 +1375,7 @@ let tests: [(String, () throws -> Void)] = [
     ("official Codex usage parses daily buckets", testOfficialCodexUsageParsesDailyBuckets),
     ("session counter uses filename and metadata only", testSessionCounterUsesFilenameAndMetadataWithoutReadingContents),
     ("today live collector tails appended usage only", testTodayLiveCollectorStartsAtEOFAndCountsOnlyAppendedUsage),
+    ("project audit sanitizes workspace and session", testProjectActivityStoreKeepsOnlySanitizedProjectAudit),
     ("client version comparison", testClientVersionComparison),
     ("client update signature verification", testClientUpdateVerifierAcceptsReleaseSignature),
     ("client update configuration", testClientUpdateConfigurationUsesTeamServerOrigin)
