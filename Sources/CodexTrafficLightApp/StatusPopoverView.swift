@@ -31,7 +31,7 @@ struct StatusPopoverView: View {
         ("mameng", "马猛", "codex-06.png"),
         ("zhanghaiqiang", "张海强", "codex-07.png"),
         ("huangning", "黄宁", "codex-08.png"),
-        ("qiaoyue", "乔月", "codex-09.png"),
+        ("qiaoyue", "乔月", "codex-11.png"),
         ("lyf", "李阳峰", "codex-10.png")
     ]
 
