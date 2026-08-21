@@ -37,6 +37,7 @@ public struct OfficialCodexUsageReport: Codable, Equatable, Sendable {
 public struct TeamSessionActivity: Codable, Equatable, Sendable {
     public var sessionId: String
     public var day: String
+    public var updatedAt: String?
 }
 
 public struct OfficialCodexUsageCollector: Sendable {
@@ -177,11 +178,15 @@ public struct CodexSessionFileCounter: Sendable {
             ) else { continue }
             for case let url as URL in enumerator where url.pathExtension == "jsonl" {
                 let values = try? url.resourceValues(forKeys: [.contentModificationDateKey])
-                let fallbackDate = values?.contentModificationDate ?? .distantPast
-                let timestamp = timestampFromFilename(url.lastPathComponent) ?? fallbackDate
-                guard timestamp >= cutoff else { continue }
+                let modifiedAt = values?.contentModificationDate ?? .distantPast
+                let sessionStartedAt = timestampFromFilename(url.lastPathComponent) ?? modifiedAt
+                guard max(sessionStartedAt, modifiedAt) >= cutoff else { continue }
                 let sessionID = sessionIDFromFilename(url.deletingPathExtension().lastPathComponent)
-                sessions[sessionID] = TeamSessionActivity(sessionId: sessionID, day: dayString(timestamp))
+                sessions[sessionID] = TeamSessionActivity(
+                    sessionId: sessionID,
+                    day: dayString(sessionStartedAt),
+                    updatedAt: modifiedAt == .distantPast ? nil : isoString(modifiedAt)
+                )
             }
         }
         return sessions.values.sorted { ($0.day, $0.sessionId) < ($1.day, $1.sessionId) }
@@ -210,6 +215,12 @@ public struct CodexSessionFileCounter: Sendable {
         formatter.locale = Locale(identifier: "en_CA")
         formatter.timeZone = TimeZone(identifier: "Asia/Shanghai")
         formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: date)
+    }
+
+    private func isoString(_ date: Date) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter.string(from: date)
     }
 }

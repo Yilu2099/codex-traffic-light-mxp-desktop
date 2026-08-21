@@ -15,6 +15,7 @@ Codex Traffic Light MXP 是一个 macOS 菜单栏和悬浮交通灯工具，用�
 - 命令行控制：可手动设置状态、查询状态、清空状态或退出应用。
 - 多任务聚合：多个 Codex 任务同时存在时，按优先级显示最需要关注的状态。
 - 剩余额度展示：浮窗底部可显示 Codex 5 小时和 1 周剩余额度百分比。
+- 签名自动更新：独立 LaunchAgent 每 15 分钟向团队后台检查版本，校验 SHA-256 和 Ed25519 签名后自动安装，新版启动失败会回滚。
 
 ## 团队成员安装
 
@@ -30,7 +31,27 @@ Codex Traffic Light MXP 是一个 macOS 菜单栏和悬浮交通灯工具，用�
 完成后确认 macOS 状态栏已经显示 Codex 周额度，并能在菜单里看到今日团队全部成员和“打开团队排行榜”。不要再询问我的昵称，服务端已经通过邀请码预设好了。
 ```
 
-安装程序会自动停用旧服务器采集任务并把旧程序移到废纸篓，同时保留新客户端所需的配置和统计缓存。它还会读取 Mac 的真实产品名称和型号标识（例如 `MacBook Air · Mac17,3`、`Mac Studio · Mac14,13`），不会上传用户自定义的本机名称。邀请码和换取到的设备凭证不会写进 GitHub。
+安装程序会自动停用旧服务器采集任务并备份旧程序，同时保留新客户端所需的配置和统计缓存。这一次安装会额外注册 `com.codex.traffic-light-mxp-updater`，之后管理员可以从后台暂停、灰度或强制全员更新，成员不再需要重复执行安装对话。
+
+客户端会读取 Mac 的真实产品名称和型号标识（例如 `MacBook Air · Mac17,3`、`Mac Studio · Mac14,13`），不会上传用户自定义的本机名称。邀请码和换取到的设备凭证不会写进 GitHub。
+
+## 发布客户端更新
+
+1. 修改 `VERSION` 和 `ClientVersion.current`，两处必须一致。
+2. 本机使用 `~/.config/wanhe-updater/update-signing-private.pem` 签名；私钥不得上传 GitHub 或服务器。
+3. 先以 10% 灰度发布：
+
+```bash
+WANHE_UPDATE_ROLLOUT=10 ./publish-update.command
+```
+
+4. 确认后台设备版本和更新状态正常后，在管理页调整为 100%；紧急安全更新可用：
+
+```bash
+WANHE_UPDATE_MANDATORY=true WANHE_UPDATE_ROLLOUT=100 ./publish-update.command
+```
+
+发布脚本会构建四个可执行文件和资源 Bundle，生成 tar.gz、SHA-256 和 Ed25519 签名，最后以临时文件上传并原子替换服务端版本清单。
 
 ## 状态说明
 

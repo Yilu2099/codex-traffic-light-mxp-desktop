@@ -23,16 +23,16 @@ struct StatusPopoverView: View {
     private let green = Color(red: 0.18, green: 0.54, blue: 0.32)
     private let warm = Color(red: 0.82, green: 0.43, blue: 0.20)
     private let roster: [(id: String, name: String, avatar: String)] = [
-        ("zlu", "张璐", "codex-04.png"),
-        ("qiubo", "仇博", "codex-01.png"),
-        ("yangang", "杨昂", "codex-02.png"),
-        ("yangke", "杨珂", "codex-03.png"),
-        ("liguoqing", "李国庆", "codex-05.png"),
+        ("zlu", "张璐", "58.png"),
+        ("qiubo", "仇博", "193.png"),
+        ("yangang", "杨昂", "101.png"),
+        ("yangke", "杨珂", "codex-01.png"),
+        ("liguoqing", "李国庆", "168.png"),
         ("mameng", "马猛", "codex-06.png"),
         ("zhanghaiqiang", "张海强", "codex-07.png"),
-        ("huangning", "黄宁", "codex-08.png"),
-        ("qiaoyue", "乔月", "codex-11.png"),
-        ("lyf", "李阳峰", "codex-10.png")
+        ("huangning", "黄宁", "199.png"),
+        ("qiaoyue", "乔月", "201.png"),
+        ("lyf", "李阳峰", "169.png")
     ]
 
     var body: some View {
@@ -57,19 +57,28 @@ struct StatusPopoverView: View {
 
     private var header: some View {
         HStack(spacing: 12) {
-            ZStack {
-                Circle().fill(green.opacity(0.13))
-                Image(systemName: "bolt.fill")
-                    .font(.system(size: 15, weight: .bold))
-                    .foregroundStyle(green)
+            Group {
+                if let logo = brandLogo {
+                    Image(nsImage: logo)
+                        .resizable()
+                        .scaledToFit()
+                } else {
+                    Image(systemName: "bolt.fill")
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(green)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(green.opacity(0.13))
+                }
             }
             .frame(width: 38, height: 38)
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(green.opacity(0.12), lineWidth: 1))
 
             VStack(alignment: .leading, spacing: 2) {
-                Text("Codex 团队活跃")
+                Text("万合创新局")
                     .font(.system(size: 17, weight: .bold, design: .rounded))
                     .foregroundStyle(ink)
-                Text("用起来，更要做出结果")
+                Text("Codex 团队活跃 · 用起来，更要做出结果")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(muted)
             }
@@ -312,11 +321,19 @@ struct StatusPopoverView: View {
         if member.tokens <= 0 && member.sessions <= 0 {
             return member.hasEverJoined ? "今日暂无使用" : "还未加入"
         }
+        if member.tokenSource == "today_live" {
+            let recentTime = validLastActive(member) ?? "待同步"
+            return "\(member.sessions) 次会话 · 最近活跃：\(recentTime)"
+        }
         if let lastActive = member.lastActive, !lastActive.isEmpty, lastActive != "-" {
             return "\(member.sessions) 次会话 · 更新至 \(lastActive)"
         }
-        let detail = member.tokenSource == "today_live" ? "实时更新" : officialDate(member)
-        return "\(member.sessions) 次会话 · \(detail)"
+        return "\(member.sessions) 次会话 · \(officialDate(member))"
+    }
+
+    private func validLastActive(_ member: TeamRankingMember) -> String? {
+        guard let lastActive = member.lastActive, !lastActive.isEmpty, lastActive != "-" else { return nil }
+        return lastActive
     }
 
     private func memberQuotaText(_ member: TeamRankingMember) -> String {
@@ -341,10 +358,12 @@ struct StatusPopoverView: View {
     private func localAvatar(_ member: TeamRankingMember) -> NSImage? {
         let serverFilename = member.avatar?.split(separator: "/").last.map(String.init)
         guard let filename = serverFilename ?? roster.first(where: { $0.id == member.id.lowercased() })?.avatar else { return nil }
-        let parts = filename.split(separator: ".", maxSplits: 1).map(String.init)
-        guard parts.count == 2 else { return nil }
-        let url = Bundle.module.url(forResource: parts[0], withExtension: parts[1], subdirectory: "Avatars")
-            ?? Bundle.module.url(forResource: parts[0], withExtension: parts[1])
+        return BundledAvatarStore.image(for: filename)
+    }
+
+    private var brandLogo: NSImage? {
+        let url = Bundle.module.url(forResource: "wanhe-app-icon-192", withExtension: "png", subdirectory: "Brand")
+            ?? Bundle.module.url(forResource: "wanhe-app-icon-192", withExtension: "png")
         return url.flatMap(NSImage.init(contentsOf:))
     }
 

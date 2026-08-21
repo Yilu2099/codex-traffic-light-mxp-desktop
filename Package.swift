@@ -12,6 +12,7 @@ let package = Package(
         .executable(name: "CodexTrafficLightApp", targets: ["CodexTrafficLightApp"]),
         .executable(name: "codex-light-mxp", targets: ["codex-light-mxp"]),
         .executable(name: "codex-light-hook-mxp", targets: ["codex-light-hook-mxp"]),
+        .executable(name: "wanhe-status-updater", targets: ["wanhe-status-updater"]),
         .executable(name: "codex-light-mxp-tests", targets: ["codex-light-mxp-tests"])
     ],
     targets: [
@@ -27,6 +28,10 @@ let package = Package(
         ),
         .executableTarget(
             name: "codex-light-hook-mxp",
+            dependencies: ["CodexTrafficLightCore"]
+        ),
+        .executableTarget(
+            name: "wanhe-status-updater",
             dependencies: ["CodexTrafficLightCore"]
         ),
         .executableTarget(

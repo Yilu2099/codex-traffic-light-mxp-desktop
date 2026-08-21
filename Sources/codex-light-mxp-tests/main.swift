@@ -1211,11 +1211,27 @@ func testOfficialCodexUsageParsesDailyBuckets() throws {
     try expectEqual(report.dataThrough, "2026-08-21", "official usage should expose its latest settled day")
 }
 
-func testSessionCounterReadsTimestampFromFilenameOnly() throws {
+func testSessionCounterUsesFilenameAndMetadataWithoutReadingContents() throws {
     let counter = CodexSessionFileCounter()
     let date = counter.timestampFromFilename("rollout-2026-08-20T15-20-05-01a01e0a-969e-7b82-82e3-cb289445d9be.jsonl")
     try expect(date != nil, "session counter should read the timestamp encoded in a filename")
     try expectEqual(Int(date!.timeIntervalSince1970), 1_787_239_205, "session counter should parse the filename without opening its contents")
+
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let sessions = root.appendingPathComponent("sessions/2026/08/20")
+    try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let file = sessions.appendingPathComponent("rollout-2026-08-20T15-20-05-01a01e0a-969e-7b82-82e3-cb289445d9be.jsonl")
+    try "private conversation text that must not be inspected".write(to: file, atomically: true, encoding: .utf8)
+    let modifiedAt = ISO8601DateFormatter().date(from: "2026-08-21T14:28:00Z")!
+    try FileManager.default.setAttributes([.modificationDate: modifiedAt], ofItemAtPath: file.path)
+
+    let activity = counter.collect(codexHome: root, days: 7, now: modifiedAt).first
+    try expectEqual(activity?.day, "2026-08-20", "session day should continue to come from the filename")
+    let activityFormatter = ISO8601DateFormatter()
+    activityFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    let activityDate = activity?.updatedAt.flatMap { activityFormatter.date(from: $0) }
+    try expectEqual(Int(activityDate?.timeIntervalSince1970 ?? 0), Int(modifiedAt.timeIntervalSince1970), "recent activity should come from file metadata")
 }
 
 func testTodayLiveCollectorStartsAtEOFAndCountsOnlyAppendedUsage() throws {
@@ -1248,6 +1264,30 @@ func testTodayLiveCollectorStartsAtEOFAndCountsOnlyAppendedUsage() throws {
     try expectEqual(unchanged.tokens, 50, "collector should not count an appended event twice")
     let persisted = try String(contentsOf: stateURL, encoding: .utf8)
     try expect(!persisted.contains("private text"), "collector state must never persist conversation text")
+}
+
+func testClientVersionComparison() throws {
+    try expectEqual(ClientVersion.compare("1.2.0", "1.1.9"), .orderedDescending, "newer client version should sort after the installed version")
+    try expectEqual(ClientVersion.compare("1.0.0", "1.0.0"), .orderedSame, "equal client versions should compare equally")
+    try expectEqual(ClientVersion.compare("1.0.9", "1.1.0"), .orderedAscending, "older client version should sort before the required version")
+}
+
+func testClientUpdateVerifierAcceptsReleaseSignature() throws {
+    let hash = String(repeating: "a", count: 64)
+    let signature = "5csOs6BaAKIG34CNd+bW/1Sb1dF6MdWPsJWddjT/uSccAuaaXGVXTe2syUHnwPQz49TExLcwKmPUgDrDggn3Dg=="
+    try expect(ClientUpdateVerifier.verify(version: "1.2.3", sha256: hash, signatureBase64: signature), "release signature should validate against the embedded public key")
+    try expect(!ClientUpdateVerifier.verify(version: "1.2.4", sha256: hash, signatureBase64: signature), "changing the release version should invalidate the signature")
+}
+
+func testClientUpdateConfigurationUsesTeamServerOrigin() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let configURL = root.appendingPathComponent("config.env")
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try "WANHE_ENDPOINT=\"https://c.wanhe.cn/api/usage\"\nWANHE_INGEST_TOKEN=\"device-token\"\n".write(to: configURL, atomically: true, encoding: .utf8)
+    let configuration = ClientUpdateConfiguration.load(from: configURL)
+    try expectEqual(configuration?.serverURL.absoluteString, "https://c.wanhe.cn", "updater should derive the website origin from the usage endpoint")
+    try expect(configuration?.manifestURL?.absoluteString.contains("/api/client/macos/update?") == true, "updater should build the manifest endpoint")
 }
 
 let tests: [(String, () throws -> Void)] = [
@@ -1311,8 +1351,11 @@ let tests: [(String, () throws -> Void)] = [
     ("team ranking distinguishes joined members", testTeamRankingDistinguishesJoinedMemberFromInvitePlaceholder),
     ("avatar disk cache persists by URL", testAvatarDiskCachePersistsByRemoteURL),
     ("official Codex usage parses daily buckets", testOfficialCodexUsageParsesDailyBuckets),
-    ("session counter uses filenames only", testSessionCounterReadsTimestampFromFilenameOnly),
-    ("today live collector tails appended usage only", testTodayLiveCollectorStartsAtEOFAndCountsOnlyAppendedUsage)
+    ("session counter uses filename and metadata only", testSessionCounterUsesFilenameAndMetadataWithoutReadingContents),
+    ("today live collector tails appended usage only", testTodayLiveCollectorStartsAtEOFAndCountsOnlyAppendedUsage),
+    ("client version comparison", testClientVersionComparison),
+    ("client update signature verification", testClientUpdateVerifierAcceptsReleaseSignature),
+    ("client update configuration", testClientUpdateConfigurationUsesTeamServerOrigin)
 ]
 
 var failures = 0

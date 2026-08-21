@@ -2,6 +2,7 @@
 .build/
 .superpowers/
 DerivedData/
+artifacts/
 *.xcuserdata/
 *.swp
 *.tmp

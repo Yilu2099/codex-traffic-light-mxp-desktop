@@ -3,6 +3,19 @@ import CodexTrafficLightCore
 import Foundation
 import SwiftUI
 
+enum BundledAvatarStore {
+    static func url(for filename: String) -> URL? {
+        let parts = filename.split(separator: ".", maxSplits: 1).map(String.init)
+        guard parts.count == 2 else { return nil }
+        return Bundle.module.url(forResource: parts[0], withExtension: parts[1], subdirectory: "Avatars")
+            ?? Bundle.module.url(forResource: parts[0], withExtension: parts[1])
+    }
+
+    static func image(for filename: String) -> NSImage? {
+        url(for: filename).flatMap(NSImage.init(contentsOf:))
+    }
+}
+
 @MainActor
 private final class PersistentAvatarLoader: ObservableObject {
     @Published private(set) var image: NSImage?
@@ -82,7 +95,7 @@ enum PersistentAvatarCachePrefetcher {
             for member in ranking.members {
                 guard let path = member.avatar, path.hasPrefix("/") else { continue }
                 let filename = path.split(separator: "/").last.map(String.init) ?? ""
-                guard !filename.hasPrefix("codex-") else { continue }
+                guard BundledAvatarStore.url(for: filename) == nil else { continue }
                 var remoteURL = websiteURL
                 remoteURL.append(path: String(path.dropFirst()))
                 guard cache.data(for: remoteURL) == nil else { continue }
