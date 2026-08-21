@@ -44,6 +44,27 @@ USER_NAME="$(/usr/bin/plutil -extract profile.userName raw -o - "$TEMP_RESPONSE"
 TEAM="$(/usr/bin/plutil -extract profile.team raw -o - "$TEMP_RESPONSE")"
 ROLE="$(/usr/bin/plutil -extract profile.role raw -o - "$TEMP_RESPONSE")"
 
+OLD_PLIST="$HOME/Library/LaunchAgents/com.wanhe.codex-token.plist"
+OLD_DISABLED_PLIST="$OLD_PLIST.disabled"
+/bin/launchctl bootout "gui/$(/usr/bin/id -u)" "$OLD_PLIST" >/dev/null 2>&1 || true
+/bin/launchctl bootout "gui/$(/usr/bin/id -u)/com.wanhe.codex-token" >/dev/null 2>&1 || true
+
+LEGACY_TRASH=""
+for LEGACY_PATH in \
+  "$OLD_PLIST" \
+  "$OLD_DISABLED_PLIST" \
+  "$HOME/.wanhe-codex-token/bin" \
+  "$HOME/.wanhe-codex-token/logs"
+do
+  if [[ -e "$LEGACY_PATH" ]]; then
+    if [[ -z "$LEGACY_TRASH" ]]; then
+      LEGACY_TRASH="$HOME/.Trash/wanhe-old-collector-$(/bin/date +%Y%m%d-%H%M%S)-$$"
+      /bin/mkdir -p "$LEGACY_TRASH"
+    fi
+    /bin/mv "$LEGACY_PATH" "$LEGACY_TRASH/"
+  fi
+done
+
 INSTALL_DIR="$HOME/.wanhe-codex-token"
 /bin/mkdir -p "$INSTALL_DIR"
 /bin/cat > "$INSTALL_DIR/config.env" <<EOF
@@ -58,15 +79,12 @@ WANHE_COLLECT_DAYS="45"
 EOF
 /bin/chmod 600 "$INSTALL_DIR/config.env"
 
-OLD_PLIST="$HOME/Library/LaunchAgents/com.wanhe.codex-token.plist"
-if [[ -f "$OLD_PLIST" ]]; then
-  /bin/launchctl bootout "gui/$(/usr/bin/id -u)" "$OLD_PLIST" >/dev/null 2>&1 || true
-  /bin/mv "$OLD_PLIST" "$OLD_PLIST.disabled"
-fi
-
 "$DIR/install-autostart.command"
 
 echo
 echo "安装完成：$USER_NAME"
 echo "设备：$DEVICE_NAME${MODEL_ID:+ · $MODEL_ID}"
+if [[ -n "$LEGACY_TRASH" ]]; then
+  echo "已停用旧服务器采集器，并将旧文件移到废纸篓。"
+fi
 echo "状态栏会显示周额度；点击后可查看今日团队全部成员并打开排行榜。"
