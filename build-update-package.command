@@ -27,11 +27,13 @@ trap '/bin/rm -rf -- "$STAGING"' EXIT
 /bin/cp "$DIR/.build/release/codex-light-mxp" "$STAGING/codex-light-mxp"
 /bin/cp "$DIR/.build/release/codex-light-hook-mxp" "$STAGING/codex-light-hook-mxp"
 /bin/cp "$DIR/.build/release/wanhe-status-updater" "$STAGING/wanhe-status-updater"
+/bin/cp "$DIR/scripts/codex-light-codex-monitor" "$STAGING/codex-light-codex-monitor"
+/bin/cp "$DIR/com.codex.traffic-light-codex-monitor.plist.template" "$STAGING/com.codex.traffic-light-codex-monitor.plist.template"
 /bin/cp "$DIR/VERSION" "$STAGING/VERSION"
 /usr/bin/rsync -a --delete \
   "$DIR/.build/release/CodexTrafficLightMXP_CodexTrafficLightApp.bundle/" \
   "$STAGING/CodexTrafficLightMXP_CodexTrafficLightApp.bundle/"
-/bin/chmod 755 "$STAGING/CodexTrafficLightApp" "$STAGING/codex-light-mxp" "$STAGING/codex-light-hook-mxp" "$STAGING/wanhe-status-updater"
+/bin/chmod 755 "$STAGING/CodexTrafficLightApp" "$STAGING/codex-light-mxp" "$STAGING/codex-light-hook-mxp" "$STAGING/wanhe-status-updater" "$STAGING/codex-light-codex-monitor"
 
 ARCHIVE="$OUTPUT_DIR/wanhe-status-$VERSION.tar.gz"
 MANIFEST="$OUTPUT_DIR/wanhe-status-$VERSION.manifest.json"

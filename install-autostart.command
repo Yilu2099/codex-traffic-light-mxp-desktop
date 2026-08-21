@@ -16,6 +16,8 @@ CURRENT_PATH="$APP_ROOT/current"
 PLIST_DIR="$HOME/Library/LaunchAgents"
 APP_PLIST="$PLIST_DIR/com.codex.traffic-light-mxp.plist"
 UPDATER_PLIST="$PLIST_DIR/com.codex.traffic-light-mxp-updater.plist"
+MONITOR_PLIST="$PLIST_DIR/com.codex.traffic-light-codex-monitor.plist"
+MONITOR_PATH="$BIN_DIR/codex-light-codex-monitor"
 DOMAIN="gui/$(/usr/bin/id -u)"
 NO_LAUNCH="${WANHE_INSTALL_NO_LAUNCH:-0}"
 
@@ -62,6 +64,8 @@ done
 /bin/ln -sfn "../../.wanhe-codex-token/app/current/CodexTrafficLightApp" "$BIN_DIR/CodexTrafficLightApp"
 /bin/ln -sfn "../../.wanhe-codex-token/app/current/codex-light-mxp" "$BIN_DIR/codex-light-mxp"
 /bin/ln -sfn "../../.wanhe-codex-token/app/current/codex-light-hook-mxp" "$BIN_DIR/codex-light-hook-mxp"
+/bin/cp "$DIR/scripts/codex-light-codex-monitor" "$MONITOR_PATH"
+/bin/chmod 755 "$MONITOR_PATH"
 
 /usr/bin/sed \
   -e "s#__APP_PATH__#$CURRENT_PATH/CodexTrafficLightApp#g" \
@@ -71,10 +75,16 @@ done
   -e "s#__UPDATER_PATH__#$CURRENT_PATH/wanhe-status-updater#g" \
   -e "s#__HOME__#$HOME#g" \
   "$DIR/com.codex.traffic-light-mxp-updater.plist.template" > "$UPDATER_PLIST"
+/usr/bin/sed \
+  -e "s#__MONITOR_PATH__#$MONITOR_PATH#g" \
+  -e "s#__HOME__#$HOME#g" \
+  "$DIR/com.codex.traffic-light-codex-monitor.plist.template" > "$MONITOR_PLIST"
 
 if [[ "$NO_LAUNCH" != "1" ]]; then
   /bin/launchctl bootstrap "$DOMAIN" "$APP_PLIST"
   /bin/launchctl bootstrap "$DOMAIN" "$UPDATER_PLIST"
+  /bin/launchctl bootout "$DOMAIN" "$MONITOR_PLIST" >/dev/null 2>&1 || true
+  /bin/launchctl bootstrap "$DOMAIN" "$MONITOR_PLIST"
 fi
 
 echo "状态栏已安装：$VERSION"

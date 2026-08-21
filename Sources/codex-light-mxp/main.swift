@@ -17,6 +17,7 @@ func usage() {
         FileHandle.standardError.write(
         """
         Usage: \(CommandContract.lightCommandName) [--task <task-id>] [--workspace <path>] [--json] <working|done|waiting|idle|status|clear|quit>
+               \(CommandContract.lightCommandName) --task <task-id> --workspace <path> audit
                \(CommandContract.lightCommandName) \(CommandContract.quotaCommandName) --five-hour <0-100> --weekly <0-100> [--json]
                \(CommandContract.lightCommandName) \(CommandContract.quotaCommandName) --stdin [--json]
                \(CommandContract.lightCommandName) \(CommandContract.quotaCommandName) --app-server [--json]
@@ -94,6 +95,20 @@ do {
 
     let store = StateStore()
     switch command {
+    case "audit":
+        guard let taskID = options.taskID, !taskID.isEmpty else {
+            throw StateStoreError.invalidState("audit requires --task")
+        }
+        guard let workspace = options.workspace, !workspace.isEmpty else {
+            throw StateStoreError.invalidState("audit requires --workspace")
+        }
+        let activityURL = store.stateURL.deletingLastPathComponent().appendingPathComponent("project-activity.json")
+        try ProjectActivityStore(activityURL: activityURL).record(workspace: workspace, taskID: taskID)
+        if options.json {
+            print("{\"status\":\"recorded\"}")
+        } else {
+            print("recorded")
+        }
     case "status":
         try printSnapshot(store.read(), json: options.json)
     case "clear":
