@@ -7,18 +7,21 @@ struct CLIOptions {
     var json = false
     var stdin = false
     var appServer = false
+    var claude = false
     var fiveHourPercent: Int?
     var weeklyPercent: Int?
     var command: String?
 }
 
 func usage() {
-    FileHandle.standardError.write(
+        FileHandle.standardError.write(
         """
         Usage: \(CommandContract.lightCommandName) [--task <task-id>] [--workspace <path>] [--json] <working|done|waiting|idle|status|clear|quit>
                \(CommandContract.lightCommandName) \(CommandContract.quotaCommandName) --five-hour <0-100> --weekly <0-100> [--json]
                \(CommandContract.lightCommandName) \(CommandContract.quotaCommandName) --stdin [--json]
                \(CommandContract.lightCommandName) \(CommandContract.quotaCommandName) --app-server [--json]
+               \(CommandContract.lightCommandName) \(CommandContract.quotaCommandName) --claude [--json]
+               \(CommandContract.lightCommandName) \(CommandContract.quotaCommandName) --app-server --claude [--json]
 
         """.data(using: .utf8)!
     )
@@ -44,6 +47,8 @@ func parse(_ arguments: [String]) throws -> CLIOptions {
             options.stdin = true
         case "--app-server":
             options.appServer = true
+        case "--claude":
+            options.claude = true
         case "--five-hour":
             index += 1
             guard index < arguments.count, let value = Int(arguments[index]) else {
@@ -95,17 +100,27 @@ do {
         let snapshot = try store.clear()
         try printSnapshot(snapshot, json: options.json)
     case CommandContract.quotaCommandName:
-        if options.appServer {
-            let snapshot = try CodexAppServerQuotaCollector().fetchAndUpdate(store: store)
+        if options.appServer || options.claude {
+            var snapshot = store.read()
+            if options.appServer {
+                snapshot = try CodexAppServerQuotaCollector().fetchAndUpdate(store: store)
+            }
+            if options.claude {
+                snapshot = try ClaudeUsageQuotaCollector().fetchAndUpdate(store: store)
+            }
             try printSnapshot(snapshot, json: options.json)
         } else if options.stdin {
             let input = FileHandle.standardInput.readDataToEndOfFile()
             guard let quota = QuotaExtractor.extract(from: input) else {
                 throw StateStoreError.invalidState("quota --stdin requires JSON with five-hour and weekly remaining percent")
             }
+            guard let five = quota.fiveHourRemainingPercent,
+                  let weekly = quota.weeklyRemainingPercent else {
+                throw StateStoreError.invalidState("quota --stdin requires JSON with five-hour and weekly remaining percent")
+            }
             let snapshot = try store.updateQuota(
-                fiveHourPercent: quota.fiveHourRemainingPercent,
-                weeklyPercent: quota.weeklyRemainingPercent,
+                fiveHourPercent: five,
+                weeklyPercent: weekly,
                 fiveHourResetsAt: quota.fiveHourResetsAt,
                 weeklyResetsAt: quota.weeklyResetsAt,
                 source: "cli"

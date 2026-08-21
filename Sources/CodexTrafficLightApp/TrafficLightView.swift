@@ -10,6 +10,15 @@ final class TrafficLightView: NSView {
     var quota: QuotaSnapshot? {
         didSet { needsDisplay = true }
     }
+    var providerQuotas: [String: ProviderQuotaSnapshot] = [:] {
+        didSet { needsDisplay = true }
+    }
+    private var codexQuota: ProviderQuotaSnapshot? {
+        if let provider = providerQuotas[ProviderQuotaSnapshot.codexProviderID] {
+            return provider
+        }
+        return fallbackCodex(from: quota)
+    }
     var blinkOn = true {
         didSet { needsDisplay = true }
     }
@@ -108,13 +117,60 @@ final class TrafficLightView: NSView {
 
         drawQuotaRow(
             row: layout.quotaRows[0],
-            percent: quota?.fiveHourRemainingPercent,
+            percent: codexQuota?.fiveHourRemainingPercent,
             accent: NSColor(hex: "#61d6c7")
         )
         drawQuotaRow(
             row: layout.quotaRows[1],
-            percent: quota?.weeklyRemainingPercent,
+            percent: codexQuota?.weeklyRemainingPercent,
             accent: NSColor(hex: "#8bd96b")
+        )
+
+        drawClaudeSummaryIfNeeded()
+    }
+
+    private func drawClaudeSummaryIfNeeded() {
+        guard let claude = providerQuotas[ProviderQuotaSnapshot.claudeProviderID] else { return }
+        let font = NSFont.roundedSystemFont(ofSize: 12.5, weight: .regular)
+        let color = NSColor.white.withAlphaComponent(0.70)
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .left
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: color,
+            .kern: 0,
+            .shadow: NSShadow.softTextShadow(alpha: 0.22),
+            .paragraphStyle: paragraph
+        ]
+        let line1 = "Claude 会话：\(claudeSessionText(claude.sessionRemainingPercent))"
+        let line2 = "Claude 一周：\(claudeWeeklyText(claude.weeklyRemainingPercent))"
+        let topY = layout.quotaRows.last?.progressRect.minY ?? 16
+        let baseY = topY - 20
+        line1.draw(in: NSRect(x: layout.quotaRows[0].labelRect.minX, y: baseY + 12, width: 280, height: 14), withAttributes: attributes)
+        line2.draw(in: NSRect(x: layout.quotaRows[0].labelRect.minX, y: baseY, width: 280, height: 14), withAttributes: attributes)
+    }
+
+    private func claudeSessionText(_ percent: Int?) -> String {
+        let value = percent.map { "\($0)%"} ?? "--"
+        return value
+    }
+
+    private func claudeWeeklyText(_ percent: Int?) -> String {
+        let value = percent.map { "\($0)%"} ?? "--"
+        return value
+    }
+
+    private func fallbackCodex(from legacy: QuotaSnapshot?) -> ProviderQuotaSnapshot? {
+        guard let legacy else { return nil }
+        return ProviderQuotaSnapshot(
+            source: legacy.source,
+            updatedAt: legacy.updatedAt,
+            fiveHourRemainingPercent: legacy.fiveHourRemainingPercent,
+            weeklyRemainingPercent: legacy.weeklyRemainingPercent,
+            sessionRemainingPercent: nil,
+            fiveHourResetsAt: legacy.fiveHourResetsAt,
+            weeklyResetsAt: legacy.weeklyResetsAt,
+            sessionResetsAt: nil
         )
     }
 

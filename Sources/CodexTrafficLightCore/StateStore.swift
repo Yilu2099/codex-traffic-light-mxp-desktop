@@ -81,7 +81,14 @@ public final class StateStore {
 
     @discardableResult
     public func clear(now: Date = Date()) throws -> StateSnapshot {
-        let snapshot = StateSnapshot(aggregateState: .idle, updatedAt: now, quota: read().quota, tasks: [:])
+        let existing = read()
+        let snapshot = StateSnapshot(
+            aggregateState: .idle,
+            updatedAt: now,
+            quota: existing.quota,
+            providerQuotas: existing.providerQuotas,
+            tasks: [:]
+        )
         try write(snapshot)
         return snapshot
     }
@@ -96,7 +103,7 @@ public final class StateStore {
         now: Date = Date()
     ) throws -> StateSnapshot {
         var snapshot = read().pruningExpiredDone(now: now)
-        snapshot.quota = QuotaSnapshot(
+        let legacy = QuotaSnapshot(
             fiveHourRemainingPercent: fiveHourPercent,
             weeklyRemainingPercent: weeklyPercent,
             fiveHourResetsAt: fiveHourResetsAt,
@@ -104,6 +111,62 @@ public final class StateStore {
             source: source,
             updatedAt: now
         )
+        snapshot.quota = legacy
+        snapshot.providerQuotas[ProviderQuotaSnapshot.codexProviderID] = ProviderQuotaSnapshot(
+            source: source,
+            updatedAt: now,
+            fiveHourRemainingPercent: legacy.fiveHourRemainingPercent,
+            weeklyRemainingPercent: legacy.weeklyRemainingPercent,
+            sessionRemainingPercent: nil,
+            fiveHourResetsAt: legacy.fiveHourResetsAt,
+            weeklyResetsAt: legacy.weeklyResetsAt,
+            sessionResetsAt: nil
+        )
+        snapshot.aggregateState = snapshot.computedAggregate(now: now)
+        snapshot.updatedAt = now
+        try write(snapshot)
+        return snapshot
+    }
+
+    @discardableResult
+    public func updateProviderQuota(
+        providerID: String,
+        fiveHourPercent: Int? = nil,
+        weeklyPercent: Int? = nil,
+        sessionPercent: Int? = nil,
+        fiveHourResetsAt: Date? = nil,
+        weeklyResetsAt: Date? = nil,
+        sessionResetsAt: Date? = nil,
+        source: String,
+        now: Date = Date()
+    ) throws -> StateSnapshot {
+        var snapshot = read().pruningExpiredDone(now: now)
+        let existing = snapshot.providerQuotas[providerID]
+        let next = ProviderQuotaSnapshot(
+            source: source,
+            updatedAt: now,
+            fiveHourRemainingPercent: fiveHourPercent ?? existing?.fiveHourRemainingPercent,
+            weeklyRemainingPercent: weeklyPercent ?? existing?.weeklyRemainingPercent,
+            sessionRemainingPercent: sessionPercent ?? existing?.sessionRemainingPercent,
+            fiveHourResetsAt: fiveHourResetsAt ?? existing?.fiveHourResetsAt,
+            weeklyResetsAt: weeklyResetsAt ?? existing?.weeklyResetsAt,
+            sessionResetsAt: sessionResetsAt ?? existing?.sessionResetsAt
+        )
+        snapshot.providerQuotas[providerID] = next
+
+        if providerID == ProviderQuotaSnapshot.codexProviderID,
+           let fiveHour = next.fiveHourRemainingPercent,
+           let weekly = next.weeklyRemainingPercent {
+            snapshot.quota = QuotaSnapshot(
+                fiveHourRemainingPercent: fiveHour,
+                weeklyRemainingPercent: weekly,
+                fiveHourResetsAt: next.fiveHourResetsAt,
+                weeklyResetsAt: next.weeklyResetsAt,
+                source: source,
+                updatedAt: now
+            )
+        }
+
         snapshot.aggregateState = snapshot.computedAggregate(now: now)
         snapshot.updatedAt = now
         try write(snapshot)

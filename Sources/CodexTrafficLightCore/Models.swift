@@ -97,24 +97,97 @@ public struct QuotaSnapshot: Codable, Equatable {
     }
 }
 
+public struct ProviderQuotaSnapshot: Codable, Equatable {
+    public static let codexProviderID = "codex"
+    public static let claudeProviderID = "claude"
+
+    public var source: String
+    public var updatedAt: Date
+    public var fiveHourRemainingPercent: Int?
+    public var weeklyRemainingPercent: Int?
+    public var sessionRemainingPercent: Int?
+    public var fiveHourResetsAt: Date?
+    public var weeklyResetsAt: Date?
+    public var sessionResetsAt: Date?
+
+    enum CodingKeys: String, CodingKey {
+        case source
+        case updatedAt = "updated_at"
+        case fiveHourRemainingPercent = "five_hour_remaining_percent"
+        case weeklyRemainingPercent = "weekly_remaining_percent"
+        case sessionRemainingPercent = "session_remaining_percent"
+        case fiveHourResetsAt = "five_hour_resets_at"
+        case weeklyResetsAt = "weekly_resets_at"
+        case sessionResetsAt = "session_resets_at"
+    }
+
+    public init(
+        source: String,
+        updatedAt: Date,
+        fiveHourRemainingPercent: Int? = nil,
+        weeklyRemainingPercent: Int? = nil,
+        sessionRemainingPercent: Int? = nil,
+        fiveHourResetsAt: Date? = nil,
+        weeklyResetsAt: Date? = nil,
+        sessionResetsAt: Date? = nil
+    ) {
+        self.source = source
+        self.updatedAt = updatedAt
+        self.fiveHourRemainingPercent = fiveHourRemainingPercent.map { min(100, max(0, $0)) }
+        self.weeklyRemainingPercent = weeklyRemainingPercent.map { min(100, max(0, $0)) }
+        self.sessionRemainingPercent = sessionRemainingPercent.map { min(100, max(0, $0)) }
+        self.fiveHourResetsAt = fiveHourResetsAt
+        self.weeklyResetsAt = weeklyResetsAt
+        self.sessionResetsAt = sessionResetsAt
+    }
+
+    public func summaryLabel() -> String {
+        [fiveHourRemainingPercent, weeklyRemainingPercent, sessionRemainingPercent]
+            .compactMap { $0 }
+            .first.map { "\($0)%" } ?? "--"
+    }
+}
+
 public struct StateSnapshot: Codable, Equatable {
     public var aggregateState: LightState
     public var updatedAt: Date
     public var quota: QuotaSnapshot?
+    public var providerQuotas: [String: ProviderQuotaSnapshot]
     public var tasks: [String: TaskState]
 
     enum CodingKeys: String, CodingKey {
         case aggregateState = "aggregate_state"
         case updatedAt = "updated_at"
         case quota
+        case providerQuotas = "provider_quotas"
         case tasks
     }
 
-    public init(aggregateState: LightState, updatedAt: Date, quota: QuotaSnapshot? = nil, tasks: [String: TaskState]) {
+    public init(
+        aggregateState: LightState,
+        updatedAt: Date,
+        quota: QuotaSnapshot? = nil,
+        providerQuotas: [String: ProviderQuotaSnapshot] = [:],
+        tasks: [String: TaskState]
+    ) {
         self.aggregateState = aggregateState
         self.updatedAt = updatedAt
         self.quota = quota
+        self.providerQuotas = providerQuotas
         self.tasks = tasks
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        aggregateState = try container.decode(LightState.self, forKey: .aggregateState)
+        updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+        quota = try container.decodeIfPresent(QuotaSnapshot.self, forKey: .quota)
+        providerQuotas = try container.decodeIfPresent([String: ProviderQuotaSnapshot].self, forKey: .providerQuotas) ?? [:]
+        tasks = try container.decode([String: TaskState].self, forKey: .tasks)
+    }
+
+    public func providerQuota(for providerID: String) -> ProviderQuotaSnapshot? {
+        providerQuotas[providerID]
     }
 
     public static func empty(now: Date = Date()) -> StateSnapshot {
@@ -161,6 +234,7 @@ public struct StateSnapshot: Codable, Equatable {
             aggregateState: StateSnapshot(aggregateState: aggregateState, updatedAt: updatedAt, quota: quota, tasks: activeTasks).computedAggregate(now: now, doneTTL: doneTTL, workingTTL: workingTTL, waitingTTL: waitingTTL),
             updatedAt: now,
             quota: quota,
+            providerQuotas: providerQuotas,
             tasks: activeTasks
         )
     }

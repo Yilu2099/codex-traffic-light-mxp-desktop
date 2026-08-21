@@ -1,25 +1,25 @@
 import Foundation
 
 public struct QuotaValues: Equatable, Sendable {
-    public var fiveHourRemainingPercent: Int
-    public var weeklyRemainingPercent: Int
+    public var fiveHourRemainingPercent: Int?
+    public var weeklyRemainingPercent: Int?
     public var fiveHourResetsAt: Date?
     public var weeklyResetsAt: Date?
 
     public init(
-        fiveHourRemainingPercent: Int,
-        weeklyRemainingPercent: Int,
+        fiveHourRemainingPercent: Int?,
+        weeklyRemainingPercent: Int?,
         fiveHourResetsAt: Date? = nil,
         weeklyResetsAt: Date? = nil
     ) {
-        self.fiveHourRemainingPercent = min(100, max(0, fiveHourRemainingPercent))
-        self.weeklyRemainingPercent = min(100, max(0, weeklyRemainingPercent))
+        self.fiveHourRemainingPercent = fiveHourRemainingPercent.map { min(100, max(0, $0)) }
+        self.weeklyRemainingPercent = weeklyRemainingPercent.map { min(100, max(0, $0)) }
         self.fiveHourResetsAt = fiveHourResetsAt
         self.weeklyResetsAt = weeklyResetsAt
     }
 
     public var summary: String {
-        "\(fiveHourRemainingPercent)/\(weeklyRemainingPercent)"
+        "\(fiveHourRemainingPercent ?? 0)/\(weeklyRemainingPercent ?? 0)"
     }
 }
 

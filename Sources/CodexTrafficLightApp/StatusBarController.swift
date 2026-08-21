@@ -1,348 +1,258 @@
 import Cocoa
 import CodexTrafficLightCore
+import SwiftUI
 
 @MainActor
 protocol StatusBarControllerDelegate: AnyObject {
-    func statusBarDidRequestState(_ state: LightState)
-    func statusBarDidRequestClear()
-    func statusBarDidRequestToggleMute()
     func statusBarDidRequestQuit()
 }
 
 @MainActor
 final class StatusBarController {
+    private let healthyGreen = NSColor(
+        srgbRed: 0x2F / 255,
+        green: 0x9E / 255,
+        blue: 0x55 / 255,
+        alpha: 1
+    )
+    private let healthyGreenTop = NSColor(
+        srgbRed: 0x3F / 255,
+        green: 0xB6 / 255,
+        blue: 0x64 / 255,
+        alpha: 1
+    )
+    private let healthyGreenBottom = NSColor(
+        srgbRed: 0x20 / 255,
+        green: 0x7A / 255,
+        blue: 0x3D / 255,
+        alpha: 1
+    )
+    private let healthyGreenRim = NSColor(
+        srgbRed: 0x19 / 255,
+        green: 0x5F / 255,
+        blue: 0x31 / 255,
+        alpha: 1
+    )
     private let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+    private let popover = NSPopover()
+    private let popoverModel = StatusPopoverModel()
     weak var delegate: StatusBarControllerDelegate?
-    private var state: LightState = .idle
-    private var muted = false
-    private var quota: QuotaSnapshot?
+    private var snapshot: StateSnapshot?
+    private var teamRanking: TeamRankingSnapshot?
+    private var teamWebsiteURL: URL?
+    private var teamSyncDetail: String?
+    private var weeklyRemainingPercent: Int?
+    private var breathingTimer: Timer?
+    private var breathingFrames: [NSImage] = []
+    private var breathingFrameIndex = 0
 
     init() {
         item.button?.imagePosition = .imageLeft
-        rebuildMenu()
+        item.button?.imageScaling = .scaleProportionallyDown
+        item.button?.target = self
+        item.button?.action = #selector(togglePopover)
+        item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        popover.behavior = .transient
+        popover.animates = true
+        popover.contentSize = NSSize(width: 456, height: 640)
+        let rootView = StatusPopoverView(
+            model: popoverModel,
+            openWebsite: { [weak self] memberID in self?.openTeamWebsite(memberID: memberID) },
+            quit: { [weak self] in self?.delegate?.statusBarDidRequestQuit() }
+        )
+        let hostingController = NSHostingController(rootView: rootView)
+        hostingController.view.appearance = NSAppearance(named: .aqua)
+        popover.contentViewController = hostingController
+        updateQuotaIndicator()
     }
 
-    func apply(state: LightState, muted: Bool, quota: QuotaSnapshot?) {
-        self.state = state
-        self.muted = muted
-        self.quota = quota
-        item.button?.image = makeStatusImage(state: state)
-        item.button?.title = statusBarQuotaText(for: quota)
-        item.button?.toolTip = tooltipText(state: state, quota: quota)
-        rebuildMenu()
+    func apply(snapshot: StateSnapshot?) {
+        self.snapshot = snapshot
+        weeklyRemainingPercent = weeklyQuota(from: snapshot)?.remainingPercent
+        updateQuotaIndicator()
+        item.button?.title = statusBarText(for: snapshot)
+        item.button?.toolTip = detailLines(for: snapshot).joined(separator: "\n")
+        popoverModel.snapshot = snapshot
     }
 
-    private func rebuildMenu() {
-        let menu = NSMenu()
-        menu.addItem(withTitle: "当前：\(state.label)", action: nil, keyEquivalent: "")
-        menu.addItem(quotaDetailMenuItem(for: quota))
-        menu.addItem(.separator())
-        menu.addItem(withTitle: muted ? "恢复提示音" : "静音提示音", action: #selector(toggleMute), keyEquivalent: "")
-        menu.addItem(.separator())
-        menu.addItem(withTitle: "黄灯：工作中", action: #selector(setWorking), keyEquivalent: "")
-        menu.addItem(withTitle: "绿灯：已完成", action: #selector(setDone), keyEquivalent: "")
-        menu.addItem(withTitle: "红灯：待确认", action: #selector(setWaiting), keyEquivalent: "")
-        menu.addItem(withTitle: "黑灯：空闲", action: #selector(setIdle), keyEquivalent: "")
-        menu.addItem(withTitle: "清空失联任务", action: #selector(clear), keyEquivalent: "")
-        menu.addItem(.separator())
-        menu.addItem(withTitle: "退出", action: #selector(quit), keyEquivalent: "")
-        for item in menu.items {
-            item.target = self
+    func applyTeamRanking(_ ranking: TeamRankingSnapshot?, websiteURL: URL?, syncDetail: String? = nil) {
+        teamRanking = ranking
+        teamWebsiteURL = websiteURL
+        teamSyncDetail = syncDetail
+        popoverModel.ranking = ranking
+        popoverModel.websiteURL = websiteURL
+        if let syncDetail { popoverModel.syncDetail = syncDetail }
+    }
+
+    func setTeamSyncDetail(_ detail: String, websiteURL: URL? = nil) {
+        teamSyncDetail = detail
+        if let websiteURL { teamWebsiteURL = websiteURL }
+        popoverModel.syncDetail = detail
+        if let websiteURL { popoverModel.websiteURL = websiteURL }
+    }
+
+    func stopAnimation() {
+        breathingTimer?.invalidate()
+        breathingTimer = nil
+    }
+
+    private func statusBarText(for snapshot: StateSnapshot?) -> String {
+        guard let percent = weeklyQuota(from: snapshot)?.remainingPercent else {
+            return "周额度 --"
         }
-        item.menu = menu
+        return "周额度 \(percent)%"
     }
 
-    private func tooltipText(state: LightState, quota: QuotaSnapshot?) -> String {
-        let base = "Codex 红绿灯：\(state.label)"
-        guard let quota else { return base }
-        return ([base, "额度：\(quotaText(for: quota))"] + quotaDetailLines(for: quota)).joined(separator: "\n")
-    }
-
-    private func quotaText(for quota: QuotaSnapshot?) -> String {
-        guard let quota else { return "暂无数据" }
-        return priorityQuotaText(for: quota, compact: false)
-    }
-
-    private func statusBarQuotaText(for quota: QuotaSnapshot?) -> String {
-        guard let quota else { return " 5H -- · 1周 --" }
-        return " \(priorityQuotaText(for: quota, compact: true))"
-    }
-
-    private func priorityQuotaText(for quota: QuotaSnapshot, compact: Bool) -> String {
-        if quota.weeklyRemainingPercent <= 0 {
-            return resetQuotaText(
-                label: "1周",
-                resetsAt: quota.weeklyResetsAt,
-                fallback: "等待周额度恢复",
-                unitStyle: .daysAndHours
-            )
-        }
-        if quota.fiveHourRemainingPercent <= 0 {
-            return resetQuotaText(
-                label: compact ? "5H" : "5小时",
-                resetsAt: quota.fiveHourResetsAt,
-                fallback: compact ? "等待5H恢复" : "等待5小时额度恢复",
-                unitStyle: .hoursAndMinutes
-            )
-        }
-        if compact && quota.weeklyRemainingPercent < 95 {
-            let refreshText = refreshSuffixText(until: quota.fiveHourResetsAt)
-            return "5H \(quota.fiveHourRemainingPercent)% · \(refreshText)"
-        }
-        return compact
-            ? "5H \(quota.fiveHourRemainingPercent)% · 1周 \(quota.weeklyRemainingPercent)%"
-            : "5小时 \(quota.fiveHourRemainingPercent)% · 1周 \(quota.weeklyRemainingPercent)%"
-    }
-
-    private func resetQuotaText(label: String, resetsAt: Date?, fallback: String, unitStyle: QuotaResetUnitStyle) -> String {
-        guard let resetsAt else { return fallback }
-        return "\(label) \(relativeResetText(until: resetsAt, unitStyle: unitStyle))"
-    }
-
-    private func relativeResetText(until resetsAt: Date, now: Date = Date(), unitStyle: QuotaResetUnitStyle) -> String {
-        QuotaDisplayFormatter.relativeResetText(until: resetsAt, now: now, unitStyle: unitStyle)
-    }
-
-    private func refreshSuffixText(until resetsAt: Date?) -> String {
-        guard let resetsAt else { return "等待刷新时间" }
-        return "\(relativeResetText(until: resetsAt, unitStyle: .hoursAndMinutes))刷新"
-    }
-
-    private func quotaDetailLines(for quota: QuotaSnapshot?) -> [String] {
-        guard let quota else { return ["5小时：暂无恢复时间", "1周：暂无恢复时间"] }
-        return [
-            quotaDetailLine(
-                label: "5小时",
-                displayLabel: "5小时",
-                percent: quota.fiveHourRemainingPercent,
-                resetsAt: quota.fiveHourResetsAt,
-                unitStyle: .hoursAndMinutes
-            ),
-            quotaDetailLine(
-                label: "1周",
-                displayLabel: "1周　",
-                percent: quota.weeklyRemainingPercent,
-                resetsAt: quota.weeklyResetsAt,
-                unitStyle: .daysAndHours
-            )
-        ]
-    }
-
-    private func quotaDetailLine(label: String, displayLabel: String, percent: Int, resetsAt: Date?, unitStyle: QuotaResetUnitStyle) -> String {
-        guard let resetsAt else {
-            return "\(label)：\(percent)% · 未返回恢复时间"
-        }
-        let percentText = String(format: "%3d%%", percent)
-        return "\(displayLabel)  \(percentText)  \(absoluteDateTimeText(resetsAt))  \(relativeResetText(until: resetsAt, unitStyle: unitStyle))"
-    }
-
-    private func absoluteDateTimeText(_ date: Date) -> String {
-        QuotaDisplayFormatter.absoluteDateTimeText(date)
-    }
-
-    private func quotaDetailMenuItem(for quota: QuotaSnapshot?) -> NSMenuItem {
-        let item = NSMenuItem()
-        item.view = QuotaDetailMenuView(rows: quotaRows(for: quota))
-        return item
-    }
-
-    private func quotaRows(for quota: QuotaSnapshot?) -> [QuotaDetailRow] {
-        guard let quota else {
+    private func detailLines(for snapshot: StateSnapshot?) -> [String] {
+        let weekly = weeklyQuota(from: snapshot)
+        let percentText = weekly?.remainingPercent.map { "\($0)%" } ?? "--"
+        guard let resetsAt = weekly?.resetsAt else {
             return [
-                QuotaDetailRow(label: "5小时", percent: "--", resetTime: "--", remaining: "暂无数据"),
-                QuotaDetailRow(label: "1周", percent: "--", resetTime: "--", remaining: "暂无数据")
+                "周额度剩余：\(percentText)",
+                "距离刷新：暂无数据",
+                "刷新时间：暂无数据"
             ]
         }
+
         return [
-            quotaRow(
-                label: "5小时",
-                percent: quota.fiveHourRemainingPercent,
-                resetsAt: quota.fiveHourResetsAt,
-                unitStyle: .hoursAndMinutes
-            ),
-            quotaRow(
-                label: "1周",
-                percent: quota.weeklyRemainingPercent,
-                resetsAt: quota.weeklyResetsAt,
-                unitStyle: .daysAndHours
-            )
+            "周额度剩余：\(percentText)",
+            "距离刷新：\(QuotaDisplayFormatter.relativeResetText(until: resetsAt, unitStyle: .daysAndHours))",
+            "刷新时间：\(QuotaDisplayFormatter.absoluteDateTimeText(resetsAt))"
         ]
     }
 
-    private func quotaRow(label: String, percent: Int, resetsAt: Date?, unitStyle: QuotaResetUnitStyle) -> QuotaDetailRow {
-        guard let resetsAt else {
-            return QuotaDetailRow(label: label, percent: "\(percent)%", resetTime: "--", remaining: "未返回时间")
+    private func weeklyQuota(from snapshot: StateSnapshot?) -> (remainingPercent: Int?, resetsAt: Date?)? {
+        guard let snapshot else { return nil }
+        if let codex = snapshot.providerQuota(for: ProviderQuotaSnapshot.codexProviderID) {
+            return (codex.weeklyRemainingPercent, codex.weeklyResetsAt)
         }
-        return QuotaDetailRow(
-            label: label,
-            percent: "\(percent)%",
-            resetTime: absoluteDateTimeText(resetsAt),
-            remaining: relativeResetText(until: resetsAt, unitStyle: unitStyle)
-        )
+        guard let legacy = snapshot.quota else { return nil }
+        return (legacy.weeklyRemainingPercent, legacy.weeklyResetsAt)
     }
 
-    @objc private func setWorking() { delegate?.statusBarDidRequestState(.working) }
-    @objc private func setDone() { delegate?.statusBarDidRequestState(.done) }
-    @objc private func setWaiting() { delegate?.statusBarDidRequestState(.waiting) }
-    @objc private func setIdle() { delegate?.statusBarDidRequestState(.idle) }
-    @objc private func clear() { delegate?.statusBarDidRequestClear() }
-    @objc private func toggleMute() { delegate?.statusBarDidRequestToggleMute() }
-    @objc private func quit() { delegate?.statusBarDidRequestQuit() }
+    private func updateQuotaIndicator() {
+        guard let percent = weeklyRemainingPercent else {
+            stopAnimation()
+            item.button?.image = makeQuotaIndicator(color: .systemGray, glow: 0.15)
+            return
+        }
 
-    private func makeStatusImage(state: LightState) -> NSImage {
-        let size = NSSize(width: 16, height: 16)
+        if percent <= 10 {
+            stopAnimation()
+            item.button?.image = makeQuotaIndicator(color: .systemRed, glow: 0.72)
+            return
+        }
+
+        if breathingTimer == nil {
+            if breathingFrames.isEmpty {
+                breathingFrames = (0..<30).map { index in
+                    let wave = (sin(Double(index) * 2 * .pi / 30) + 1) / 2
+                    let eased = wave * wave * (3 - 2 * wave)
+                    return makeQuotaIndicator(
+                        color: healthyGreen,
+                        glow: CGFloat(eased),
+                        coreTop: healthyGreenTop,
+                        coreBottom: healthyGreenBottom,
+                        rim: healthyGreenRim
+                    )
+                }
+            }
+            breathingFrameIndex = 0
+            let timer = Timer(
+                timeInterval: 0.12,
+                target: self,
+                selector: #selector(breathingTimerFired),
+                userInfo: nil,
+                repeats: true
+            )
+            RunLoop.main.add(timer, forMode: .common)
+            breathingTimer = timer
+        }
+        updateBreathingFrame()
+    }
+
+    @objc private func breathingTimerFired() {
+        guard let percent = weeklyRemainingPercent, percent > 10 else {
+            updateQuotaIndicator()
+            return
+        }
+        updateBreathingFrame()
+    }
+
+    @objc private func togglePopover() {
+        guard let button = item.button else { return }
+        if popover.isShown {
+            popover.performClose(nil)
+        } else {
+            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+            popover.contentViewController?.view.window?.makeKey()
+        }
+    }
+
+    private func openTeamWebsite(memberID: String?) {
+        guard let teamWebsiteURL else { return }
+        var components = URLComponents(url: teamWebsiteURL, resolvingAgainstBaseURL: false)
+        if let memberID { components?.queryItems = [URLQueryItem(name: "member", value: memberID)] }
+        NSWorkspace.shared.open(components?.url ?? teamWebsiteURL)
+        popover.performClose(nil)
+    }
+
+    private func updateBreathingFrame() {
+        guard !breathingFrames.isEmpty else { return }
+        item.button?.image = breathingFrames[breathingFrameIndex]
+        breathingFrameIndex = (breathingFrameIndex + 1) % breathingFrames.count
+    }
+
+    private func makeQuotaIndicator(
+        color: NSColor,
+        glow: CGFloat,
+        coreTop: NSColor? = nil,
+        coreBottom: NSColor? = nil,
+        rim: NSColor? = nil
+    ) -> NSImage {
+        let size = NSSize(width: 18, height: 18)
         let image = NSImage(size: size)
         image.lockFocus()
+        defer { image.unlockFocus() }
+
         NSColor.clear.setFill()
         NSRect(origin: .zero, size: size).fill()
 
-        let color: NSColor
-        let alpha: CGFloat
-        switch state {
-        case .waiting:
-            color = NSColor(hex: "#f3423b")
-            alpha = 1.0
-        case .working:
-            color = NSColor(hex: "#ffd441")
-            alpha = 1.0
-        case .done:
-            color = NSColor(hex: "#55d34d")
-            alpha = 1.0
-        case .idle, .quit:
-            color = NSColor(hex: "#111418")
-            alpha = 1.0
+        let haloDiameter = 14 + (3 * glow)
+        let haloRect = NSRect(
+            x: (size.width - haloDiameter) / 2,
+            y: (size.height - haloDiameter) / 2,
+            width: haloDiameter,
+            height: haloDiameter
+        )
+        color.withAlphaComponent(0.16 + (0.16 * glow)).setFill()
+        NSBezierPath(ovalIn: haloRect).fill()
+
+        let softGlowRect = NSRect(x: 3, y: 3, width: 12, height: 12)
+        color.withAlphaComponent(0.32 + (0.22 * glow)).setFill()
+        NSBezierPath(ovalIn: softGlowRect).fill()
+
+        let rimRect = NSRect(x: 4, y: 4, width: 10, height: 10)
+        (rim ?? color).setFill()
+        NSBezierPath(ovalIn: rimRect).fill()
+
+        let coreRect = NSRect(x: 4.8, y: 4.8, width: 8.4, height: 8.4)
+        if let coreTop, let coreBottom,
+           let gradient = NSGradient(starting: coreTop, ending: coreBottom) {
+            NSGraphicsContext.saveGraphicsState()
+            NSBezierPath(ovalIn: coreRect).addClip()
+            gradient.draw(in: coreRect, angle: 90)
+            NSGraphicsContext.restoreGraphicsState()
+        } else {
+            color.setFill()
+            NSBezierPath(ovalIn: coreRect).fill()
         }
 
-        color.withAlphaComponent(state == .idle || state == .quit ? 0.70 : 0.18).setFill()
-        NSBezierPath(ovalIn: NSRect(x: 1, y: 1, width: 14, height: 14)).fill()
-        color.withAlphaComponent(alpha).setFill()
-        NSBezierPath(ovalIn: NSRect(x: 4, y: 4, width: 8, height: 8)).fill()
-        image.unlockFocus()
+        NSColor.white.withAlphaComponent(0.14 + (0.05 * glow)).setFill()
+        NSBezierPath(ovalIn: NSRect(x: 6.6, y: 9.5, width: 2.2, height: 1.5)).fill()
+
         image.isTemplate = false
         return image
     }
-}
 
-private struct QuotaDetailRow {
-    let label: String
-    let percent: String
-    let resetTime: String
-    let remaining: String
-}
-
-private final class QuotaDetailMenuView: NSView {
-    private let rows: [QuotaDetailRow]
-
-    init(rows: [QuotaDetailRow]) {
-        self.rows = rows
-        super.init(frame: NSRect(x: 0, y: 0, width: 372, height: 96))
-        wantsLayer = true
-    }
-
-    required init?(coder: NSCoder) {
-        nil
-    }
-
-    override func draw(_ dirtyRect: NSRect) {
-        super.draw(dirtyRect)
-
-        let card = bounds.insetBy(dx: 10, dy: 8)
-        let path = NSBezierPath(roundedRect: card, xRadius: 7, yRadius: 7)
-        NSColor.controlBackgroundColor.setFill()
-        path.fill()
-        NSColor.separatorColor.withAlphaComponent(0.55).setStroke()
-        path.lineWidth = 1
-        path.stroke()
-
-        drawHeader(in: card)
-        drawSeparator(in: card, y: card.maxY - 30)
-
-        for (index, row) in rows.prefix(2).enumerated() {
-            draw(row: row, index: index, in: card)
-        }
-    }
-
-    private func drawHeader(in card: NSRect) {
-        let y = card.maxY - 24
-        drawText("窗口", in: NSRect(x: card.minX + 4, y: y, width: 50, height: 16), attributes: headerAttributes(alignment: .center))
-        drawText("剩余", in: percentColumn(in: card, y: y, height: 16), attributes: headerAttributes(alignment: .center))
-        drawText("恢复时间", in: resetColumn(in: card, y: y, height: 16), attributes: headerAttributes(alignment: .center))
-        drawText("倒计时", in: remainingColumn(in: card, y: y, height: 16), attributes: headerAttributes(alignment: .center))
-    }
-
-    private func draw(row: QuotaDetailRow, index: Int, in card: NSRect) {
-        let y = card.maxY - 53 - CGFloat(index * 25)
-        if index == 1 {
-            drawSeparator(in: card, y: y + 21)
-        }
-        drawText(row.label, in: labelColumn(in: card, y: y, height: 18), attributes: bodyAttributes(weight: .semibold, alignment: .left))
-        drawText(row.percent, in: percentColumn(in: card, y: y, height: 18), attributes: monoAttributes(alignment: .center))
-        drawText(row.resetTime, in: resetColumn(in: card, y: y, height: 18), attributes: monoAttributes(alignment: .left))
-        drawText(row.remaining, in: remainingColumn(in: card, y: y, height: 18), attributes: bodyAttributes(weight: .regular, alignment: .left))
-    }
-
-    private func labelColumn(in card: NSRect, y: CGFloat, height: CGFloat) -> NSRect {
-        NSRect(x: card.minX + 14, y: y, width: 50, height: height)
-    }
-
-    private func percentColumn(in card: NSRect, y: CGFloat, height: CGFloat) -> NSRect {
-        NSRect(x: card.minX + 70, y: y, width: 42, height: height)
-    }
-
-    private func resetColumn(in card: NSRect, y: CGFloat, height: CGFloat) -> NSRect {
-        NSRect(x: card.minX + 124, y: y, width: 112, height: height)
-    }
-
-    private func remainingColumn(in card: NSRect, y: CGFloat, height: CGFloat) -> NSRect {
-        NSRect(x: card.minX + 246, y: y, width: 96, height: height)
-    }
-
-    private func drawSeparator(in card: NSRect, y: CGFloat) {
-        NSColor.separatorColor.withAlphaComponent(0.35).setStroke()
-        let path = NSBezierPath()
-        path.move(to: NSPoint(x: card.minX + 10, y: y))
-        path.line(to: NSPoint(x: card.maxX - 10, y: y))
-        path.lineWidth = 1
-        path.stroke()
-    }
-
-    private func drawText(_ text: String, in rect: NSRect, attributes: [NSAttributedString.Key: Any]) {
-        text.draw(in: rect, withAttributes: attributes)
-    }
-
-    private func headerAttributes(alignment: NSTextAlignment) -> [NSAttributedString.Key: Any] {
-        textAttributes(
-            font: NSFont.systemFont(ofSize: 11, weight: .medium),
-            color: NSColor.secondaryLabelColor,
-            alignment: alignment
-        )
-    }
-
-    private func bodyAttributes(weight: NSFont.Weight, alignment: NSTextAlignment) -> [NSAttributedString.Key: Any] {
-        textAttributes(
-            font: NSFont.systemFont(ofSize: 12.5, weight: weight),
-            color: NSColor.labelColor,
-            alignment: alignment
-        )
-    }
-
-    private func monoAttributes(alignment: NSTextAlignment) -> [NSAttributedString.Key: Any] {
-        textAttributes(
-            font: NSFont.monospacedDigitSystemFont(ofSize: 12.5, weight: .medium),
-            color: NSColor.labelColor,
-            alignment: alignment
-        )
-    }
-
-    private func textAttributes(font: NSFont, color: NSColor, alignment: NSTextAlignment) -> [NSAttributedString.Key: Any] {
-        let paragraph = NSMutableParagraphStyle()
-        paragraph.alignment = alignment
-        paragraph.lineBreakMode = .byTruncatingTail
-        return [
-            .font: font,
-            .foregroundColor: color,
-            .kern: 0,
-            .paragraphStyle: paragraph
-        ]
-    }
 }

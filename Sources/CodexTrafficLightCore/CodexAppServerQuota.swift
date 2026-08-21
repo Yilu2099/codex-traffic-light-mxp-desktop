@@ -34,7 +34,7 @@ public indirect enum CodexAppServerQuotaError: Error, CustomStringConvertible {
         case .retryExhausted(let attempts, let lastError):
             return "App-server quota failed after \(attempts) attempts: \(lastError.description)"
         case .missingQuota:
-            return "App-server response did not include Codex 5-hour and weekly quota"
+            return "App-server response did not include Codex 5-hour or weekly quota"
         }
     }
 
@@ -110,14 +110,14 @@ public enum CodexAppServerQuotaMapper {
         let weeklyWindow = windows.first { $0.windowDurationMins == weeklyDurationMins }
             ?? fallbackWindow(snapshot.secondary, duration: weeklyDurationMins)
 
-        guard let fiveHourWindow, let weeklyWindow else {
+        guard fiveHourWindow != nil || weeklyWindow != nil else {
             return nil
         }
         return QuotaValues(
-            fiveHourRemainingPercent: remainingPercent(fromUsedPercent: fiveHourWindow.usedPercent),
-            weeklyRemainingPercent: remainingPercent(fromUsedPercent: weeklyWindow.usedPercent),
-            fiveHourResetsAt: fiveHourWindow.resetsAt,
-            weeklyResetsAt: weeklyWindow.resetsAt
+            fiveHourRemainingPercent: fiveHourWindow.map { remainingPercent(fromUsedPercent: $0.usedPercent) },
+            weeklyRemainingPercent: weeklyWindow.map { remainingPercent(fromUsedPercent: $0.usedPercent) },
+            fiveHourResetsAt: fiveHourWindow?.resetsAt,
+            weeklyResetsAt: weeklyWindow?.resetsAt
         )
     }
 
@@ -326,7 +326,8 @@ public struct CodexAppServerQuotaCollector {
     @discardableResult
     public func fetchAndUpdate(store: StateStore = StateStore(), now: Date = Date()) throws -> StateSnapshot {
         let quota = try fetchQuota()
-        return try store.updateQuota(
+        return try store.updateProviderQuota(
+            providerID: ProviderQuotaSnapshot.codexProviderID,
             fiveHourPercent: quota.fiveHourRemainingPercent,
             weeklyPercent: quota.weeklyRemainingPercent,
             fiveHourResetsAt: quota.fiveHourResetsAt,

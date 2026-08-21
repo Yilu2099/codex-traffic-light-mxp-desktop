@@ -18,7 +18,8 @@ let package = Package(
         .target(name: "CodexTrafficLightCore"),
         .executableTarget(
             name: "CodexTrafficLightApp",
-            dependencies: ["CodexTrafficLightCore"]
+            dependencies: ["CodexTrafficLightCore"],
+            resources: [.process("Resources")]
         ),
         .executableTarget(
             name: "codex-light-mxp",

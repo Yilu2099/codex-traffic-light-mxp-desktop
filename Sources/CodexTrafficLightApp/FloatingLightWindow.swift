@@ -35,9 +35,10 @@ final class FloatingLightWindow {
         }
     }
 
-    func apply(state: LightState, quota: QuotaSnapshot?, show: Bool) {
+    func apply(state: LightState, quota: QuotaSnapshot?, providerQuotas: [String: ProviderQuotaSnapshot], show: Bool) {
         view.state = state
         view.quota = quota
+        view.providerQuotas = providerQuotas
         if show {
             showWindow()
         }

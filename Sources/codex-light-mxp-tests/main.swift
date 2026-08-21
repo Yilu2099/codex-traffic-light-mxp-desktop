@@ -283,6 +283,47 @@ func testStateSnapshotDecodesOldJSONWithoutQuota() throws {
     try expectEqual(snapshot.updatedAt, Date(timeIntervalSince1970: 1_000), "old JSON should decode updated_at")
     try expectEqual(snapshot.tasks.isEmpty, true, "old JSON should decode tasks")
     try expectEqual(snapshot.quota == nil, true, "old JSON without quota should decode nil quota")
+    try expectEqual(snapshot.providerQuotas.isEmpty, true, "old JSON should default providerQuotas to empty")
+}
+
+func testStateStoreUpdatesProviderQuotaWithoutReplacingOtherProviderData() throws {
+    let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent("codex-light-mxp-provider-quota-tests-\(UUID().uuidString)", isDirectory: true)
+    let store = StateStore(stateURL: directory.appendingPathComponent("state.json"))
+    _ = try store.updateQuota(
+        fiveHourPercent: 72,
+        weeklyPercent: 48,
+        source: "codex"
+    )
+    let updated = try store.updateProviderQuota(
+        providerID: ProviderQuotaSnapshot.claudeProviderID,
+        sessionPercent: 44,
+        source: "claude"
+    )
+
+    try expectEqual(updated.providerQuota(for: ProviderQuotaSnapshot.codexProviderID)?.fiveHourRemainingPercent, 72, "codex quota should remain after claude update")
+    try expectEqual(updated.providerQuota(for: ProviderQuotaSnapshot.claudeProviderID)?.sessionRemainingPercent, 44, "claude session quota should be written")
+    try expectEqual(updated.providerQuota(for: ProviderQuotaSnapshot.claudeProviderID)?.weeklyRemainingPercent, nil, "claude weekly quota should stay nil when not updated")
+    try expectEqual(updated.providerQuotas.keys.contains(ProviderQuotaSnapshot.codexProviderID), true, "provider map should keep codex key")
+    try expectEqual(updated.providerQuotas.keys.contains(ProviderQuotaSnapshot.claudeProviderID), true, "provider map should keep claude key")
+}
+
+func testClaudeUsageQuotaParseSessionAndWeekly() throws {
+    let output = """
+    Current session:
+    Used: 72%, left: 28%.
+    Resets in 3 hours 12 minutes.
+
+    Current week:
+    Remaining: 68%.
+    Resets: Fri, Jul 6, 8:30 PM
+    """
+
+    let values = try ClaudeUsageQuotaCollector.parse(output)
+    try expectEqual(values.sessionRemainingPercent, 28, "session parse should read percent")
+    try expectEqual(values.weeklyRemainingPercent, 68, "weekly parse should read percent")
+    try expectEqual(values.sessionResetsAt == nil, false, "session reset time should parse")
+    try expectEqual(values.weeklyResetsAt == nil, false, "weekly reset time should parse")
 }
 
 func testStateStoreClearAndIdleTaskRemoval() throws {
@@ -646,8 +687,8 @@ func testAppServerQuotaMapperReadsCodexLimitByExactDurations() throws {
 
     let quota = try CodexAppServerQuotaMapper.quotaValues(from: data)
 
-    try expectEqual(quota.fiveHourRemainingPercent, 72, "mapper should prefer codex 5 hour window")
-    try expectEqual(quota.weeklyRemainingPercent, 48, "mapper should prefer codex weekly window")
+    try expectEqual(quota.fiveHourRemainingPercent, Optional(72), "mapper should prefer codex 5 hour window")
+    try expectEqual(quota.weeklyRemainingPercent, Optional(48), "mapper should prefer codex weekly window")
 }
 
 func testAppServerQuotaMapperFallsBackToTopLevelRateLimits() throws {
@@ -656,8 +697,8 @@ func testAppServerQuotaMapperFallsBackToTopLevelRateLimits() throws {
 
     let quota = try CodexAppServerQuotaMapper.quotaValues(from: data)
 
-    try expectEqual(quota.fiveHourRemainingPercent, 61, "mapper should read top-level 5 hour window")
-    try expectEqual(quota.weeklyRemainingPercent, 35, "mapper should read top-level weekly window")
+    try expectEqual(quota.fiveHourRemainingPercent, Optional(61), "mapper should read top-level 5 hour window")
+    try expectEqual(quota.weeklyRemainingPercent, Optional(35), "mapper should read top-level weekly window")
 }
 
 func testAppServerQuotaMapperClampsRemainingPercent() throws {
@@ -666,8 +707,8 @@ func testAppServerQuotaMapperClampsRemainingPercent() throws {
 
     let quota = try CodexAppServerQuotaMapper.quotaValues(from: data)
 
-    try expectEqual(quota.fiveHourRemainingPercent, 100, "mapper should clamp remaining above 100")
-    try expectEqual(quota.weeklyRemainingPercent, 0, "mapper should clamp remaining below 0")
+    try expectEqual(quota.fiveHourRemainingPercent, Optional(100), "mapper should clamp remaining above 100")
+    try expectEqual(quota.weeklyRemainingPercent, Optional(0), "mapper should clamp remaining below 0")
 }
 
 func testAppServerQuotaMapperReadsResetTimes() throws {
@@ -676,22 +717,25 @@ func testAppServerQuotaMapperReadsResetTimes() throws {
 
     let quota = try CodexAppServerQuotaMapper.quotaValues(from: data)
 
-    try expectEqual(quota.fiveHourRemainingPercent, 0, "mapper should read exhausted 5 hour quota")
-    try expectEqual(quota.weeklyRemainingPercent, 0, "mapper should read exhausted weekly quota")
+    try expectEqual(quota.fiveHourRemainingPercent, Optional(0), "mapper should read exhausted 5 hour quota")
+    try expectEqual(quota.weeklyRemainingPercent, Optional(0), "mapper should read exhausted weekly quota")
     try expectEqual(quota.fiveHourResetsAt, Date(timeIntervalSince1970: 1_781_189_000), "mapper should read five hour reset date")
     try expectEqual(quota.weeklyResetsAt, Date(timeIntervalSince1970: 1_781_189_000), "mapper should read weekly reset date")
 }
 
-func testAppServerQuotaMapperRequiresBothWindows() throws {
-    let codex = appServerSnapshot(primaryUsed: 28, primaryDuration: 300, secondaryUsed: nil, secondaryDuration: nil)
+func testAppServerQuotaMapperAllowsWeeklyOnlyWindow() throws {
+    let codex = appServerSnapshot(
+        primaryUsed: nil,
+        primaryDuration: nil,
+        secondaryUsed: 55,
+        secondaryDuration: 10_080
+    )
     let data = appServerRateLimitsResponse(rateLimitsByLimitId: #"{"codex": \#(codex)}"#)
 
-    do {
-        _ = try CodexAppServerQuotaMapper.quotaValues(from: data)
-        throw TestFailure(description: "mapper should reject incomplete app-server quota data")
-    } catch CodexAppServerQuotaError.missingQuota {
-        // expected
-    }
+    let quota = try CodexAppServerQuotaMapper.quotaValues(from: data)
+
+    try expectEqual(quota.fiveHourRemainingPercent, nil, "mapper should keep weekly-only result with missing five-hour")
+    try expectEqual(quota.weeklyRemainingPercent, Optional(45), "mapper should read weekly percent when weekly-only window is present")
 }
 
 func testAppServerQuotaMapperFallsBackToPrimarySecondaryWhenDurationsAreMissing() throws {
@@ -700,8 +744,8 @@ func testAppServerQuotaMapperFallsBackToPrimarySecondaryWhenDurationsAreMissing(
 
     let quota = try CodexAppServerQuotaMapper.quotaValues(from: data)
 
-    try expectEqual(quota.fiveHourRemainingPercent, 70, "mapper should use primary as 5 hour when durations are missing")
-    try expectEqual(quota.weeklyRemainingPercent, 45, "mapper should use secondary as weekly when durations are missing")
+    try expectEqual(quota.fiveHourRemainingPercent, Optional(70), "mapper should use primary as 5 hour when durations are missing")
+    try expectEqual(quota.weeklyRemainingPercent, Optional(45), "mapper should use secondary as weekly when durations are missing")
 }
 
 func testAppServerQuotaMapperIgnoresIndividualLimitRemainingPercent() throws {
@@ -710,8 +754,8 @@ func testAppServerQuotaMapperIgnoresIndividualLimitRemainingPercent() throws {
 
     let quota = try CodexAppServerQuotaMapper.quotaValues(from: data)
 
-    try expectEqual(quota.fiveHourRemainingPercent, 72, "mapper should not use individual limit for 5 hour quota")
-    try expectEqual(quota.weeklyRemainingPercent, 48, "mapper should not use individual limit for weekly quota")
+    try expectEqual(quota.fiveHourRemainingPercent, Optional(72), "mapper should not use individual limit for 5 hour quota")
+    try expectEqual(quota.weeklyRemainingPercent, Optional(48), "mapper should not use individual limit for weekly quota")
 }
 
 func testAppServerJSONRPCFramerBuildsContentLengthRequest() throws {
@@ -757,8 +801,8 @@ func testAppServerJSONRPCFramerDecodesMessagesAndFindsTargetResponse() throws {
     let quota = try CodexAppServerQuotaMapper.quotaValues(from: target)
 
     try expectEqual(messages.count, 2, "framer should decode both framed messages")
-    try expectEqual(quota.fiveHourRemainingPercent, 72, "framer should select target response result")
-    try expectEqual(quota.weeklyRemainingPercent, 48, "framer should select target response result")
+    try expectEqual(quota.fiveHourRemainingPercent, Optional(72), "framer should select target response result")
+    try expectEqual(quota.weeklyRemainingPercent, Optional(48), "framer should select target response result")
 }
 
 func testAppServerJSONRPCLineCodecBuildsRequest() throws {
@@ -801,8 +845,8 @@ func testAppServerJSONRPCLineCodecDecodesMessagesAndFindsTargetResponse() throws
     let quota = try CodexAppServerQuotaMapper.quotaValues(from: target)
 
     try expectEqual(messages.count, 2, "line codec should decode each newline-delimited JSON message")
-    try expectEqual(quota.fiveHourRemainingPercent, 70, "line codec should select target response result")
-    try expectEqual(quota.weeklyRemainingPercent, 95, "line codec should select target response result")
+    try expectEqual(quota.fiveHourRemainingPercent, Optional(70), "line codec should select target response result")
+    try expectEqual(quota.weeklyRemainingPercent, Optional(95), "line codec should select target response result")
 }
 
 struct FakeAppServerTransport: CodexAppServerTransport {
@@ -820,8 +864,8 @@ func testAppServerQuotaCollectorUsesTransportFixture() throws {
 
     let quota = try collector.fetchQuota()
 
-    try expectEqual(quota.fiveHourRemainingPercent, 72, "collector should return mapped 5 hour quota")
-    try expectEqual(quota.weeklyRemainingPercent, 48, "collector should return mapped weekly quota")
+    try expectEqual(quota.fiveHourRemainingPercent, Optional(72), "collector should return mapped 5 hour quota")
+    try expectEqual(quota.weeklyRemainingPercent, Optional(48), "collector should return mapped weekly quota")
 }
 
 func testAppServerQuotaCollectorPropagatesMissingQuotaWithoutClearingStore() throws {
@@ -904,8 +948,8 @@ func testAppServerQuotaCollectorRetriesTwiceAndSucceedsOnThirdAttempt() throws {
 
     try expectEqual(transport.attempts, 3, "collector should try once plus two retries")
     try expectEqual(sleeps, [1, 3], "collector should use planned retry backoff")
-    try expectEqual(quota.fiveHourRemainingPercent, 72, "collector should return quota from successful retry")
-    try expectEqual(quota.weeklyRemainingPercent, 48, "collector should return quota from successful retry")
+    try expectEqual(quota.fiveHourRemainingPercent, Optional(72), "collector should return quota from successful retry")
+    try expectEqual(quota.weeklyRemainingPercent, Optional(48), "collector should return quota from successful retry")
 }
 
 func testAppServerQuotaCollectorFailsAfterThreeAttemptsAndPreservesQuota() throws {
@@ -1022,6 +1066,129 @@ func testQuotaDisplayFormatterUsesNaturalChineseDate() throws {
     try expectEqual(text, "6月3日 09:05", "date text should not zero-pad month or day")
 }
 
+func testTeamSyncParsesEnvironmentFile() throws {
+    let values = TeamSyncConfiguration.parseEnvironmentFile("""
+    WANHE_ENDPOINT="https://meet.example.com/api/usage"
+    WANHE_USER_NAME='张璐'
+    WANHE_COLLECT_DAYS=45
+    # ignored
+    """)
+    try expectEqual(values["WANHE_ENDPOINT"], "https://meet.example.com/api/usage", "team sync should remove double quotes")
+    try expectEqual(values["WANHE_USER_NAME"], "张璐", "team sync should remove single quotes")
+    try expectEqual(values["WANHE_COLLECT_DAYS"], "45", "team sync should read plain values")
+}
+
+func testTeamDeviceUsesHardwareFamilyNames() throws {
+    try expectEqual(TeamDeviceIdentity.friendlyProductName(for: "MacBookPro18,3"), "MacBook Pro", "MacBook Pro model should have a readable label")
+    try expectEqual(TeamDeviceIdentity.friendlyProductName(for: "MacStudio1,1"), "Mac Studio", "Mac Studio model should have a readable label")
+    try expectEqual(TeamDeviceIdentity.friendlyProductName(for: "Macmini9,1"), "Mac mini", "Mac mini model should have a readable label")
+}
+
+func testTeamUsageCollectorBuildsDailySessionDelta() throws {
+    let configuration = TeamSyncConfiguration(
+        endpoint: URL(string: "https://meet.example.com/api/usage")!,
+        token: "test",
+        userID: "lu",
+        userName: "张璐",
+        team: "万合创新局",
+        role: "Codex 使用者",
+        codexHome: URL(fileURLWithPath: "/tmp/codex")
+    )
+    let device = TeamDeviceIdentity(id: "mac-1", kind: "mac", name: "Mac Studio", modelIdentifier: "Mac14,13")
+    let data = """
+    {"type":"session_meta","payload":{"model":"gpt-5.6-sol"}}
+    {"type":"event_msg","timestamp":"2026-08-21T01:00:00.000Z","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":80,"cached_input_tokens":20,"cache_write_input_tokens":0,"output_tokens":20,"reasoning_output_tokens":5,"total_tokens":100}}}}
+    {"type":"event_msg","timestamp":"2026-08-21T02:00:00.000Z","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":120,"cached_input_tokens":30,"cache_write_input_tokens":0,"output_tokens":30,"reasoning_output_tokens":8,"total_tokens":150}}}}
+    """.data(using: .utf8)!
+    let sessions = CodexTeamUsageCollector().parseSessionData(
+        data,
+        sessionID: "session-1",
+        configuration: configuration,
+        device: device
+    )
+    try expectEqual(sessions.count, 1, "collector should aggregate a session into one daily record")
+    try expectEqual(sessions.first?.totalTokens, 150, "collector should add cumulative deltas without double counting")
+    try expectEqual(sessions.first?.model, "gpt-5.6-sol", "collector should preserve the session model")
+    try expectEqual(sessions.first?.deviceId, "mac-1", "collector should use the hardware device id")
+}
+
+func testTeamQuotaReportUsesWeeklyPercentAndReset() throws {
+    let reset = Date(timeIntervalSince1970: 2_000)
+    let report = TeamQuotaReport(weeklyRemainingPercent: 79, weeklyResetsAt: reset, updatedAt: Date(timeIntervalSince1970: 1_000))
+    try expectEqual(report.weeklyRemainingPercent, 79, "team quota should keep weekly remaining percent")
+    try expectEqual(report.weeklyUsedPercent, 21, "team quota should derive weekly used percent")
+    try expect(report.weeklyResetsAt != nil, "team quota should include reset time")
+}
+
+func testTeamRankingURLUsesWebsiteOrigin() throws {
+    let configuration = TeamSyncConfiguration(
+        endpoint: URL(string: "https://meet.example.com/api/usage")!, token: "test", userID: "lu", userName: "张璐",
+        team: "万合创新局", role: "Codex 使用者", codexHome: URL(fileURLWithPath: "/tmp/codex")
+    )
+    let service = TeamUsageSyncService(configuration: configuration)
+    try expectEqual(service.websiteURL.absoluteString, "https://meet.example.com/", "website link should use the ranking origin")
+    try expectEqual(service.rankingsURL().absoluteString, "https://meet.example.com/api/rankings?range=today", "menu should fetch today's ranking")
+}
+
+func testTeamRankingDecodesLegacyTodayActivity() throws {
+    let data = """
+    {"updatedAt":"2026-08-21 13:50","members":[{"id":"zlu","name":"张璐","tokens":1200,"sessions":12,"lastActive":"13:13"}]}
+    """.data(using: .utf8)!
+    let ranking = try JSONDecoder().decode(TeamRankingSnapshot.self, from: data)
+    try expectEqual(ranking.members.first?.tokens, 1_200, "legacy ranking should preserve today's token total")
+    try expectEqual(ranking.members.first?.lastActive, "13:13", "legacy ranking should expose its last update time")
+    try expectEqual(ranking.members.first?.officialUsage, nil, "legacy ranking may omit official metadata")
+}
+
+func testOfficialCodexUsageParsesDailyBuckets() throws {
+    let data = """
+    {"summary":{"lifetimeTokens":1200,"peakDailyTokens":700},"dailyUsageBuckets":[{"startDate":"2026-08-20","tokens":500},{"startDate":"2026-08-21","tokens":700}],"threadUsage":null}
+    """.data(using: .utf8)!
+    let report = try OfficialCodexUsageCollector.parse(data, now: Date(timeIntervalSince1970: 1_000))
+    try expectEqual(report.lifetimeTokens, 1_200, "official usage should read lifetime tokens")
+    try expectEqual(report.dailyUsageBuckets.last?.tokens, 700, "official usage should read daily token buckets")
+    try expectEqual(report.dataThrough, "2026-08-21", "official usage should expose its latest settled day")
+}
+
+func testSessionCounterReadsTimestampFromFilenameOnly() throws {
+    let counter = CodexSessionFileCounter()
+    let date = counter.timestampFromFilename("rollout-2026-08-20T15-20-05-01a01e0a-969e-7b82-82e3-cb289445d9be.jsonl")
+    try expect(date != nil, "session counter should read the timestamp encoded in a filename")
+    try expectEqual(Int(date!.timeIntervalSince1970), 1_787_239_205, "session counter should parse the filename without opening its contents")
+}
+
+func testTodayLiveCollectorStartsAtEOFAndCountsOnlyAppendedUsage() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let sessions = root.appendingPathComponent("codex/sessions/2026/08/21")
+    let stateURL = root.appendingPathComponent("state/today-live.json")
+    try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let file = sessions.appendingPathComponent("rollout-2026-08-21T01-00-00-11111111-1111-1111-1111-111111111111.jsonl")
+    try "{\"type\":\"event_msg\",\"payload\":{\"type\":\"user_message\",\"message\":\"private text\"}}\n".write(to: file, atomically: true, encoding: .utf8)
+    let formatter = ISO8601DateFormatter()
+    let now = formatter.date(from: "2026-08-21T03:00:00Z")!
+    try FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: file.path)
+    let collector = TodayCodexUsageCollector(stateURL: stateURL)
+
+    let baseline = collector.collect(codexHome: root.appendingPathComponent("codex"), now: now)
+    try expectEqual(baseline.tokens, 0, "collector should baseline existing files at EOF")
+
+    let appended = "{\"type\":\"event_msg\",\"timestamp\":\"2026-08-21T03:01:00.000Z\",\"payload\":{\"type\":\"token_count\",\"info\":{\"last_token_usage\":{\"total_tokens\":50},\"total_token_usage\":{\"total_tokens\":150}}}}\n"
+    let handle = try FileHandle(forWritingTo: file)
+    try handle.seekToEnd()
+    try handle.write(contentsOf: Data(appended.utf8))
+    try handle.close()
+    try FileManager.default.setAttributes([.modificationDate: now.addingTimeInterval(60)], ofItemAtPath: file.path)
+
+    let updated = collector.collect(codexHome: root.appendingPathComponent("codex"), now: now.addingTimeInterval(60))
+    try expectEqual(updated.tokens, 50, "collector should count the newly appended turn only")
+    let unchanged = collector.collect(codexHome: root.appendingPathComponent("codex"), now: now.addingTimeInterval(120))
+    try expectEqual(unchanged.tokens, 50, "collector should not count an appended event twice")
+    let persisted = try String(contentsOf: stateURL, encoding: .utf8)
+    try expect(!persisted.contains("private text"), "collector state must never persist conversation text")
+}
+
 let tests: [(String, () throws -> Void)] = [
     ("waiting wins over working and done", testWaitingTaskWinsOverWorkingAndDone),
     ("working wins without waiting", testWorkingWinsWhenNoWaitingTaskExists),
@@ -1041,6 +1208,8 @@ let tests: [(String, () throws -> Void)] = [
     ("quota extractor reads zero percent and reset dates", testQuotaExtractorReadsZeroPercentAndResetDates),
     ("old JSON decodes without quota", testStateSnapshotDecodesOldJSONWithoutQuota),
     ("state store clear and idle", testStateStoreClearAndIdleTaskRemoval),
+    ("provider quota update keeps existing providers", testStateStoreUpdatesProviderQuotaWithoutReplacingOtherProviderData),
+    ("claude usage parse reads session and weekly", testClaudeUsageQuotaParseSessionAndWeekly),
     ("state JSON keys", testStateFileUsesPlannedJSONKeys),
     ("read preserves quit", testReadPreservesQuitAggregateState),
     ("update quota preserves tasks and aggregate", testUpdateQuotaPreservesTasksAndAggregateState),
@@ -1054,7 +1223,7 @@ let tests: [(String, () throws -> Void)] = [
     ("app-server quota mapper falls back top-level", testAppServerQuotaMapperFallsBackToTopLevelRateLimits),
     ("app-server quota mapper clamps remaining", testAppServerQuotaMapperClampsRemainingPercent),
     ("app-server quota mapper reads reset times", testAppServerQuotaMapperReadsResetTimes),
-    ("app-server quota mapper requires both windows", testAppServerQuotaMapperRequiresBothWindows),
+    ("app-server quota mapper allows weekly-only window", testAppServerQuotaMapperAllowsWeeklyOnlyWindow),
     ("app-server quota mapper falls back primary secondary", testAppServerQuotaMapperFallsBackToPrimarySecondaryWhenDurationsAreMissing),
     ("app-server quota mapper ignores individual limit", testAppServerQuotaMapperIgnoresIndividualLimitRemainingPercent),
     ("app-server JSON-RPC framer builds request", testAppServerJSONRPCFramerBuildsContentLengthRequest),
@@ -1069,7 +1238,16 @@ let tests: [(String, () throws -> Void)] = [
     ("quota refresh coordinator prevents concurrent refreshes", testQuotaRefreshCoordinatorPreventsConcurrentRefreshes),
     ("quota refresh coordinator throttles repeated logs", testQuotaRefreshCoordinatorThrottlesRepeatedFailureLogs),
     ("quota display formatter omits zero units", testQuotaDisplayFormatterOmitsZeroUnits),
-    ("quota display formatter uses natural date", testQuotaDisplayFormatterUsesNaturalChineseDate)
+    ("quota display formatter uses natural date", testQuotaDisplayFormatterUsesNaturalChineseDate),
+    ("team sync parses environment", testTeamSyncParsesEnvironmentFile),
+    ("team device uses hardware names", testTeamDeviceUsesHardwareFamilyNames),
+    ("team usage collector aggregates deltas", testTeamUsageCollectorBuildsDailySessionDelta),
+    ("team quota report uses weekly data", testTeamQuotaReportUsesWeeklyPercentAndReset),
+    ("team ranking URL uses website origin", testTeamRankingURLUsesWebsiteOrigin),
+    ("team ranking decodes legacy today activity", testTeamRankingDecodesLegacyTodayActivity),
+    ("official Codex usage parses daily buckets", testOfficialCodexUsageParsesDailyBuckets),
+    ("session counter uses filenames only", testSessionCounterReadsTimestampFromFilenameOnly),
+    ("today live collector tails appended usage only", testTodayLiveCollectorStartsAtEOFAndCountsOnlyAppendedUsage)
 ]
 
 var failures = 0
