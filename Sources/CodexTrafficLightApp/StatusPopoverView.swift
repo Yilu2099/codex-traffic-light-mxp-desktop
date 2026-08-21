@@ -215,7 +215,10 @@ struct StatusPopoverView: View {
                     Text(memberQuotaText(member))
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(member.weeklyQuota == nil ? muted : green)
-                        .fixedSize(horizontal: false, vertical: true)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.82)
+                        .allowsTightening(true)
+                        .layoutPriority(1)
                 }
                 Spacer(minLength: 8)
                 VStack(alignment: .trailing, spacing: 4) {

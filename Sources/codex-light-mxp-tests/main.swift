@@ -1054,8 +1054,8 @@ func testQuotaRefreshCountdownUsesHoursBelowOneDay() throws {
     let now = Date(timeIntervalSince1970: 10_000)
     try expectEqual(
         QuotaDisplayFormatter.refreshCountdownText(until: now.addingTimeInterval(5 * 86_400 + 18 * 3_600), now: now),
-        "5天18小时后刷新",
-        "refresh countdown should show days and hours"
+        "5天后刷新",
+        "refresh countdown should only show whole days at or above one day"
     )
     try expectEqual(
         QuotaDisplayFormatter.refreshCountdownText(until: now.addingTimeInterval(18 * 3_600), now: now),
