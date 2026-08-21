@@ -1312,6 +1312,31 @@ func testProjectActivityStoreKeepsOnlySanitizedProjectAudit() throws {
     try expect(!stored.contains("sensitive-session-id"), "project audit ledger must hash session identifiers")
 }
 
+func testDesktopMonitorInstallerMigratesPackagedMonitor() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("codex-monitor-installer-\(UUID().uuidString)")
+    let release = root.appendingPathComponent("release")
+    let home = root.appendingPathComponent("home")
+    try FileManager.default.createDirectory(at: release, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try "#!/bin/zsh\necho audit\n".write(
+        to: release.appendingPathComponent("codex-light-codex-monitor"), atomically: true, encoding: .utf8
+    )
+    try "<string>__MONITOR_PATH__</string><string>__HOME__</string>".write(
+        to: release.appendingPathComponent("com.codex.traffic-light-codex-monitor.plist.template"), atomically: true, encoding: .utf8
+    )
+
+    let installed = try DesktopMonitorInstaller.install(from: release, home: home, restartService: false)
+    try expect(installed, "packaged desktop monitor should install on first launch")
+    let monitor = home.appendingPathComponent(".codex/bin/codex-light-codex-monitor")
+    let plist = home.appendingPathComponent("Library/LaunchAgents/com.codex.traffic-light-codex-monitor.plist")
+    try expectEqual(try String(contentsOf: monitor, encoding: .utf8), "#!/bin/zsh\necho audit\n", "installer should copy the packaged monitor")
+    let rendered = try String(contentsOf: plist, encoding: .utf8)
+    try expect(rendered.contains(monitor.path), "installer should render the exact monitor path")
+    try expect(rendered.contains(home.path), "installer should render the exact home path")
+    let unchanged = try DesktopMonitorInstaller.install(from: release, home: home, restartService: false)
+    try expect(!unchanged, "unchanged monitor installation should not restart or rewrite")
+}
+
 let tests: [(String, () throws -> Void)] = [
     ("waiting wins over working and done", testWaitingTaskWinsOverWorkingAndDone),
     ("working wins without waiting", testWorkingWinsWhenNoWaitingTaskExists),
@@ -1376,6 +1401,7 @@ let tests: [(String, () throws -> Void)] = [
     ("session counter uses filename and metadata only", testSessionCounterUsesFilenameAndMetadataWithoutReadingContents),
     ("today live collector tails appended usage only", testTodayLiveCollectorStartsAtEOFAndCountsOnlyAppendedUsage),
     ("project audit sanitizes workspace and session", testProjectActivityStoreKeepsOnlySanitizedProjectAudit),
+    ("desktop monitor installer migrates packaged monitor", testDesktopMonitorInstallerMigratesPackagedMonitor),
     ("client version comparison", testClientVersionComparison),
     ("client update signature verification", testClientUpdateVerifierAcceptsReleaseSignature),
     ("client update configuration", testClientUpdateConfigurationUsesTeamServerOrigin)

@@ -15,6 +15,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
     private let quotaRefreshCoordinator = QuotaRefreshCoordinator()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if let release = Bundle.main.executableURL?.deletingLastPathComponent() {
+            do {
+                try DesktopMonitorInstaller.install(from: release)
+            } catch DesktopMonitorInstallerError.packageMissing(_) {
+                // Local development builds do not contain the packaged monitor files.
+            } catch {
+                AppDelegate.appendTeamSyncLog("desktop monitor install failed: \(error)")
+            }
+        }
         statusBar.delegate = self
         currentSnapshot = store.read()
         statusBar.apply(snapshot: currentSnapshot)

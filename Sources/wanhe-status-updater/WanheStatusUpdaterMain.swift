@@ -104,7 +104,7 @@ struct WanheStatusUpdater {
         }
         try fileManager.moveItem(at: payload, to: release)
 
-        try installDesktopMonitor(from: release, home: home)
+        try DesktopMonitorInstaller.install(from: release, home: home)
 
         let current = appRoot.appendingPathComponent("current")
         let previousTarget = try? fileManager.destinationOfSymbolicLink(atPath: current.path)
@@ -160,41 +160,6 @@ struct WanheStatusUpdater {
             let link = bin.appendingPathComponent(name)
             try? FileManager.default.removeItem(at: link)
             try? FileManager.default.createSymbolicLink(atPath: link.path, withDestinationPath: "../../.wanhe-codex-token/app/current/\(name)")
-        }
-    }
-
-    static func installDesktopMonitor(from release: URL, home: URL) throws {
-        let fileManager = FileManager.default
-        let bin = home.appendingPathComponent(".codex/bin", isDirectory: true)
-        let launchAgents = home.appendingPathComponent("Library/LaunchAgents", isDirectory: true)
-        try fileManager.createDirectory(at: bin, withIntermediateDirectories: true)
-        try fileManager.createDirectory(at: launchAgents, withIntermediateDirectories: true)
-
-        let monitor = bin.appendingPathComponent("codex-light-codex-monitor")
-        let monitorNext = bin.appendingPathComponent("codex-light-codex-monitor.next")
-        try? fileManager.removeItem(at: monitorNext)
-        try fileManager.copyItem(at: release.appendingPathComponent("codex-light-codex-monitor"), to: monitorNext)
-        try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: monitorNext.path)
-        guard rename(monitorNext.path, monitor.path) == 0 else {
-            throw UpdateFailure.commandFailed("monitor rename errno=\(errno)")
-        }
-
-        let template = try String(
-            contentsOf: release.appendingPathComponent("com.codex.traffic-light-codex-monitor.plist.template"),
-            encoding: .utf8
-        )
-        let plist = launchAgents.appendingPathComponent("com.codex.traffic-light-codex-monitor.plist")
-        let rendered = template
-            .replacingOccurrences(of: "__MONITOR_PATH__", with: monitor.path)
-            .replacingOccurrences(of: "__HOME__", with: home.path)
-        try rendered.write(to: plist, atomically: true, encoding: .utf8)
-
-        let service = "gui/\(getuid())/com.codex.traffic-light-codex-monitor"
-        let domain = "gui/\(getuid())"
-        _ = run("/bin/launchctl", ["bootout", service])
-        let bootstrap = run("/bin/launchctl", ["bootstrap", domain, plist.path])
-        guard bootstrap.status == 0 else {
-            throw UpdateFailure.commandFailed("monitor bootstrap \(bootstrap.output)")
         }
     }
 
