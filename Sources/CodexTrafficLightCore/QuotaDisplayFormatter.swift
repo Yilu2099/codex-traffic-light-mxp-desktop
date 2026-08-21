@@ -6,6 +6,19 @@ public enum QuotaResetUnitStyle {
 }
 
 public enum QuotaDisplayFormatter {
+    public static func refreshCountdownText(until resetsAt: Date, now: Date = Date()) -> String {
+        let seconds = max(0, Int(resetsAt.timeIntervalSince(now).rounded(.up)))
+        if seconds <= 0 { return "即将刷新" }
+
+        let totalHours = max(1, Int(ceil(Double(seconds) / 3_600.0)))
+        let days = totalHours / 24
+        let hours = totalHours % 24
+        if days > 0 {
+            return hours > 0 ? "\(days)天\(hours)小时后刷新" : "\(days)天后刷新"
+        }
+        return "\(totalHours)小时后刷新"
+    }
+
     public static func relativeResetText(until resetsAt: Date, now: Date = Date(), unitStyle: QuotaResetUnitStyle) -> String {
         let seconds = max(0, Int(resetsAt.timeIntervalSince(now).rounded(.up)))
         if seconds <= 0 {

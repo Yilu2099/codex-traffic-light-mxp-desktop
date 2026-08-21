@@ -116,7 +116,7 @@ final class StatusBarController {
 
         return [
             "周额度剩余：\(percentText)",
-            "距离刷新：\(QuotaDisplayFormatter.relativeResetText(until: resetsAt, unitStyle: .daysAndHours))",
+            "距离刷新：\(QuotaDisplayFormatter.refreshCountdownText(until: resetsAt))",
             "刷新时间：\(QuotaDisplayFormatter.absoluteDateTimeText(resetsAt))"
         ]
     }

@@ -1050,6 +1050,25 @@ func testQuotaDisplayFormatterOmitsZeroUnits() throws {
     )
 }
 
+func testQuotaRefreshCountdownUsesHoursBelowOneDay() throws {
+    let now = Date(timeIntervalSince1970: 10_000)
+    try expectEqual(
+        QuotaDisplayFormatter.refreshCountdownText(until: now.addingTimeInterval(5 * 86_400 + 18 * 3_600), now: now),
+        "5天18小时后刷新",
+        "refresh countdown should show days and hours"
+    )
+    try expectEqual(
+        QuotaDisplayFormatter.refreshCountdownText(until: now.addingTimeInterval(18 * 3_600), now: now),
+        "18小时后刷新",
+        "refresh countdown below one day should only show hours"
+    )
+    try expectEqual(
+        QuotaDisplayFormatter.refreshCountdownText(until: now.addingTimeInterval(30), now: now),
+        "1小时后刷新",
+        "refresh countdown below one hour should round up to one hour"
+    )
+}
+
 func testQuotaDisplayFormatterUsesNaturalChineseDate() throws {
     var components = DateComponents()
     components.calendar = Calendar(identifier: .gregorian)
@@ -1247,6 +1266,7 @@ let tests: [(String, () throws -> Void)] = [
     ("quota refresh coordinator prevents concurrent refreshes", testQuotaRefreshCoordinatorPreventsConcurrentRefreshes),
     ("quota refresh coordinator throttles repeated logs", testQuotaRefreshCoordinatorThrottlesRepeatedFailureLogs),
     ("quota display formatter omits zero units", testQuotaDisplayFormatterOmitsZeroUnits),
+    ("quota refresh countdown uses hours below one day", testQuotaRefreshCountdownUsesHoursBelowOneDay),
     ("quota display formatter uses natural date", testQuotaDisplayFormatterUsesNaturalChineseDate),
     ("team sync parses environment", testTeamSyncParsesEnvironmentFile),
     ("team device uses hardware names", testTeamDeviceUsesHardwareFamilyNames),

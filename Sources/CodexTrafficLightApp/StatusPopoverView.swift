@@ -324,9 +324,9 @@ struct StatusPopoverView: View {
 
     private func memberQuotaText(_ member: TeamRankingMember) -> String {
         guard let quota = member.weeklyQuota else {
-            return "额度待同步 · 刷新待更新"
+            return "周额度待同步 · 刷新待更新"
         }
-        return "额度 \(quota.weeklyRemainingPercent)% · \(memberQuotaResetText(quota.weeklyResetsAt))"
+        return "周额度 \(quota.weeklyRemainingPercent)% · \(memberQuotaResetText(quota.weeklyResetsAt))"
     }
 
     private func memberQuotaResetText(_ value: String?) -> String {
@@ -338,11 +338,7 @@ struct StatusPopoverView: View {
         guard let date = precise.date(from: value) ?? relaxed.date(from: value) else {
             return "刷新时间待更新"
         }
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "zh_CN")
-        formatter.timeZone = .current
-        formatter.dateFormat = "MM/dd HH:mm"
-        return "\(formatter.string(from: date)) 刷新"
+        return QuotaDisplayFormatter.refreshCountdownText(until: date)
     }
 
     private func localAvatar(_ member: TeamRankingMember) -> NSImage? {
@@ -366,7 +362,7 @@ struct StatusPopoverView: View {
 
     private var resetRelativeText: String {
         guard let date = weeklyQuota?.resetsAt else { return "暂无数据" }
-        return QuotaDisplayFormatter.relativeResetText(until: date, unitStyle: .daysAndHours)
+        return QuotaDisplayFormatter.refreshCountdownText(until: date)
     }
 
     private var resetAbsoluteText: String {
