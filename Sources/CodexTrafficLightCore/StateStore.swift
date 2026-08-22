@@ -80,6 +80,9 @@ public final class StateStore {
     }
 
     private static func quotaAnomalyReason(previous: QuotaSnapshot, incoming: QuotaSnapshot, now: Date) -> String? {
+        if [CodexSessionQuotaCollector.source, CodexAppServerQuotaCollector.source].contains(incoming.source) {
+            return nil
+        }
         guard let previousReset = previous.weeklyResetsAt,
               now < previousReset.addingTimeInterval(-5 * 60) else { return nil }
         if let incomingReset = incoming.weeklyResetsAt,

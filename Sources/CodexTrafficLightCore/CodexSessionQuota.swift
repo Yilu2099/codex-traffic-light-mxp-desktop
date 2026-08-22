@@ -21,6 +21,7 @@ public struct CodexSessionQuotaObservation: Sendable, Equatable {
 /// relying on a second app-server process that can time out behind a proxy.
 public struct CodexSessionQuotaCollector: Sendable {
     public static let source = "codex-session-rate-limits"
+    public static let primaryLimitID = "codex"
 
     private let tailBytes: UInt64
     private let maximumFiles: Int
@@ -86,7 +87,8 @@ public struct CodexSessionQuotaCollector: Sendable {
               let observedAt = Self.isoDate(timestamp),
               let payload = object["payload"] as? [String: Any],
               payload["type"] as? String == "token_count",
-              let limits = payload["rate_limits"] as? [String: Any] else { return nil }
+              let limits = payload["rate_limits"] as? [String: Any],
+              Self.limitID(in: limits) == Self.primaryLimitID else { return nil }
 
         let windows = [limits["primary"], limits["secondary"]].compactMap { $0 as? [String: Any] }
         var weekly: [String: Any]?
@@ -104,6 +106,30 @@ public struct CodexSessionQuotaCollector: Sendable {
 
     private static func remainingPercent(_ used: Double) -> Int {
         min(100, max(0, Int((100 - used).rounded())))
+    }
+
+    private static func limitID(in limits: [String: Any]) -> String? {
+        let value = limits["limit_id"] ?? limits["limitId"]
+        return (value as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    public static func shouldApply(
+        _ observation: CodexSessionQuotaObservation,
+        over existing: QuotaSnapshot?,
+        now: Date,
+        freshness: TimeInterval = 15 * 60
+    ) -> Bool {
+        guard let existing else { return true }
+        if observation.observedAt > existing.updatedAt { return true }
+
+        let age = now.timeIntervalSince(observation.observedAt)
+        guard age >= -60,
+              age <= freshness,
+              existing.weeklyRemainingPercent >= 99,
+              observation.weeklyRemainingPercent < 99,
+              let existingReset = existing.weeklyResetsAt,
+              let observedReset = observation.weeklyResetsAt else { return false }
+        return existingReset.timeIntervalSince(observedReset) > 12 * 60 * 60
     }
 
     private static func resetDate(_ window: [String: Any]) -> Date? {

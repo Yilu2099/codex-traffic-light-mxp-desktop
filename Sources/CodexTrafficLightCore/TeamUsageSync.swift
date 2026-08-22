@@ -215,20 +215,23 @@ public struct TeamQuotaReport: Codable, Equatable, Sendable {
     public var weeklyUsedPercent: Int
     public var weeklyResetsAt: String?
     public var updatedAt: String
+    public var source: String?
 
     enum CodingKeys: String, CodingKey {
         case weeklyRemainingPercent = "weeklyRemainingPercent"
         case weeklyUsedPercent = "weeklyUsedPercent"
         case weeklyResetsAt = "weeklyResetsAt"
         case updatedAt
+        case source
     }
 
-    public init(weeklyRemainingPercent: Int, weeklyResetsAt: Date?, updatedAt: Date) {
+    public init(weeklyRemainingPercent: Int, weeklyResetsAt: Date?, updatedAt: Date, source: String? = nil) {
         let remaining = min(100, max(0, weeklyRemainingPercent))
         self.weeklyRemainingPercent = remaining
         self.weeklyUsedPercent = 100 - remaining
         self.weeklyResetsAt = weeklyResetsAt.map(Self.isoString)
         self.updatedAt = Self.isoString(updatedAt)
+        self.source = source
     }
 
     public static func from(snapshot: StateSnapshot) -> TeamQuotaReport? {
@@ -236,7 +239,8 @@ public struct TeamQuotaReport: Codable, Equatable, Sendable {
         return TeamQuotaReport(
             weeklyRemainingPercent: quota.weeklyRemainingPercent,
             weeklyResetsAt: quota.weeklyResetsAt,
-            updatedAt: quota.updatedAt
+            updatedAt: quota.updatedAt,
+            source: quota.source
         )
     }
 
