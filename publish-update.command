@@ -3,7 +3,7 @@ set -euo pipefail
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
 VERSION="$(/usr/bin/tr -d '[:space:]' < "$DIR/VERSION")"
-REMOTE="${WANHE_UPDATE_REMOTE:-root@116.62.119.214}"
+REMOTE="${WANHE_UPDATE_REMOTE:-wanhe-innovation}"
 DATA_DIR="${WANHE_UPDATE_DATA_DIR:-/opt/wanhe-codex-rank/data}"
 
 "$DIR/build-update-package.command"
