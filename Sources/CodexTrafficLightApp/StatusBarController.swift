@@ -267,8 +267,8 @@ final class StatusBarController {
         let haloAlpha: CGFloat
         if let haloProgress {
             let eased = 1 - pow(1 - haloProgress, 2)
-            haloDiameter = 11.4 + (6.4 * eased)
-            haloAlpha = 0.46 * pow(1 - haloProgress, 1.35)
+            haloDiameter = 13.2 + (4.0 * eased)
+            haloAlpha = 0.48 * (1 - pow(haloProgress, 2.25))
         } else {
             haloDiameter = 13.4 + (2.4 * glow)
             haloAlpha = 0.13 + (0.11 * glow)
@@ -283,19 +283,19 @@ final class StatusBarController {
         NSBezierPath(ovalIn: haloRect).fill()
 
         color.withAlphaComponent(haloAlpha).setStroke()
-        let haloRing = NSBezierPath(ovalIn: haloRect.insetBy(dx: 0.65, dy: 0.65))
-        haloRing.lineWidth = 1.15
+        let haloRing = NSBezierPath(ovalIn: haloRect.insetBy(dx: 0.6, dy: 0.6))
+        haloRing.lineWidth = 1.25
         haloRing.stroke()
 
-        let softGlowRect = NSRect(x: 1.8, y: 1.8, width: 14.4, height: 14.4)
-        color.withAlphaComponent(0.44 * glow).setFill()
+        let softGlowRect = NSRect(x: 2.45, y: 2.45, width: 13.1, height: 13.1)
+        color.withAlphaComponent(0.38 * glow).setFill()
         NSBezierPath(ovalIn: softGlowRect).fill()
 
-        let rimRect = NSRect(x: 2.25, y: 2.25, width: 13.5, height: 13.5)
+        let rimRect = NSRect(x: 2.75, y: 2.75, width: 12.5, height: 12.5)
         (rim ?? color).setFill()
         NSBezierPath(ovalIn: rimRect).fill()
 
-        let coreRect = NSRect(x: 3.15, y: 3.15, width: 11.7, height: 11.7)
+        let coreRect = NSRect(x: 3.65, y: 3.65, width: 10.7, height: 10.7)
         if let coreTop, let coreBottom,
            let gradient = NSGradient(starting: coreTop, ending: coreBottom) {
             NSGraphicsContext.saveGraphicsState()
@@ -308,7 +308,7 @@ final class StatusBarController {
         }
 
         NSColor.white.withAlphaComponent(0.80).setFill()
-        NSBezierPath(ovalIn: NSRect(x: 5.15, y: 10.0, width: 3.25, height: 2.2)).fill()
+        NSBezierPath(ovalIn: NSRect(x: 5.45, y: 9.65, width: 3.0, height: 2.0)).fill()
 
         image.isTemplate = false
         return image
