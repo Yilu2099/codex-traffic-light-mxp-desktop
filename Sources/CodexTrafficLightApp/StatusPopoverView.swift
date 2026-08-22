@@ -212,6 +212,10 @@ struct StatusPopoverView: View {
                         .minimumScaleFactor(0.82)
                         .allowsTightening(true)
                         .layoutPriority(1)
+                    Text(grindActivity(member))
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(warm)
+                        .lineLimit(1)
                     Text(memberQuotaText(member))
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(member.weeklyQuota == nil ? muted : green)
@@ -347,6 +351,10 @@ struct StatusPopoverView: View {
     private func validLastActive(_ member: TeamRankingMember) -> String? {
         guard let lastActive = member.lastActive, !lastActive.isEmpty, lastActive != "-" else { return nil }
         return lastActive
+    }
+
+    private func grindActivity(_ member: TeamRankingMember) -> String {
+        "日搓 \(member.dayGrindTime ?? "--") · 夜搓 \(member.nightGrindTime ?? "--")"
     }
 
     private func memberQuotaText(_ member: TeamRankingMember) -> String {

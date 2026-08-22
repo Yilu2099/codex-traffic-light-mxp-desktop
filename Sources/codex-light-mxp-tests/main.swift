@@ -1232,6 +1232,8 @@ func testSessionCounterUsesFilenameAndMetadataWithoutReadingContents() throws {
     activityFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
     let activityDate = activity?.updatedAt.flatMap { activityFormatter.date(from: $0) }
     try expectEqual(Int(activityDate?.timeIntervalSince1970 ?? 0), Int(modifiedAt.timeIntervalSince1970), "recent activity should come from file metadata")
+    let startedDate = activity?.startedAt.flatMap { activityFormatter.date(from: $0) }
+    try expectEqual(Int(startedDate?.timeIntervalSince1970 ?? 0), Int(date!.timeIntervalSince1970), "session start should come from filename metadata")
 }
 
 func testTodayLiveCollectorStartsAtEOFAndCountsOnlyAppendedUsage() throws {

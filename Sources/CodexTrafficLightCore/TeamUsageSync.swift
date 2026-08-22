@@ -315,6 +315,9 @@ public struct TeamRankingMember: Codable, Equatable, Sendable {
     public var tokens: Int
     public var sessions: Int
     public var lastActive: String?
+    public var grindDay: String?
+    public var dayGrindTime: String?
+    public var nightGrindTime: String?
     public var officialUsage: OfficialUsageSummary?
     public var tokenSource: String?
     public var todayLiveUpdatedAt: String?
@@ -329,6 +332,9 @@ public struct TeamRankingMember: Codable, Equatable, Sendable {
         tokens: Int = 0,
         sessions: Int = 0,
         lastActive: String? = nil,
+        grindDay: String? = nil,
+        dayGrindTime: String? = nil,
+        nightGrindTime: String? = nil,
         officialUsage: OfficialUsageSummary? = nil,
         tokenSource: String? = nil,
         todayLiveUpdatedAt: String? = nil,
@@ -342,6 +348,9 @@ public struct TeamRankingMember: Codable, Equatable, Sendable {
         self.tokens = tokens
         self.sessions = sessions
         self.lastActive = lastActive
+        self.grindDay = grindDay
+        self.dayGrindTime = dayGrindTime
+        self.nightGrindTime = nightGrindTime
         self.officialUsage = officialUsage
         self.tokenSource = tokenSource
         self.todayLiveUpdatedAt = todayLiveUpdatedAt

@@ -37,6 +37,7 @@ public struct OfficialCodexUsageReport: Codable, Equatable, Sendable {
 public struct TeamSessionActivity: Codable, Equatable, Sendable {
     public var sessionId: String
     public var day: String
+    public var startedAt: String?
     public var updatedAt: String?
 }
 
@@ -185,6 +186,7 @@ public struct CodexSessionFileCounter: Sendable {
                 sessions[sessionID] = TeamSessionActivity(
                     sessionId: sessionID,
                     day: dayString(sessionStartedAt),
+                    startedAt: isoString(sessionStartedAt),
                     updatedAt: modifiedAt == .distantPast ? nil : isoString(modifiedAt)
                 )
             }
