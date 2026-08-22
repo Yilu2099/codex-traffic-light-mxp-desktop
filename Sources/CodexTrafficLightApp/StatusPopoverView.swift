@@ -17,13 +17,15 @@ struct StatusPopoverView: View {
     let openGuide: () -> Void
     let quit: () -> Void
 
-    private let canvas = Color(red: 0.988, green: 0.986, blue: 0.980)
+    private let canvas = Color(red: 0.985, green: 0.982, blue: 0.974)
     private let card = Color.white
     private let ink = Color(red: 0.10, green: 0.105, blue: 0.10)
     private let muted = Color(red: 0.43, green: 0.44, blue: 0.42)
     private let line = Color(red: 0.90, green: 0.90, blue: 0.87)
     private let green = Color(red: 0.25, green: 0.52, blue: 0.35)
+    private let dayTint = Color(red: 0.985, green: 0.945, blue: 0.84)
     private let dayInk = Color(red: 0.64, green: 0.39, blue: 0.08)
+    private let nightTint = Color(red: 0.90, green: 0.92, blue: 0.965)
     private let nightInk = Color(red: 0.16, green: 0.28, blue: 0.48)
     private let roster: [(id: String, name: String, avatar: String)] = [
         ("zlu", "张璐", "58.png"),
@@ -41,13 +43,15 @@ struct StatusPopoverView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            quotaStrip
-            rankingHeader
             ScrollView(showsIndicators: false) {
-                LazyVStack(spacing: 0) {
-                    rankingRows
+                VStack(spacing: 12) {
+                    quotaCard
+                    rankingSection
                     versionNote
                 }
+                .padding(.horizontal, 20)
+                .padding(.top, 12)
+                .padding(.bottom, 12)
             }
             footer
         }
@@ -90,6 +94,9 @@ struct StatusPopoverView: View {
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(green)
             }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(green.opacity(0.09), in: Capsule())
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 9)
@@ -97,69 +104,75 @@ struct StatusPopoverView: View {
         .overlay(alignment: .bottom) { line.frame(height: 1) }
     }
 
-    private var quotaStrip: some View {
+    private var quotaCard: some View {
         let quota = weeklyQuota
         let remaining = quota?.remainingPercent
         let balance = Double(remaining ?? 0) / 100
-        return VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .bottom, spacing: 8) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("个人周余额")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(muted)
-                    HStack(alignment: .firstTextBaseline, spacing: 4) {
-                        Text(remaining.map(String.init) ?? "--")
-                            .font(.system(size: 28, weight: .bold, design: .rounded))
-                            .foregroundStyle(ink)
-                        Text("% 剩余")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(muted)
-                    }
-                }
-                Spacer()
-                HStack(alignment: .firstTextBaseline, spacing: 7) {
-                    Text(resetRelativeText)
-                        .font(.system(size: 13, weight: .bold))
+        return HStack(alignment: .bottom, spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("个人周余额")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(muted)
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    Text(remaining.map(String.init) ?? "--")
+                        .font(.system(size: 30, weight: .bold, design: .rounded))
                         .foregroundStyle(ink)
-                    Circle()
-                        .fill(muted.opacity(0.58))
-                        .frame(width: 3, height: 3)
-                    Text(resetAbsoluteText)
-                        .font(.system(size: 10, weight: .medium))
+                    Text("% 剩余")
+                        .font(.system(size: 11, weight: .bold))
                         .foregroundStyle(muted)
                 }
             }
-            ProgressView(value: max(0, min(1, balance)))
-                .tint(green)
-                .scaleEffect(x: 1, y: 1.15, anchor: .center)
-            Text("已用 \(remaining.map { 100 - $0 } ?? 0)%")
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(muted)
+            .frame(width: 102, alignment: .leading)
+
+            VStack(alignment: .leading, spacing: 7) {
+                Text("已用 \(remaining.map { 100 - $0 } ?? 0)%")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(muted)
+                ProgressView(value: max(0, min(1, balance)))
+                    .tint(green)
+                    .scaleEffect(x: 1, y: 1.25, anchor: .center)
+            }
+            .frame(maxWidth: .infinity)
+
+            VStack(alignment: .trailing, spacing: 2) {
+                Text("下次刷新")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(muted)
+                Text(resetRelativeText)
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(ink)
+                Text(resetAbsoluteText)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(muted)
+            }
+            .frame(width: 92, alignment: .trailing)
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 10)
-        .background(card)
-        .overlay(alignment: .bottom) { line.frame(height: 1) }
+        .padding(14)
+        .background(green.opacity(0.025), in: RoundedRectangle(cornerRadius: 17, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 17, style: .continuous).stroke(line, lineWidth: 1))
     }
 
-    private var rankingHeader: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 7) {
-            Text("今日团队活跃")
-                .font(.system(size: 17, weight: .bold, design: .rounded))
-                .foregroundStyle(ink)
-            Text("·")
-                .font(.system(size: 12, weight: .bold))
-                .foregroundStyle(muted)
-            Text("实时")
-                .font(.system(size: 10.5, weight: .bold))
-                .foregroundStyle(green)
-            Spacer()
+    private var rankingSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("今日团队活跃")
+                    .font(.system(size: 17, weight: .bold, design: .rounded))
+                    .foregroundStyle(ink)
+                Spacer()
+                Text("实时")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(green)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 4)
+                    .background(green.opacity(0.08), in: Capsule())
+            }
+
+            VStack(spacing: 0) {
+                rankingRows
+            }
+            .background(card, in: RoundedRectangle(cornerRadius: 17, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 17, style: .continuous).stroke(line, lineWidth: 1))
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 10)
-        .background(card)
-        .overlay(alignment: .bottom) { line.frame(height: 1) }
     }
 
     @ViewBuilder
@@ -174,7 +187,6 @@ struct StatusPopoverView: View {
                 Spacer()
             }
             .padding(18)
-            .background(card)
         } else {
             ForEach(Array(members.enumerated()), id: \.element.id) { index, member in
                 memberRow(member, rank: index + 1)
@@ -190,7 +202,7 @@ struct StatusPopoverView: View {
             HStack(alignment: .center, spacing: 9) {
                 Text("\(rank)")
                     .font(.system(size: 14, weight: .bold, design: .rounded))
-                    .foregroundStyle(ink)
+                    .foregroundStyle(green)
                     .frame(width: 18, alignment: .leading)
                 avatar(member)
                 if member.hasEverJoined {
@@ -209,9 +221,8 @@ struct StatusPopoverView: View {
                     }
                 }
             }
-            .padding(.horizontal, 20)
-            .padding(.vertical, member.hasEverJoined ? 8 : 7)
-            .background(rank.isMultiple(of: 2) ? canvas.opacity(0.48) : card)
+            .padding(.horizontal, 11)
+            .padding(.vertical, 7)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -219,36 +230,34 @@ struct StatusPopoverView: View {
 
     private func joinedMemberDetails(_ member: TeamRankingMember) -> some View {
         let online = member.online ?? (validLastActive(member).map { isOnline($0) } ?? false)
-        return HStack(alignment: .top, spacing: 8) {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 7) {
-                    Text(displayName(member))
-                        .font(.system(size: 15.5, weight: .bold))
-                        .foregroundStyle(ink)
-                        .lineLimit(1)
-                    onlineStatusDot(
-                        isOnline: online,
-                        hasActivity: online || member.tokens > 0 || member.sessions > 0
-                    )
-                    Text(memberActiveText(member))
-                        .font(.system(size: 9.5, weight: .medium))
-                        .foregroundStyle(muted)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.78)
-                }
-                memberQuotaProgress(member)
-                grindActivityLine(member)
-            }
-            Spacer(minLength: 4)
-            VStack(alignment: .trailing, spacing: 1) {
-                Text(formatTokens(member.tokens))
-                    .font(.system(size: 14, weight: .bold, design: .rounded))
+        return VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 7) {
+                Text(displayName(member))
+                    .font(.system(size: 16, weight: .bold))
                     .foregroundStyle(ink)
-                Text("Token")
-                    .font(.system(size: 8.5, weight: .bold))
+                    .lineLimit(1)
+                onlineStatusDot(
+                    isOnline: online,
+                    hasActivity: online || member.tokens > 0 || member.sessions > 0
+                )
+                Text(memberActiveText(member))
+                    .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(muted)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.78)
+                Spacer(minLength: 6)
+                VStack(alignment: .trailing, spacing: 1) {
+                    Text(formatTokens(member.tokens))
+                        .font(.system(size: 13, weight: .bold, design: .rounded))
+                        .foregroundStyle(ink)
+                    Text("Token")
+                        .font(.system(size: 8.5, weight: .bold))
+                        .foregroundStyle(muted)
+                }
+                .fixedSize(horizontal: true, vertical: false)
             }
-            .fixedSize(horizontal: true, vertical: false)
+            memberQuotaProgress(member)
+            grindActivityBand(member)
         }
         .frame(maxWidth: .infinity)
     }
@@ -292,7 +301,7 @@ struct StatusPopoverView: View {
                     .foregroundStyle(ink)
             }
         }
-        .frame(width: 50, height: 50)
+        .frame(width: 56, height: 56)
         .clipShape(Circle())
     }
 
@@ -321,11 +330,11 @@ struct StatusPopoverView: View {
             Button { openWebsite(nil) } label: {
                 Label("打开团队排行榜网站", systemImage: "safari")
                     .font(.system(size: 13, weight: .bold))
-                    .foregroundStyle(green)
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 10)
+                    .padding(.vertical, 9)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.borderedProminent)
+            .tint(green)
             .disabled(model.websiteURL == nil)
         }
         .padding(.horizontal, 20)
@@ -424,32 +433,64 @@ struct StatusPopoverView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func grindActivityLine(_ member: TeamRankingMember) -> some View {
-        HStack(spacing: 14) {
-            grindLineSegment(
-                icon: "sun.max.fill",
-                text: "今日开工 \(member.dayGrindTime ?? "--")",
-                foreground: dayInk
-            )
-            grindLineSegment(
-                icon: "moon.fill",
-                text: "昨日收工 \(member.nightGrindTime ?? "--")",
-                foreground: nightInk
-            )
-            Spacer(minLength: 0)
+    private func grindActivityBand(_ member: TeamRankingMember) -> some View {
+        ZStack {
+            GeometryReader { proxy in
+                let width = proxy.size.width
+                let height = proxy.size.height
+                let middle = width / 2
+                let slant: CGFloat = 7
+                let seam: CGFloat = 1.25
+
+                Path { path in
+                    path.move(to: .zero)
+                    path.addLine(to: CGPoint(x: middle + slant - seam, y: 0))
+                    path.addLine(to: CGPoint(x: middle - slant - seam, y: height))
+                    path.addLine(to: CGPoint(x: 0, y: height))
+                    path.closeSubpath()
+                }
+                .fill(dayTint)
+
+                Path { path in
+                    path.move(to: CGPoint(x: middle + slant + seam, y: 0))
+                    path.addLine(to: CGPoint(x: width, y: 0))
+                    path.addLine(to: CGPoint(x: width, y: height))
+                    path.addLine(to: CGPoint(x: middle - slant + seam, y: height))
+                    path.closeSubpath()
+                }
+                .fill(nightTint)
+            }
+
+            HStack(spacing: 0) {
+                grindBandSegment(
+                    icon: "sun.max.fill",
+                    text: "今日开工 \(member.dayGrindTime ?? "--")",
+                    foreground: dayInk
+                )
+                grindBandSegment(
+                    icon: "moon.fill",
+                    text: "昨日收工 \(member.nightGrindTime ?? "--")",
+                    foreground: nightInk
+                )
+            }
         }
+        .frame(maxWidth: .infinity, minHeight: 25)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(line.opacity(0.55), lineWidth: 0.5))
     }
 
-    private func grindLineSegment(icon: String, text: String, foreground: Color) -> some View {
-        HStack(spacing: 4) {
+    private func grindBandSegment(icon: String, text: String, foreground: Color) -> some View {
+        HStack(spacing: 5) {
             Image(systemName: icon)
-                .font(.system(size: 8.5, weight: .semibold))
+                .font(.system(size: 9, weight: .semibold))
             Text(text)
-                .font(.system(size: 8.8, weight: .semibold))
+                .font(.system(size: 9.5, weight: .semibold))
                 .lineLimit(1)
-                .minimumScaleFactor(0.76)
+                .minimumScaleFactor(0.8)
         }
         .foregroundStyle(foreground)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 3.5)
     }
 
     private func memberQuotaResetText(_ value: String?) -> String {
