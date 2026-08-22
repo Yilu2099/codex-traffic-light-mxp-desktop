@@ -44,6 +44,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
         )
 
         configureTeamIntegration()
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 12) {
+            AppDelegate.ensureUpdaterSchedule()
+        }
     }
 
     private func configureTeamIntegration() {
@@ -267,6 +270,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
             try? handle.write(contentsOf: data)
         } else {
             try? data.write(to: url, options: [.atomic])
+        }
+    }
+
+    private nonisolated static func ensureUpdaterSchedule() {
+        let fileManager = FileManager.default
+        let home = fileManager.homeDirectoryForCurrentUser
+        let plistURL = home
+            .appendingPathComponent("Library/LaunchAgents", isDirectory: true)
+            .appendingPathComponent("com.codex.traffic-light-mxp-updater.plist")
+        guard let data = try? Data(contentsOf: plistURL),
+              var plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+              (plist["StartInterval"] as? NSNumber)?.intValue != 300 else { return }
+        plist["StartInterval"] = 300
+        do {
+            let updated = try PropertyListSerialization.data(
+                fromPropertyList: plist,
+                format: .xml,
+                options: 0
+            )
+            try updated.write(to: plistURL, options: .atomic)
+            let domain = "gui/\(getuid())"
+            _ = runLaunchctl(["bootout", domain, plistURL.path])
+            let result = runLaunchctl(["bootstrap", domain, plistURL.path])
+            if result != 0 {
+                appendTeamSyncLog("updater schedule reload failed: exit=\(result)")
+            }
+        } catch {
+            appendTeamSyncLog("updater schedule update failed: \(error)")
+        }
+    }
+
+    private nonisolated static func runLaunchctl(_ arguments: [String]) -> Int32 {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        process.arguments = arguments
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+            process.waitUntilExit()
+            return process.terminationStatus
+        } catch {
+            return -1
         }
     }
 

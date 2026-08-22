@@ -423,12 +423,12 @@ struct StatusPopoverView: View {
             HStack(spacing: 0) {
                 grindBandSegment(
                     icon: "sun.max.fill",
-                    text: "开工 \(member.dayGrindTime ?? "--")",
+                    text: "今日开工 \(member.dayGrindTime ?? "--")",
                     foreground: dayInk
                 )
                 grindBandSegment(
                     icon: "moon.fill",
-                    text: "收工 \(finishTimeText(member.nightGrindTime))",
+                    text: "昨日收工 \(member.nightGrindTime ?? "--")",
                     foreground: nightInk
                 )
             }
@@ -450,11 +450,6 @@ struct StatusPopoverView: View {
         .foregroundStyle(foreground)
         .frame(maxWidth: .infinity)
         .padding(.vertical, 3.5)
-    }
-
-    private func finishTimeText(_ value: String?) -> String {
-        guard let value, value.count == 5, let hour = Int(value.prefix(2)) else { return "--" }
-        return hour < 5 ? "次日 \(value)" : value
     }
 
     private func memberQuotaResetText(_ value: String?) -> String {

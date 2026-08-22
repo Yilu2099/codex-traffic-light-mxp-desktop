@@ -88,7 +88,7 @@ if [[ "$NO_LAUNCH" != "1" ]]; then
 fi
 
 echo "状态栏已安装：$VERSION"
-echo "自动更新：已启用，每 15 分钟检查"
+echo "自动更新：已启用，每 5 分钟检查"
 echo "更新日志：$HOME/.wanhe-codex-token/logs/updater.log"
 if [[ -n "$BACKUP_DIR" ]]; then
   echo "原安装文件已备份：$BACKUP_DIR"

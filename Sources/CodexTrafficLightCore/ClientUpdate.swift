@@ -54,7 +54,7 @@ public struct ClientUpdateManifest: Codable, Equatable, Sendable {
         signature: String? = nil,
         releaseNotes: String? = nil,
         publishedAt: String? = nil,
-        checkAfterSeconds: Int = 900
+        checkAfterSeconds: Int = 300
     ) {
         self.enabled = enabled
         self.updateAvailable = updateAvailable

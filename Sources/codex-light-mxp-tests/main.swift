@@ -928,6 +928,19 @@ func testClientUpdateVerifierAcceptsReleaseSignature() throws {
     try expect(!ClientUpdateVerifier.verify(version: "1.2.4", sha256: hash, signatureBase64: signature), "changing the release version should invalidate the signature")
 }
 
+func testClientUpdateManifestDefaultsToFiveMinutes() throws {
+    let manifest = ClientUpdateManifest(
+        enabled: true,
+        updateAvailable: false,
+        currentVersion: "1.2.30",
+        latestVersion: "1.2.30",
+        mandatory: false,
+        rolloutEligible: true,
+        rolloutPercentage: 100
+    )
+    try expectEqual(manifest.checkAfterSeconds, 300, "client update checks should default to five minutes")
+}
+
 func testClientUpdateConfigurationUsesTeamServerOrigin() throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     let configURL = root.appendingPathComponent("config.env")
@@ -1039,6 +1052,7 @@ let tests: [(String, () throws -> Void)] = [
     ("desktop monitor installer migrates packaged monitor", testDesktopMonitorInstallerMigratesPackagedMonitor),
     ("client version comparison", testClientVersionComparison),
     ("client update signature verification", testClientUpdateVerifierAcceptsReleaseSignature),
+    ("client update defaults to five minutes", testClientUpdateManifestDefaultsToFiveMinutes),
     ("client update configuration", testClientUpdateConfigurationUsesTeamServerOrigin)
 ]
 
