@@ -189,7 +189,7 @@ struct StatusPopoverView: View {
             .padding(18)
         } else {
             ForEach(Array(members.enumerated()), id: \.element.id) { index, member in
-                memberRow(member, rank: index + 1)
+                memberRow(member)
                 if index < members.count - 1 {
                     line.frame(height: 1)
                 }
@@ -197,13 +197,9 @@ struct StatusPopoverView: View {
         }
     }
 
-    private func memberRow(_ member: TeamRankingMember, rank: Int) -> some View {
+    private func memberRow(_ member: TeamRankingMember) -> some View {
         Button { openWebsite(member.id) } label: {
-            HStack(alignment: .center, spacing: 9) {
-                Text("\(rank)")
-                    .font(.system(size: 14, weight: .bold, design: .rounded))
-                    .foregroundStyle(green)
-                    .frame(width: 18, alignment: .leading)
+            HStack(alignment: .center, spacing: 10) {
                 avatar(member)
                 if member.hasEverJoined {
                     joinedMemberDetails(member)
