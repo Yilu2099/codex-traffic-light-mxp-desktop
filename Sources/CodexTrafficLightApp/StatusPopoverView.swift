@@ -273,9 +273,9 @@ struct StatusPopoverView: View {
 
     private var versionNote: some View {
         Text("v\(ClientVersion.current)")
-            .font(.system(size: 10, weight: .medium, design: .monospaced))
-            .foregroundStyle(muted.opacity(0.72))
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .font(.system(size: 12, weight: .semibold, design: .monospaced))
+            .foregroundStyle(muted.opacity(0.78))
+            .frame(maxWidth: .infinity, alignment: .center)
             .padding(.horizontal, 4)
     }
 
