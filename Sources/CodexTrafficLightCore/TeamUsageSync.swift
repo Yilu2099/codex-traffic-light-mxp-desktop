@@ -773,8 +773,11 @@ public struct TeamUsageSyncService: Sendable {
             sessionActivity: sessionActivity,
             interactionSummary: interactionReport.sessions,
             grindHistory: interactionReport.history,
-            grindHistoryMode: "interaction_v4",
-            projects: ProjectActivityStore().report(days: configuration.collectDays),
+            grindHistoryMode: "interaction_v5",
+            projects: ProjectActivityStore().report(
+                days: configuration.collectDays,
+                codexHome: configuration.codexHome
+            ),
             sessions: calendarUsage
         )
     }

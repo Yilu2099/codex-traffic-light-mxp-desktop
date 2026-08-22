@@ -878,6 +878,7 @@ func testGrindHistoryCollectorReadsOnlyEventTimestamps() throws {
         #"{"timestamp":"2026-08-22T02:03:00.000Z","type":"event_msg","payload":{"type":"user_message","message":"first authored turn"}}"#,
         #"{"timestamp":"2026-08-22T02:03:00.500Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"first authored turn"}]}}"#,
         #"{"timestamp":"2026-08-22T02:08:12.000Z","type":"event_msg","payload":{"type":"user_message"}}"#,
+        #"{"timestamp":"2026-08-22T02:08:12.400Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"second authored turn"}]}}"#,
     ].joined(separator: "\n")
         .write(to: continuedConversation, atomically: true, encoding: .utf8)
     let environmentOnlyConversation = sessions.appendingPathComponent("rollout-2026-08-22T07-31-00-01a02710-a3b7-7a12-8f5e-1de50869504a.jsonl")
@@ -908,8 +909,8 @@ func testGrindHistoryCollectorReadsOnlyEventTimestamps() throws {
     ], "grind history should use the first authored prompt in an old conversation and ignore environment-only setup")
     let continued = report.sessions.first { $0.sessionId == "01a025a7-5636-7730-a6f7-b0c98fae3d95" && $0.day == "2026-08-22" }
     try expectEqual(continued?.dayTurnCount, 2, "interaction summary should deduplicate duplicate encodings of one user turn")
-    try expectEqual(continued?.firstDayUserAt, "2026-08-22T02:03:00.000Z", "interaction summary should retain the first turn in an old conversation")
-    try expectEqual(continued?.lastDayUserAt, "2026-08-22T02:08:12.000Z", "interaction summary should retain the last turn in an old conversation")
+    try expectEqual(continued?.firstDayUserAt, "2026-08-22T02:03:00.500Z", "interaction summary should retain the first authored turn in an old conversation")
+    try expectEqual(continued?.lastDayUserAt, "2026-08-22T02:08:12.400Z", "interaction summary should retain the last authored turn in an old conversation")
 }
 
 func testTodayLiveCollectorStartsAtEOFAndCountsOnlyAppendedUsage() throws {
@@ -1003,6 +1004,35 @@ func testProjectActivityStoreKeepsOnlySanitizedProjectAudit() throws {
     try expect(!stored.contains("sensitive-session-id"), "project audit ledger must hash session identifiers")
 }
 
+func testProjectActivityAddsOnlySanitizedWorkSummary() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("codex-project-summary-\(UUID().uuidString)")
+    let repository = root.appendingPathComponent("创新局")
+    let activityURL = root.appendingPathComponent("support/project-activity.json")
+    let codexHome = root.appendingPathComponent("codex")
+    let sessionURL = codexHome.appendingPathComponent("sessions/2026/08/22/rollout-test.jsonl")
+    try FileManager.default.createDirectory(at: repository.appendingPathComponent(".git"), withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: sessionURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let now = Date()
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    let timestamp = formatter.string(from: now)
+    let lines = [
+        #"{"timestamp":"\#(timestamp)","type":"session_meta","payload":{"cwd":"\#(repository.path)","source":"vscode"}}"#,
+        #"{"timestamp":"\#(timestamp)","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>自动上下文</environment_context>"}]}}"#,
+        #"{"timestamp":"\#(timestamp)","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"请修复 /Users/example/private/project 的开工时间并检查 https://internal.example/token"}]}}"#,
+    ].joined(separator: "\n")
+    try lines.write(to: sessionURL, atomically: true, encoding: .utf8)
+    let store = ProjectActivityStore(activityURL: activityURL)
+    try store.record(workspace: repository.path, taskID: "session:test", now: now)
+    let summary = store.report(days: 30, now: now, codexHome: codexHome).first?.summary ?? ""
+    try expect(summary.contains("请修复"), "project audit should retain a short work description")
+    try expect(summary.contains("[本地项目]"), "project audit should redact full local paths")
+    try expect(summary.contains("[链接]"), "project audit should redact URLs")
+    try expect(!summary.contains("environment_context"), "project audit should ignore injected context")
+    try expect(!summary.contains("/Users/example"), "project audit must not upload full paths")
+}
+
 func testDesktopMonitorInstallerMigratesPackagedMonitor() throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent("codex-monitor-installer-\(UUID().uuidString)")
     let release = root.appendingPathComponent("release")
@@ -1078,6 +1108,7 @@ let tests: [(String, () throws -> Void)] = [
     ("grind history reads event timestamps only", testGrindHistoryCollectorReadsOnlyEventTimestamps),
     ("today live collector tails appended usage only", testTodayLiveCollectorStartsAtEOFAndCountsOnlyAppendedUsage),
     ("project audit sanitizes workspace and session", testProjectActivityStoreKeepsOnlySanitizedProjectAudit),
+    ("project audit adds sanitized work summary", testProjectActivityAddsOnlySanitizedWorkSummary),
     ("desktop monitor installer migrates packaged monitor", testDesktopMonitorInstallerMigratesPackagedMonitor),
     ("client version comparison", testClientVersionComparison),
     ("client update signature verification", testClientUpdateVerifierAcceptsReleaseSignature),

@@ -288,14 +288,17 @@ public struct CodexGrindHistoryCollector: Sendable {
         var type: String?
         var payload: Payload?
 
-        var isUserInteraction: Bool {
-            if type == "event_msg", payload?.type == "user_message" {
-                return payload?.hasUserAuthoredMessage == true
-            }
-            return type == "response_item"
+        var isAuthoredResponse: Bool {
+            type == "response_item"
                 && payload?.type == "message"
                 && payload?.role == "user"
                 && payload?.hasUserAuthoredContent == true
+        }
+
+        var isLegacyUserEvent: Bool {
+            type == "event_msg"
+                && payload?.type == "user_message"
+                && payload?.hasUserAuthoredMessage == true
         }
     }
 
@@ -345,14 +348,28 @@ public struct CodexGrindHistoryCollector: Sendable {
                 let startedAt = CodexSessionFileCounter().timestampFromFilename(url.lastPathComponent) ?? modifiedAt
                 guard max(startedAt, modifiedAt) >= cutoff else { continue }
                 let sessionID = sessionID(from: url)
+                var authoredResponseDates: [Date] = []
+                var legacyEventDates: [Date] = []
+                var isSubagentSession = false
                 enumerateLines(in: url) { line in
+                    if line.contains("\"type\":\"session_meta\"")
+                        && line.contains("\"source\":{\"subagent\"") {
+                        isSubagentSession = true
+                        return
+                    }
                     guard line.contains("\"user_message\"") || line.contains("\"role\":\"user\"") else { return }
                     guard let event = try? JSONDecoder().decode(EventEnvelope.self, from: Data(line.utf8)),
-                          event.isUserInteraction,
                           let timestamp = event.timestamp,
                           let date = Self.isoDate(timestamp) else { return }
-                    recordUserInteraction(date, sessionID: sessionID)
+                    if event.isAuthoredResponse { authoredResponseDates.append(date) }
+                    if event.isLegacyUserEvent { legacyEventDates.append(date) }
                 }
+                guard !isSubagentSession else { continue }
+                // Modern Codex stores authored UI messages as response_item records.
+                // event_msg user_message is only a legacy fallback because modern
+                // files can also contain replay, automation and setup messages there.
+                let dates = authoredResponseDates.isEmpty ? legacyEventDates : authoredResponseDates
+                for date in dates { recordUserInteraction(date, sessionID: sessionID) }
             }
         }
 
