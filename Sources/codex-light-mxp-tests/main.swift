@@ -191,6 +191,34 @@ func testStateFileContainsOnlyCurrentQuotaKeys() throws {
     try expect(!body.contains("aggregate_state") && !body.contains("provider_quotas") && !body.contains("tasks"), "state should not persist removed traffic-light data")
 }
 
+func testStateStoreRejectsImpossibleFullQuotaBeforeKnownReset() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("codex-quota-anomaly-tests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = StateStore(stateURL: root.appendingPathComponent("state.json"))
+    let now = Date(timeIntervalSince1970: 1_780_000_000)
+    let knownReset = now.addingTimeInterval(2 * 86_400)
+    let wrongReset = now.addingTimeInterval(7 * 86_400)
+    _ = try store.updateQuota(
+        weeklyPercent: 28,
+        weeklyResetsAt: knownReset,
+        source: "codex-app-server",
+        now: now
+    )
+    let protected = try store.updateQuota(
+        weeklyPercent: 100,
+        weeklyResetsAt: wrongReset,
+        source: "codex-app-server",
+        now: now.addingTimeInterval(60)
+    )
+    try expectEqual(protected.quota?.weeklyRemainingPercent, 28, "impossible 100 percent should keep previous quota")
+    try expectEqual(protected.quota?.weeklyResetsAt, knownReset, "impossible reset jump should keep previous reset")
+    let anomalies = store.readQuotaAnomalies()
+    try expectEqual(anomalies.count, 1, "rejected quota should be recorded locally")
+    try expectEqual(anomalies.first?.rejected.weeklyRemainingPercent, 100, "rejected value should remain auditable")
+    try expectEqual(anomalies.first?.reason, "unexpected_full_quota_before_known_reset", "rejection reason should be explicit")
+}
+
 func testHookLogLineIncludesEventAndTask() throws {
     let entry = HookLogEntry(
         timestamp: Date(timeIntervalSince1970: 5_000),
@@ -1069,6 +1097,7 @@ let tests: [(String, () throws -> Void)] = [
     ("old JSON decodes without quota", testStateSnapshotDecodesOldJSONWithoutQuota),
     ("legacy provider quota migrates", testStateSnapshotMigratesLegacyCodexProviderQuota),
     ("state JSON contains only current quota", testStateFileContainsOnlyCurrentQuotaKeys),
+    ("state store rejects impossible full quota", testStateStoreRejectsImpossibleFullQuotaBeforeKnownReset),
     ("hook log line", testHookLogLineIncludesEventAndTask),
     ("hook log line includes quota summary", testHookLogLineIncludesQuotaSummary),
     ("hook bridge updates quota and project audit", testHookBridgeUpdatesQuotaAndProjectAudit),
