@@ -1,22 +1,16 @@
 import Foundation
 
 public struct CodexSessionQuotaObservation: Sendable, Equatable {
-    public var fiveHourRemainingPercent: Int?
     public var weeklyRemainingPercent: Int
-    public var fiveHourResetsAt: Date?
     public var weeklyResetsAt: Date?
     public var observedAt: Date
 
     public init(
-        fiveHourRemainingPercent: Int?,
         weeklyRemainingPercent: Int,
-        fiveHourResetsAt: Date?,
         weeklyResetsAt: Date?,
         observedAt: Date
     ) {
-        self.fiveHourRemainingPercent = fiveHourRemainingPercent.map { min(100, max(0, $0)) }
         self.weeklyRemainingPercent = min(100, max(0, weeklyRemainingPercent))
-        self.fiveHourResetsAt = fiveHourResetsAt
         self.weeklyResetsAt = weeklyResetsAt
         self.observedAt = observedAt
     }
@@ -95,28 +89,14 @@ public struct CodexSessionQuotaCollector: Sendable {
               let limits = payload["rate_limits"] as? [String: Any] else { return nil }
 
         let windows = [limits["primary"], limits["secondary"]].compactMap { $0 as? [String: Any] }
-        var fiveHour: [String: Any]?
         var weekly: [String: Any]?
         for window in windows {
             let minutes = Self.int(window["window_minutes"] ?? window["windowDurationMins"])
-            if minutes == 300 { fiveHour = window }
             if minutes == 10_080 { weekly = window }
         }
-        if weekly == nil {
-            weekly = windows.first(where: { Self.int($0["window_minutes"] ?? $0["windowDurationMins"]) ?? 0 > 300 })
-            let allDurationsMissing = windows.allSatisfy {
-                Self.int($0["window_minutes"] ?? $0["windowDurationMins"]) == nil
-            }
-            if weekly == nil, allDurationsMissing {
-                weekly = windows.count > 1 ? windows[1] : windows.first
-            }
-        }
         guard let weekly, let weeklyUsed = Self.double(weekly["used_percent"] ?? weekly["usedPercent"]) else { return nil }
-        let fiveUsed = fiveHour.flatMap { Self.double($0["used_percent"] ?? $0["usedPercent"]) }
         return CodexSessionQuotaObservation(
-            fiveHourRemainingPercent: fiveUsed.map(Self.remainingPercent),
             weeklyRemainingPercent: Self.remainingPercent(weeklyUsed),
-            fiveHourResetsAt: fiveHour.flatMap(Self.resetDate),
             weeklyResetsAt: Self.resetDate(weekly),
             observedAt: observedAt
         )

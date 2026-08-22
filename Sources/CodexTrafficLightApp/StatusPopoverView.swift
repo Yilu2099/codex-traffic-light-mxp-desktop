@@ -462,12 +462,8 @@ struct StatusPopoverView: View {
     }
 
     private var weeklyQuota: (remainingPercent: Int?, resetsAt: Date?)? {
-        guard let snapshot = model.snapshot else { return nil }
-        if let codex = snapshot.providerQuota(for: ProviderQuotaSnapshot.codexProviderID) {
-            return (codex.weeklyRemainingPercent, codex.weeklyResetsAt)
-        }
-        guard let legacy = snapshot.quota else { return nil }
-        return (legacy.weeklyRemainingPercent, legacy.weeklyResetsAt)
+        guard let quota = model.snapshot?.quota else { return nil }
+        return (quota.weeklyRemainingPercent, quota.weeklyResetsAt)
     }
 
     private var resetRelativeText: String {

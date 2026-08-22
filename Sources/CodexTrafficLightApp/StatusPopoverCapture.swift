@@ -8,17 +8,13 @@ enum StatusPopoverCapture {
         let now = Date()
         let model = StatusPopoverModel()
         model.snapshot = StateSnapshot(
-            aggregateState: .idle,
             updatedAt: now,
-            providerQuotas: [
-                ProviderQuotaSnapshot.codexProviderID: ProviderQuotaSnapshot(
-                    source: "preview",
-                    updatedAt: now,
-                    weeklyRemainingPercent: 61,
-                    weeklyResetsAt: now.addingTimeInterval(5 * 86_400 + 22 * 3_600)
-                )
-            ],
-            tasks: [:]
+            quota: QuotaSnapshot(
+                weeklyRemainingPercent: 61,
+                weeklyResetsAt: now.addingTimeInterval(5 * 86_400 + 22 * 3_600),
+                source: "preview",
+                updatedAt: now
+            )
         )
         let previewState = ProcessInfo.processInfo.environment["CODEX_LIGHT_CAPTURE_STATUS_STATE"]
         let rankingJSON: String

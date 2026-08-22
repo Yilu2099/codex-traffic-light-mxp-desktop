@@ -232,19 +232,11 @@ public struct TeamQuotaReport: Codable, Equatable, Sendable {
     }
 
     public static func from(snapshot: StateSnapshot) -> TeamQuotaReport? {
-        if let quota = snapshot.providerQuota(for: ProviderQuotaSnapshot.codexProviderID),
-           let weekly = quota.weeklyRemainingPercent {
-            return TeamQuotaReport(
-                weeklyRemainingPercent: weekly,
-                weeklyResetsAt: quota.weeklyResetsAt,
-                updatedAt: quota.updatedAt
-            )
-        }
-        guard let legacy = snapshot.quota else { return nil }
+        guard let quota = snapshot.quota else { return nil }
         return TeamQuotaReport(
-            weeklyRemainingPercent: legacy.weeklyRemainingPercent,
-            weeklyResetsAt: legacy.weeklyResetsAt,
-            updatedAt: legacy.updatedAt
+            weeklyRemainingPercent: quota.weeklyRemainingPercent,
+            weeklyResetsAt: quota.weeklyResetsAt,
+            updatedAt: quota.updatedAt
         )
     }
 

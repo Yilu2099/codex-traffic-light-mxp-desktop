@@ -1,32 +1,24 @@
 import Foundation
 
 public struct QuotaValues: Equatable, Sendable {
-    public var fiveHourRemainingPercent: Int?
     public var weeklyRemainingPercent: Int?
-    public var fiveHourResetsAt: Date?
     public var weeklyResetsAt: Date?
 
     public init(
-        fiveHourRemainingPercent: Int?,
         weeklyRemainingPercent: Int?,
-        fiveHourResetsAt: Date? = nil,
         weeklyResetsAt: Date? = nil
     ) {
-        self.fiveHourRemainingPercent = fiveHourRemainingPercent.map { min(100, max(0, $0)) }
         self.weeklyRemainingPercent = weeklyRemainingPercent.map { min(100, max(0, $0)) }
-        self.fiveHourResetsAt = fiveHourResetsAt
         self.weeklyResetsAt = weeklyResetsAt
     }
 
     public var summary: String {
-        "\(fiveHourRemainingPercent ?? 0)/\(weeklyRemainingPercent ?? 0)"
+        weeklyRemainingPercent.map { "\($0)%" } ?? "--"
     }
 }
 
 public enum QuotaExtractor {
-    private static let fiveHourKeys = ["five_hour_remaining_percent", "fiveHourRemainingPercent"]
     private static let weeklyKeys = ["weekly_remaining_percent", "weeklyRemainingPercent"]
-    private static let fiveHourResetKeys = ["five_hour_resets_at", "fiveHourResetsAt", "five_hour_reset_at", "fiveHourResetAt"]
     private static let weeklyResetKeys = ["weekly_resets_at", "weeklyResetsAt", "weekly_reset_at", "weeklyResetAt"]
     private static let preferredContainerKeys = ["quota", "rate_limits", "rateLimits"]
 
@@ -69,14 +61,11 @@ public enum QuotaExtractor {
     }
 
     private static func values(in dictionary: [String: Any]) -> QuotaValues? {
-        guard let fiveHour = firstPercent(in: dictionary, keys: fiveHourKeys),
-              let weekly = firstPercent(in: dictionary, keys: weeklyKeys) else {
+        guard let weekly = firstPercent(in: dictionary, keys: weeklyKeys) else {
             return nil
         }
         return QuotaValues(
-            fiveHourRemainingPercent: fiveHour,
             weeklyRemainingPercent: weekly,
-            fiveHourResetsAt: firstDate(in: dictionary, keys: fiveHourResetKeys),
             weeklyResetsAt: firstDate(in: dictionary, keys: weeklyResetKeys)
         )
     }

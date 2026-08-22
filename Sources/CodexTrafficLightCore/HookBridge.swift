@@ -2,26 +2,23 @@ import Foundation
 
 public struct HookBridgeResult: Equatable, Sendable {
     public var eventName: String
-    public var state: LightState
     public var taskID: String
     public var workspace: String?
     public var quotaSummary: String?
-    public var updatedTask: Bool
+    public var recordedProject: Bool
 
     public init(
         eventName: String,
-        state: LightState,
         taskID: String,
         workspace: String?,
         quotaSummary: String?,
-        updatedTask: Bool
+        recordedProject: Bool
     ) {
         self.eventName = eventName
-        self.state = state
         self.taskID = taskID
         self.workspace = workspace
         self.quotaSummary = quotaSummary
-        self.updatedTask = updatedTask
+        self.recordedProject = recordedProject
     }
 }
 
@@ -35,18 +32,12 @@ public enum HookBridge {
     ) throws -> HookBridgeResult {
         let event = HookEvent.parse(jsonData: input, fallbackName: fallbackName)
         let quota = QuotaExtractor.extract(from: input)
-        let quotaOnly = HookMapper.isQuotaOnlyEvent(event.name)
         let workspace = ContextResolver.workspace(explicitWorkspace: nil, hookEvent: event)
         let taskID = ContextResolver.taskID(explicitTaskID: nil, workspace: workspace, hookEvent: event)
-        var snapshot = store.read()
-
         if let quota {
-            if let fiveHour = quota.fiveHourRemainingPercent,
-               let weekly = quota.weeklyRemainingPercent {
-                snapshot = try store.updateQuota(
-                    fiveHourPercent: fiveHour,
+            if let weekly = quota.weeklyRemainingPercent {
+                _ = try store.updateQuota(
                     weeklyPercent: weekly,
-                    fiveHourResetsAt: quota.fiveHourResetsAt,
                     weeklyResetsAt: quota.weeklyResetsAt,
                     source: "codex-hook",
                     now: now
@@ -54,41 +45,20 @@ public enum HookBridge {
             }
         }
 
-        if quotaOnly {
-            return HookBridgeResult(
-                eventName: event.name,
-                state: snapshot.aggregateState == .quit ? .idle : snapshot.aggregateState,
-                taskID: taskID,
-                workspace: workspace,
-                quotaSummary: quota?.summary,
-                updatedTask: false
-            )
-        }
-
-        let state = HookMapper.state(for: event)
-        let message = event.lastAssistantMessage ?? "Codex traffic light: \(state.rawValue)"
-        snapshot = try store.updateTask(
-            taskID: taskID,
-            state: state,
-            workspace: workspace,
-            source: "codex-hook",
-            hookEventName: event.name,
-            message: message,
-            now: now
-        )
-
+        var recordedProject = false
         if let auditWorkspace = event.workspace ?? event.cwd, !auditWorkspace.isEmpty {
             let activityURL = store.stateURL.deletingLastPathComponent().appendingPathComponent("project-activity.json")
-            try? ProjectActivityStore(activityURL: activityURL).record(workspace: auditWorkspace, taskID: taskID, now: now)
+            if (try? ProjectActivityStore(activityURL: activityURL).record(workspace: auditWorkspace, taskID: taskID, now: now)) != nil {
+                recordedProject = true
+            }
         }
 
         return HookBridgeResult(
             eventName: event.name,
-            state: state,
             taskID: taskID,
             workspace: workspace,
             quotaSummary: quota?.summary,
-            updatedTask: true
+            recordedProject: recordedProject
         )
     }
 }

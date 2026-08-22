@@ -1,11 +1,11 @@
-# Add this to ~/.codex/config.toml, then run /hooks in Codex to review/trust it.
+# Optional project-audit hooks. Add to ~/.codex/config.toml and review with /hooks.
 
 [[hooks.UserPromptSubmit]]
 [[hooks.UserPromptSubmit.hooks]]
 type = "command"
 command = "$HOME/.codex/bin/codex-light-hook-mxp UserPromptSubmit"
 timeout = 5
-statusMessage = "Codex traffic light: working"
+statusMessage = "Recording project activity"
 
 [[hooks.PreToolUse]]
 matcher = ".*"
@@ -13,37 +13,14 @@ matcher = ".*"
 type = "command"
 command = "$HOME/.codex/bin/codex-light-hook-mxp PreToolUse"
 timeout = 5
-statusMessage = "Codex traffic light: working"
-
-[[hooks.PermissionRequest]]
-matcher = ".*"
-[[hooks.PermissionRequest.hooks]]
-type = "command"
-command = "$HOME/.codex/bin/codex-light-hook-mxp PermissionRequest"
-timeout = 5
-statusMessage = "Codex traffic light: waiting"
-
-[[hooks.Stop]]
-[[hooks.Stop.hooks]]
-type = "command"
-command = "$HOME/.codex/bin/codex-light-hook-mxp Stop"
-timeout = 5
-statusMessage = "Codex traffic light: done"
-
-[[hooks.SubagentStop]]
-matcher = ".*"
-[[hooks.SubagentStop.hooks]]
-type = "command"
-command = "$HOME/.codex/bin/codex-light-hook-mxp SubagentStop"
-timeout = 5
-statusMessage = "Codex traffic light: subagent done"
+statusMessage = "Recording project activity"
 
 # Optional: enable this only if your Codex version emits a stable quota/rate-limit hook event
-# with five_hour_remaining_percent + weekly_remaining_percent or camelCase equivalents.
+# with weekly_remaining_percent or weeklyRemainingPercent.
 #
 # [[hooks."account/rateLimits/updated"]]
 # [[hooks."account/rateLimits/updated".hooks]]
 # type = "command"
 # command = "$HOME/.codex/bin/codex-light-hook-mxp account/rateLimits/updated"
 # timeout = 5
-# statusMessage = "Codex traffic light: quota updated"
+# statusMessage = "Updating weekly quota"

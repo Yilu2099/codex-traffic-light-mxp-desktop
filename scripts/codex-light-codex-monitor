@@ -1,41 +1,20 @@
 #!/bin/zsh
 set -euo pipefail
 
-STATE_TASK="codex-desktop-fallback-monitor"
-LEGACY_STATE_TASK="codex-appserver-monitor"
 CODEX_HOME_DIR="${CODEX_HOME:-$HOME/.codex}"
 LOG_DB="$CODEX_HOME_DIR/logs_2.sqlite"
 STATE_DB="$CODEX_HOME_DIR/state_5.sqlite"
 STATE_CMD="$HOME/.codex/bin/codex-light-mxp"
-HOOK_LOG="$HOME/Library/Application Support/CodexTrafficLight/hook-mxp.log"
 POLL_SECONDS="${CODEX_LIGHT_MONITOR_POLL_SECONDS:-2}"
 ACTIVE_WINDOW_SECONDS="${CODEX_LIGHT_MONITOR_ACTIVE_WINDOW_SECONDS:-6}"
-DONE_AFTER_IDLE_SECONDS="${CODEX_LIGHT_MONITOR_DONE_AFTER_IDLE_SECONDS:-${CODEX_LIGHT_MONITOR_STALE_CLEAR_SECONDS:-10}}"
-HOOK_ACTIVE_WINDOW_SECONDS="${CODEX_LIGHT_MONITOR_HOOK_ACTIVE_WINDOW_SECONDS:-15}"
 PROJECT_AUDIT_REFRESH_SECONDS="${CODEX_LIGHT_PROJECT_AUDIT_REFRESH_SECONDS:-60}"
 
-last_active=0
-hook_owned=0
 last_project_audit_key=""
 last_project_audit_at=0
-
-"$STATE_CMD" --task "$LEGACY_STATE_TASK" idle >/dev/null 2>&1 || true
 
 while true; do
   now="$(date +%s)"
   if [[ -r "$LOG_DB" && -r "$STATE_DB" && -x "$STATE_CMD" ]]; then
-    hook_updated_at="$(stat -f %m "$HOOK_LOG" 2>/dev/null || echo 0)"
-    if (( hook_updated_at > 0 && now - hook_updated_at <= HOOK_ACTIVE_WINDOW_SECONDS )); then
-      if (( hook_owned == 0 )); then
-        "$STATE_CMD" --task "$STATE_TASK" idle >/dev/null 2>&1 || true
-        hook_owned=1
-      fi
-      last_active=0
-      sleep "$POLL_SECONDS"
-      continue
-    fi
-    hook_owned=0
-
     row="$(
       sqlite3 -separator $'\t' "$LOG_DB" "
         attach database '$STATE_DB' as state_db;
@@ -63,19 +42,14 @@ while true; do
       thread_id="${row%%$'\t'*}"
       rest="${row#*$'\t'}"
       cwd="${rest%%$'\t'*}"
-      [[ -z "$thread_id" ]] && thread_id="$STATE_TASK"
+      [[ -z "$thread_id" ]] && thread_id="codex-desktop"
       [[ -z "$cwd" || "$cwd" == "$rest" ]] && cwd="$PWD"
-      "$STATE_CMD" --task "$STATE_TASK" --workspace "$cwd" working >/dev/null 2>&1 || true
       project_audit_key="$thread_id|$cwd"
       if [[ "$project_audit_key" != "$last_project_audit_key" ]] || (( now - last_project_audit_at >= PROJECT_AUDIT_REFRESH_SECONDS )); then
         "$STATE_CMD" --task "$thread_id" --workspace "$cwd" audit >/dev/null 2>&1 || true
         last_project_audit_key="$project_audit_key"
         last_project_audit_at="$now"
       fi
-      last_active="$now"
-    elif (( last_active > 0 && now - last_active >= DONE_AFTER_IDLE_SECONDS )); then
-      "$STATE_CMD" --task "$STATE_TASK" done >/dev/null 2>&1 || true
-      last_active=0
     fi
   fi
 

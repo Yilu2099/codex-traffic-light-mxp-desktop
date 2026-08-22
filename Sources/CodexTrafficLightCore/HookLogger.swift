@@ -3,7 +3,6 @@ import Foundation
 public struct HookLogEntry {
     public var timestamp: Date
     public var eventName: String
-    public var state: LightState
     public var taskID: String
     public var workspace: String?
     public var result: String
@@ -13,7 +12,6 @@ public struct HookLogEntry {
     public init(
         timestamp: Date = Date(),
         eventName: String,
-        state: LightState,
         taskID: String,
         workspace: String?,
         result: String,
@@ -22,7 +20,6 @@ public struct HookLogEntry {
     ) {
         self.timestamp = timestamp
         self.eventName = eventName
-        self.state = state
         self.taskID = taskID
         self.workspace = workspace
         self.result = result
@@ -44,7 +41,6 @@ public enum HookLogger {
         var parts = [
             formattedTimestamp(entry.timestamp),
             "event=\(field(entry.eventName))",
-            "state=\(entry.state.rawValue)",
             "task=\(field(entry.taskID))",
             "workspace=\(field(entry.workspace ?? "-"))",
             "result=\(field(entry.result))",

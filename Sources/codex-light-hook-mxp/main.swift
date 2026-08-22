@@ -8,7 +8,6 @@ do {
     let result = try HookBridge.apply(input: input, fallbackName: fallbackName)
     HookLogger.append(HookLogEntry(
         eventName: result.eventName,
-        state: result.state,
         taskID: result.taskID,
         workspace: result.workspace,
         result: "ok",
@@ -18,13 +17,11 @@ do {
     print("{}")
 } catch {
     let event = HookEvent.parse(jsonData: input, fallbackName: fallbackName)
-    let state = HookMapper.state(for: event)
     let workspace = ContextResolver.workspace(explicitWorkspace: nil, hookEvent: event)
     let taskID = ContextResolver.taskID(explicitTaskID: nil, workspace: workspace, hookEvent: event)
     let quota = QuotaExtractor.extract(from: input)
     HookLogger.append(HookLogEntry(
         eventName: event.name,
-        state: state,
         taskID: taskID,
         workspace: workspace,
         result: "error",

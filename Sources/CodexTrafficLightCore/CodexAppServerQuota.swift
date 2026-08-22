@@ -34,7 +34,7 @@ public indirect enum CodexAppServerQuotaError: Error, CustomStringConvertible {
         case .retryExhausted(let attempts, let lastError):
             return "App-server quota failed after \(attempts) attempts: \(lastError.description)"
         case .missingQuota:
-            return "App-server response did not include Codex 5-hour or weekly quota"
+            return "App-server response did not include Codex weekly quota"
         }
     }
 
@@ -72,7 +72,6 @@ public indirect enum CodexAppServerQuotaError: Error, CustomStringConvertible {
 }
 
 public enum CodexAppServerQuotaMapper {
-    private static let fiveHourDurationMins = 300
     private static let weeklyDurationMins = 10_080
 
     public static func quotaValues(from data: Data) throws -> QuotaValues {
@@ -105,113 +104,18 @@ public enum CodexAppServerQuotaMapper {
 
     private static func quotaValues(from snapshot: AppServerRateLimitSnapshot) -> QuotaValues? {
         let windows = [snapshot.primary, snapshot.secondary].compactMap { $0 }
-        let fiveHourWindow = windows.first { $0.windowDurationMins == fiveHourDurationMins }
-            ?? fallbackWindow(snapshot.primary, duration: fiveHourDurationMins)
         let weeklyWindow = windows.first { $0.windowDurationMins == weeklyDurationMins }
-            ?? fallbackWindow(snapshot.secondary, duration: weeklyDurationMins)
 
-        guard fiveHourWindow != nil || weeklyWindow != nil else {
-            return nil
-        }
+        guard let weeklyWindow else { return nil }
         return QuotaValues(
-            fiveHourRemainingPercent: fiveHourWindow.map { remainingPercent(fromUsedPercent: $0.usedPercent) },
-            weeklyRemainingPercent: weeklyWindow.map { remainingPercent(fromUsedPercent: $0.usedPercent) },
-            fiveHourResetsAt: fiveHourWindow?.resetsAt,
-            weeklyResetsAt: weeklyWindow?.resetsAt
+            weeklyRemainingPercent: remainingPercent(fromUsedPercent: weeklyWindow.usedPercent),
+            weeklyResetsAt: weeklyWindow.resetsAt
         )
-    }
-
-    private static func fallbackWindow(_ window: AppServerRateLimitWindow?, duration: Int) -> AppServerRateLimitWindow? {
-        guard let window, window.windowDurationMins == nil else {
-            return nil
-        }
-        return window
     }
 
     private static func remainingPercent(fromUsedPercent usedPercent: Double) -> Int {
         let remaining = Int((100 - usedPercent).rounded())
         return min(100, max(0, remaining))
-    }
-}
-
-public enum CodexAppServerJSONRPCFramer {
-    public static func encodeRequest(id: Int, method: String, params: Any? = nil) throws -> Data {
-        var object: [String: Any] = [
-            "jsonrpc": "2.0",
-            "id": id,
-            "method": method
-        ]
-        if let params {
-            object["params"] = params
-        }
-        return try encodeMessage(object)
-    }
-
-    public static func encodeMessage(_ object: [String: Any]) throws -> Data {
-        guard JSONSerialization.isValidJSONObject(object) else {
-            throw CodexAppServerQuotaError.invalidJSON
-        }
-        let body = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
-        let header = "Content-Length: \(body.count)\r\n\r\n"
-        var data = Data(header.utf8)
-        data.append(body)
-        return data
-    }
-
-    public static func decodeMessages(from data: Data) throws -> [Data] {
-        var messages: [Data] = []
-        var offset = 0
-
-        while offset < data.count {
-            guard let headerRange = data.range(of: Data("\r\n\r\n".utf8), in: offset..<data.count) else {
-                throw CodexAppServerQuotaError.invalidFrame("missing header terminator")
-            }
-            let headerData = data[offset..<headerRange.lowerBound]
-            guard let header = String(data: headerData, encoding: .utf8) else {
-                throw CodexAppServerQuotaError.invalidFrame("header is not UTF-8")
-            }
-            let length = try contentLength(from: header)
-            let bodyStart = headerRange.upperBound
-            let bodyEnd = bodyStart + length
-            guard bodyEnd <= data.count else {
-                throw CodexAppServerQuotaError.invalidFrame("body shorter than Content-Length")
-            }
-            messages.append(data[bodyStart..<bodyEnd])
-            offset = bodyEnd
-        }
-
-        return messages
-    }
-
-    public static func resultData(forID id: Int, in messages: [Data]) throws -> Data {
-        for message in messages {
-            guard let object = try JSONSerialization.jsonObject(with: message) as? [String: Any],
-                  let responseID = object["id"] as? Int,
-                  responseID == id else {
-                continue
-            }
-            if let error = object["error"] {
-                throw CodexAppServerQuotaError.appServerReturnedError(String(describing: error))
-            }
-            guard let result = object["result"] else {
-                throw CodexAppServerQuotaError.invalidJSON
-            }
-            return try JSONSerialization.data(withJSONObject: result, options: [.sortedKeys])
-        }
-        throw CodexAppServerQuotaError.responseNotFound(id)
-    }
-
-    private static func contentLength(from header: String) throws -> Int {
-        for line in header.components(separatedBy: "\r\n") {
-            let parts = line.split(separator: ":", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
-            guard parts.count == 2, parts[0].lowercased() == "content-length" else {
-                continue
-            }
-            if let length = Int(parts[1]), length >= 0 {
-                return length
-            }
-        }
-        throw CodexAppServerQuotaError.invalidFrame("missing Content-Length")
     }
 }
 
@@ -326,11 +230,11 @@ public struct CodexAppServerQuotaCollector {
     @discardableResult
     public func fetchAndUpdate(store: StateStore = StateStore(), now: Date = Date()) throws -> StateSnapshot {
         let quota = try fetchQuota()
-        return try store.updateProviderQuota(
-            providerID: ProviderQuotaSnapshot.codexProviderID,
-            fiveHourPercent: quota.fiveHourRemainingPercent,
-            weeklyPercent: quota.weeklyRemainingPercent,
-            fiveHourResetsAt: quota.fiveHourResetsAt,
+        guard let weekly = quota.weeklyRemainingPercent else {
+            throw CodexAppServerQuotaError.missingQuota
+        }
+        return try store.updateQuota(
+            weeklyPercent: weekly,
             weeklyResetsAt: quota.weeklyResetsAt,
             source: Self.source,
             now: now

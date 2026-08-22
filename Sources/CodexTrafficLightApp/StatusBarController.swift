@@ -122,12 +122,8 @@ final class StatusBarController {
     }
 
     private func weeklyQuota(from snapshot: StateSnapshot?) -> (remainingPercent: Int?, resetsAt: Date?)? {
-        guard let snapshot else { return nil }
-        if let codex = snapshot.providerQuota(for: ProviderQuotaSnapshot.codexProviderID) {
-            return (codex.weeklyRemainingPercent, codex.weeklyResetsAt)
-        }
-        guard let legacy = snapshot.quota else { return nil }
-        return (legacy.weeklyRemainingPercent, legacy.weeklyResetsAt)
+        guard let quota = snapshot?.quota else { return nil }
+        return (quota.weeklyRemainingPercent, quota.weeklyResetsAt)
     }
 
     private func updateQuotaIndicator() {
