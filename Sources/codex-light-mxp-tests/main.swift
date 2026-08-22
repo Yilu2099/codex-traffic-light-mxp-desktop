@@ -691,6 +691,31 @@ func testAppServerQuotaMapperReadsCodexLimitByExactDurations() throws {
     try expectEqual(quota.weeklyRemainingPercent, Optional(48), "mapper should prefer codex weekly window")
 }
 
+func testSessionQuotaCollectorUsesNewestCodexRateLimitEvent() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("codex-session-quota-tests-\(UUID().uuidString)", isDirectory: true)
+    let sessions = root.appendingPathComponent("sessions/2026/08/22", isDirectory: true)
+    let archived = root.appendingPathComponent("archived_sessions", isDirectory: true)
+    try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: archived, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let older = #"{"timestamp":"2026-08-22T06:20:00.000Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":63,"window_minutes":10080,"resets_at":1787561781}}}}"#
+    let newer = #"{"timestamp":"2026-08-22T06:30:00.000Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":40,"window_minutes":300,"resets_at":1787390000},"secondary":{"used_percent":72,"window_minutes":10080,"resets_at":1787561781}}}}"#
+    try Data((older + "\n").utf8).write(to: sessions.appendingPathComponent("rollout-old.jsonl"))
+    try Data((newer + "\n").utf8).write(to: archived.appendingPathComponent("rollout-new.jsonl"))
+
+    let observation = CodexSessionQuotaCollector().collect(
+        codexHome: root,
+        now: Date(timeIntervalSince1970: 1_787_389_000),
+        fileMaxAge: 86_400
+    )
+
+    try expectEqual(observation?.weeklyRemainingPercent, 28, "session quota should match newest Codex weekly remaining value")
+    try expectEqual(observation?.fiveHourRemainingPercent, Optional(60), "session quota should identify the 5 hour window")
+    try expectEqual(observation?.weeklyResetsAt, Date(timeIntervalSince1970: 1_787_561_781), "session quota should keep reset time")
+}
+
 func testAppServerQuotaMapperFallsBackToTopLevelRateLimits() throws {
     let topLevel = appServerSnapshot(primaryUsed: 39, primaryDuration: 300, secondaryUsed: 65, secondaryDuration: 10_080)
     let data = appServerRateLimitsResponse(rateLimits: topLevel)
@@ -1398,6 +1423,7 @@ let tests: [(String, () throws -> Void)] = [
     ("hook log line includes quota summary", testHookLogLineIncludesQuotaSummary),
     ("hook bridge updates task and quota", testHookBridgeUpdatesTaskAndQuotaFromPayload),
     ("hook bridge quota-only event does not create task", testHookBridgeQuotaOnlyEventDoesNotCreateTask),
+    ("session quota collector uses newest Codex event", testSessionQuotaCollectorUsesNewestCodexRateLimitEvent),
     ("app-server quota mapper reads codex limit", testAppServerQuotaMapperReadsCodexLimitByExactDurations),
     ("app-server quota mapper falls back top-level", testAppServerQuotaMapperFallsBackToTopLevelRateLimits),
     ("app-server quota mapper clamps remaining", testAppServerQuotaMapperClampsRemainingPercent),

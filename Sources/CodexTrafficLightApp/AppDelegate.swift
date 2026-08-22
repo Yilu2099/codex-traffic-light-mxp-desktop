@@ -69,7 +69,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
             repeats: false
         )
         teamRankingTimer = Timer.scheduledTimer(
-            timeInterval: 5 * 60,
+            timeInterval: 30,
             target: self,
             selector: #selector(teamRankingTimerFired),
             userInfo: nil,
@@ -152,15 +152,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let backgroundStore = StateStore(stateURL: stateURL)
             var lastError: Error?
-            do {
-                let transport = ProcessCodexAppServerTransport(initializeTimeout: 50, rateLimitsTimeout: 20)
-                let collector = CodexAppServerQuotaCollector(
-                    transport: transport,
-                    retryPolicy: CodexAppServerRetryPolicy(retries: 0)
-                )
-                _ = try collector.fetchAndUpdate(store: backgroundStore)
-            } catch {
-                lastError = error
+            let now = Date()
+            let localObservation = CodexSessionQuotaCollector().collect(
+                codexHome: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex"),
+                now: now
+            )
+            let localIsFresh = localObservation.map { now.timeIntervalSince($0.observedAt) <= 15 * 60 } ?? false
+
+            if let localObservation, localIsFresh {
+                let existing = backgroundStore.read().providerQuota(for: ProviderQuotaSnapshot.codexProviderID)
+                if existing == nil || localObservation.observedAt > existing!.updatedAt {
+                    _ = try? backgroundStore.updateProviderQuota(
+                        providerID: ProviderQuotaSnapshot.codexProviderID,
+                        fiveHourPercent: localObservation.fiveHourRemainingPercent,
+                        weeklyPercent: localObservation.weeklyRemainingPercent,
+                        fiveHourResetsAt: localObservation.fiveHourResetsAt,
+                        weeklyResetsAt: localObservation.weeklyResetsAt,
+                        source: CodexSessionQuotaCollector.source,
+                        now: localObservation.observedAt
+                    )
+                }
+            } else {
+                do {
+                    let transport = ProcessCodexAppServerTransport(initializeTimeout: 50, rateLimitsTimeout: 20)
+                    let collector = CodexAppServerQuotaCollector(
+                        transport: transport,
+                        retryPolicy: CodexAppServerRetryPolicy(retries: 0)
+                    )
+                    _ = try collector.fetchAndUpdate(store: backgroundStore)
+                } catch {
+                    lastError = error
+                }
             }
 
             let snapshot = backgroundStore.read()
@@ -172,8 +194,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
 
     private func handleQuotaRefreshCompletion(snapshot: StateSnapshot, error: Error?) {
         quotaRefreshCoordinator.endRefresh(success: error == nil)
+        let previousQuotaUpdatedAt = TeamQuotaReport.from(snapshot: currentSnapshot)?.updatedAt
         currentSnapshot = snapshot
         statusBar.apply(snapshot: currentSnapshot)
+        if error == nil,
+           TeamQuotaReport.from(snapshot: snapshot)?.updatedAt != previousQuotaUpdatedAt {
+            syncTeamData()
+        }
         if let error, let line = quotaRefreshCoordinator.failureLogLine(error: error) {
             AppDelegate.appendQuotaLog(line)
         }
