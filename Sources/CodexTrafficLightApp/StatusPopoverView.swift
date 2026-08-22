@@ -21,7 +21,10 @@ struct StatusPopoverView: View {
     private let muted = Color(red: 0.43, green: 0.44, blue: 0.42)
     private let line = Color(red: 0.90, green: 0.90, blue: 0.87)
     private let green = Color(red: 0.25, green: 0.52, blue: 0.35)
-    private let softSurface = Color(red: 0.955, green: 0.95, blue: 0.93)
+    private let dayTint = Color(red: 0.985, green: 0.945, blue: 0.84)
+    private let dayInk = Color(red: 0.64, green: 0.39, blue: 0.08)
+    private let nightTint = Color(red: 0.90, green: 0.92, blue: 0.965)
+    private let nightInk = Color(red: 0.16, green: 0.28, blue: 0.48)
     private let roster: [(id: String, name: String, avatar: String)] = [
         ("zlu", "张璐", "58.png"),
         ("qiubo", "仇博", "193.png"),
@@ -192,40 +195,35 @@ struct StatusPopoverView: View {
 
     private func memberRow(_ member: TeamRankingMember, rank: Int) -> some View {
         Button { openWebsite(member.id) } label: {
-            HStack(spacing: 8) {
-                Text(String(format: "%02d", rank))
-                    .font(.system(size: 13, weight: .heavy, design: .rounded))
-                    .foregroundStyle(rankColor(rank))
-                    .frame(width: 22)
-                avatar(member)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(displayName(member))
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(ink)
-                        .lineLimit(1)
-                    Text(memberActivity(member))
-                        .font(.system(size: 11, weight: .regular))
-                        .foregroundStyle(muted)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.82)
-                        .allowsTightening(true)
-                        .layoutPriority(1)
-                    Text(memberQuotaText(member))
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(member.weeklyQuota == nil ? muted : green)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.82)
-                        .allowsTightening(true)
-                        .layoutPriority(1)
-                    grindActivityCapsule(member)
+            HStack(alignment: .center, spacing: 10) {
+                rankedAvatar(member, rank: rank)
+                VStack(alignment: .leading, spacing: 7) {
+                    HStack(spacing: 7) {
+                        Text(displayName(member))
+                            .font(.system(size: 17, weight: .bold))
+                            .foregroundStyle(ink)
+                            .lineLimit(1)
+                        Circle()
+                            .fill(member.tokens > 0 || member.sessions > 0 ? green : muted.opacity(0.45))
+                            .frame(width: 5, height: 5)
+                        Text(memberActiveText(member))
+                            .font(.system(size: 10.5, weight: .medium))
+                            .foregroundStyle(muted)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                        Spacer(minLength: 4)
+                        sessionBadge(member)
+                    }
+                    memberQuotaProgress(member)
+                    grindActivityBand(member)
                 }
-                Spacer(minLength: 5)
+                .layoutPriority(1)
                 VStack(alignment: .trailing, spacing: 4) {
                     Text(formatTokens(member.tokens))
-                        .font(.system(size: 15, weight: .bold, design: .rounded))
+                        .font(.system(size: 14, weight: .bold, design: .rounded))
                         .foregroundStyle(ink)
                     Text("Token")
-                        .font(.system(size: 10, weight: .bold))
+                        .font(.system(size: 9, weight: .bold))
                         .foregroundStyle(muted)
                 }
                 .fixedSize(horizontal: true, vertical: false)
@@ -233,11 +231,26 @@ struct StatusPopoverView: View {
                     .font(.system(size: 11, weight: .bold))
                     .foregroundStyle(muted.opacity(0.65))
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 14)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 13)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+
+    private func rankedAvatar(_ member: TeamRankingMember, rank: Int) -> some View {
+        ZStack(alignment: .topLeading) {
+            avatar(member)
+                .padding(.leading, 5)
+                .padding(.top, 5)
+            Text(String(format: "%02d", rank))
+                .font(.system(size: 10, weight: .heavy, design: .rounded))
+                .foregroundStyle(Color.white)
+                .frame(width: 27, height: 27)
+                .background(rankColor(rank), in: Circle())
+                .overlay(Circle().stroke(card, lineWidth: 2))
+        }
+        .frame(width: 63, height: 63)
     }
 
     private func avatar(_ member: TeamRankingMember) -> some View {
@@ -257,7 +270,7 @@ struct StatusPopoverView: View {
                     .foregroundStyle(ink)
             }
         }
-        .frame(width: 50, height: 50)
+        .frame(width: 58, height: 58)
         .clipShape(Circle())
     }
 
@@ -327,20 +340,20 @@ struct StatusPopoverView: View {
         return roster.first(where: { $0.id == member.id.lowercased() })?.name ?? member.id
     }
 
-    private func memberActivity(_ member: TeamRankingMember) -> String {
+    private func memberActiveText(_ member: TeamRankingMember) -> String {
         if member.tokens <= 0 && member.sessions <= 0 {
             return member.hasEverJoined ? "今日暂无使用" : "还未加入"
         }
         if member.tokenSource == "today_live" {
             if let recentTime = validLastActive(member) {
-                return "\(member.sessions)次 · 活跃 \(recentTime)"
+                return "活跃 \(recentTime)"
             }
-            return "\(member.sessions) 次会话"
+            return "今日活跃"
         }
         if let lastActive = member.lastActive, !lastActive.isEmpty, lastActive != "-" {
-            return "\(member.sessions) 次会话 · 更新至 \(lastActive)"
+            return "更新 \(lastActive)"
         }
-        return "\(member.sessions) 次会话 · \(officialDate(member))"
+        return officialDate(member)
     }
 
     private func validLastActive(_ member: TeamRankingMember) -> String? {
@@ -348,31 +361,77 @@ struct StatusPopoverView: View {
         return lastActive
     }
 
-    private func grindActivityCapsule(_ member: TeamRankingMember) -> some View {
-        HStack(spacing: 5) {
-            Image(systemName: "sun.max")
-                .font(.system(size: 9, weight: .medium))
-            Text("日搓 \(member.dayGrindTime ?? "--")")
-            Rectangle()
-                .fill(line)
-                .frame(width: 1, height: 11)
-            Image(systemName: "moon")
-                .font(.system(size: 9, weight: .medium))
-            Text("夜搓 \(member.nightGrindTime ?? "--")")
+    private func sessionBadge(_ member: TeamRankingMember) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 2) {
+            Text("\(member.sessions)")
+                .font(.system(size: 13, weight: .heavy, design: .rounded))
+            Text("次")
+                .font(.system(size: 9, weight: .bold))
         }
-        .font(.system(size: 9.5, weight: .medium))
-        .foregroundStyle(muted)
+        .foregroundStyle(green)
         .padding(.horizontal, 7)
-        .padding(.vertical, 4)
-        .background(softSurface, in: Capsule())
+        .padding(.vertical, 4.5)
+        .background(green.opacity(0.055), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).stroke(green.opacity(0.72), lineWidth: 1))
         .fixedSize(horizontal: true, vertical: false)
     }
 
-    private func memberQuotaText(_ member: TeamRankingMember) -> String {
-        guard let quota = member.weeklyQuota else {
-            return "周余额待同步 · 刷新待更新"
+    private func memberQuotaProgress(_ member: TeamRankingMember) -> some View {
+        HStack(spacing: 7) {
+            if let quota = member.weeklyQuota {
+                Text("周余额 \(quota.weeklyRemainingPercent)%")
+                    .font(.system(size: 9.5, weight: .bold))
+                    .foregroundStyle(green)
+                    .fixedSize(horizontal: true, vertical: false)
+                ProgressView(value: Double(quota.weeklyRemainingPercent) / 100)
+                    .progressViewStyle(.linear)
+                    .tint(green)
+                    .frame(maxWidth: 54)
+                Text(memberQuotaResetText(quota.weeklyResetsAt))
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(muted)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.78)
+            } else {
+                Text("周余额待同步 · 刷新待更新")
+                    .font(.system(size: 9.5, weight: .semibold))
+                    .foregroundStyle(muted)
+            }
         }
-        return "周余额 \(quota.weeklyRemainingPercent)% · \(memberQuotaResetText(quota.weeklyResetsAt))"
+    }
+
+    private func grindActivityBand(_ member: TeamRankingMember) -> some View {
+        HStack(spacing: 0) {
+            grindBandSegment(
+                icon: "sun.max.fill",
+                text: "日搓 \(member.dayGrindTime ?? "--")",
+                foreground: dayInk,
+                background: dayTint
+            )
+            grindBandSegment(
+                icon: "moon.fill",
+                text: "夜搓 \(member.nightGrindTime ?? "--")",
+                foreground: nightInk,
+                background: nightTint
+            )
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(line.opacity(0.6), lineWidth: 0.5))
+    }
+
+    private func grindBandSegment(icon: String, text: String, foreground: Color, background: Color) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: icon)
+                .font(.system(size: 9, weight: .semibold))
+            Text(text)
+                .font(.system(size: 9.5, weight: .semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+        }
+        .foregroundStyle(foreground)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 5.5)
+        .background(background)
     }
 
     private func memberQuotaResetText(_ value: String?) -> String {
