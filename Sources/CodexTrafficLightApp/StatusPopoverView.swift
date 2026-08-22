@@ -138,13 +138,10 @@ struct StatusPopoverView: View {
             ProgressView(value: max(0, min(1, used)))
                 .tint(green)
                 .scaleEffect(x: 1, y: 1.25, anchor: .center)
-            HStack {
-                Text("已用 \(remaining.map { 100 - $0 } ?? 0)%")
-                Spacer()
-                Text("额度不参与排名")
-            }
-            .font(.system(size: 10, weight: .medium))
-            .foregroundStyle(muted)
+            Text("已用 \(remaining.map { 100 - $0 } ?? 0)%")
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(muted)
         }
         .padding(14)
         .background(green.opacity(0.025), in: RoundedRectangle(cornerRadius: 17, style: .continuous))

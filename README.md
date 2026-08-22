@@ -1,6 +1,6 @@
 # Codex Traffic Light MXP
 
-当前内部版本：`v1.2.22`。版本号在 `VERSION` 与 `Sources/CodexTrafficLightCore/ClientUpdate.swift` 两处维护，发布前必须保持一致；状态栏面板会在排行榜列表下方低调显示当前版本。
+当前内部版本：`v1.2.23`。版本号在 `VERSION` 与 `Sources/CodexTrafficLightCore/ClientUpdate.swift` 两处维护，发布前必须保持一致；状态栏面板会在排行榜列表下方低调显示当前版本。
 
 Codex Traffic Light MXP 是一个 macOS 菜单栏和悬浮交通灯工具，用颜色提示 Codex 当前状态：正在执行、等待你处理、已完成或空闲。
 
