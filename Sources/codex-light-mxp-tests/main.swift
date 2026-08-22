@@ -1044,10 +1044,12 @@ func testProjectActivityAddsOnlySanitizedWorkSummary() throws {
     formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
     let purposeTimestamp = formatter.string(from: now.addingTimeInterval(-60))
     let timestamp = formatter.string(from: now)
+    let padding = String(repeating: "x", count: 600_000)
     let lines = [
         #"{"timestamp":"\#(timestamp)","type":"session_meta","payload":{"cwd":"\#(repository.path)","source":"vscode"}}"#,
         #"{"timestamp":"\#(timestamp)","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>自动上下文</environment_context>"}]}}"#,
         #"{"timestamp":"\#(purposeTimestamp)","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"这个项目是一个用于客户提交需求和查看进度的服务平台"}]}}"#,
+        #"{"timestamp":"\#(timestamp)","type":"event_msg","payload":{"padding":"\#(padding)"}}"#,
         #"{"timestamp":"\#(timestamp)","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"请修复 /Users/example/private/project 的开工时间并检查 https://internal.example/token"}]}}"#,
         #"{"timestamp":"\#(timestamp)","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"</image>"}]}}"#,
     ].joined(separator: "\n")

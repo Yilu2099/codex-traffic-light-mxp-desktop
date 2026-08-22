@@ -179,8 +179,7 @@ private struct ProjectConversationSummaryCollector {
             ) else { continue }
             for case let url as URL in enumerator where url.pathExtension == "jsonl" {
                 let modifiedAt = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
-                guard modifiedAt >= cutoff, let data = try? Data(contentsOf: url),
-                      let source = String(data: data, encoding: .utf8) else { continue }
+                guard modifiedAt >= cutoff, let source = Self.relevantSource(from: url) else { continue }
                 var projectID: String?
                 var messages: [(Date, String)] = []
                 var isSubagent = false
@@ -223,6 +222,27 @@ private struct ProjectConversationSummaryCollector {
             }.first
             return ProjectConversationDigest(latest: latest, purpose: purpose?.1, purposeScore: purpose?.2)
         }
+    }
+
+    private static func relevantSource(from url: URL) -> String? {
+        let headLimit = 128 * 1_024
+        let tailLimit = 384 * 1_024
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        guard let size = try? handle.seekToEnd() else { return nil }
+        try? handle.seek(toOffset: 0)
+        let head = (try? handle.read(upToCount: min(Int(size), headLimit))) ?? Data()
+        let headText = String(decoding: head, as: UTF8.self)
+        guard size > UInt64(headLimit) else { return headText }
+
+        let tailStart = size > UInt64(tailLimit) ? size - UInt64(tailLimit) : 0
+        try? handle.seek(toOffset: tailStart)
+        let tail = (try? handle.readToEnd()) ?? Data()
+        var tailText = String(decoding: tail, as: UTF8.self)
+        if tailStart > 0, let newline = tailText.firstIndex(of: "\n") {
+            tailText = String(tailText[tailText.index(after: newline)...])
+        }
+        return headText + "\n" + tailText
     }
 
     private func purposeScore(_ value: String) -> Int {
