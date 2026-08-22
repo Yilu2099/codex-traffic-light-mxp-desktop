@@ -242,16 +242,40 @@ public struct CodexSessionFileCounter: Sendable {
 public struct CodexGrindHistoryCollector: Sendable {
     private struct EventEnvelope: Decodable {
         struct Payload: Decodable {
+            struct Content: Decodable {
+                var type: String?
+                var text: String?
+            }
+
             var type: String?
             var role: String?
+            var content: [Content]?
+
+            var hasUserAuthoredContent: Bool {
+                guard let content, !content.isEmpty else { return true }
+                let systemPrefixes = [
+                    "<recommended_plugins>", "# AGENTS.md instructions", "<environment_context>",
+                    "<app-context>", "<permissions instructions>", "<collaboration_mode>",
+                    "<apps_instructions>", "<plugins_instructions>",
+                ]
+                return content.contains { item in
+                    guard item.type == "input_text" else { return true }
+                    let text = (item.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !text.isEmpty else { return false }
+                    return !systemPrefixes.contains { text.hasPrefix($0) }
+                }
+            }
         }
         var timestamp: String?
         var type: String?
         var payload: Payload?
 
         var isUserInteraction: Bool {
-            (type == "event_msg" && payload?.type == "user_message")
-                || (type == "response_item" && payload?.type == "message" && payload?.role == "user")
+            if type == "event_msg", payload?.type == "user_message" { return true }
+            return type == "response_item"
+                && payload?.type == "message"
+                && payload?.role == "user"
+                && payload?.hasUserAuthoredContent == true
         }
     }
 

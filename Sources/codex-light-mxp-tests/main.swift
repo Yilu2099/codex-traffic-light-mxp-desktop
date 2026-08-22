@@ -878,6 +878,9 @@ func testGrindHistoryCollectorReadsOnlyEventTimestamps() throws {
         #"{"timestamp":"2026-08-22T02:08:12.000Z","type":"event_msg","payload":{"type":"user_message"}}"#,
     ].joined(separator: "\n")
         .write(to: continuedConversation, atomically: true, encoding: .utf8)
+    let environmentOnlyConversation = sessions.appendingPathComponent("rollout-2026-08-22T07-31-00-01a02710-a3b7-7a12-8f5e-1de50869504a.jsonl")
+    try #"{"timestamp":"2026-08-21T23:31:00.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<recommended_plugins>system context</recommended_plugins>"},{"type":"input_text","text":"<environment_context>system context</environment_context>"},{"type":"input_text","text":"<app-context>system context</app-context>"}]}}"#
+        .write(to: environmentOnlyConversation, atomically: true, encoding: .utf8)
     let laterNewConversation = sessions.appendingPathComponent("rollout-2026-08-22T10-57-13-01a02766-a3b7-7a12-8f5e-1de50869504a.jsonl")
     try [
         #"{"timestamp":"2026-08-22T02:57:13.000Z","type":"session_meta","payload":{}}"#,
@@ -891,6 +894,7 @@ func testGrindHistoryCollectorReadsOnlyEventTimestamps() throws {
     try FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: file.path)
     try FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: morningFile.path)
     try FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: continuedConversation.path)
+    try FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: environmentOnlyConversation.path)
     try FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: laterNewConversation.path)
     try FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: afternoonOnly.path)
 
@@ -899,7 +903,7 @@ func testGrindHistoryCollectorReadsOnlyEventTimestamps() throws {
         TeamGrindHistoryDay(grindDay: "2026-08-21", dayGrindTime: nil, nightGrindTime: "02:04"),
         TeamGrindHistoryDay(grindDay: "2026-08-22", dayGrindTime: "10:08", nightGrindTime: nil),
         TeamGrindHistoryDay(grindDay: "2026-08-23", dayGrindTime: "14:15", nightGrindTime: nil),
-    ], "grind history should use the first user prompt even in an older conversation")
+    ], "grind history should use the first authored prompt in an old conversation and ignore environment-only setup")
 }
 
 func testTodayLiveCollectorStartsAtEOFAndCountsOnlyAppendedUsage() throws {
