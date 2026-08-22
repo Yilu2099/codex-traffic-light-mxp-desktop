@@ -54,13 +54,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
         teamSyncConfiguration = configuration
         let websiteURL = TeamUsageSyncService(configuration: configuration).websiteURL
         statusBar.applyTeamRanking(nil, websiteURL: websiteURL, syncDetail: "正在读取团队数据…")
-        Timer.scheduledTimer(
-            timeInterval: 2.5,
-            target: self,
-            selector: #selector(teamRankingTimerFired),
-            userInfo: nil,
-            repeats: false
-        )
+        refreshTeamRanking()
         Timer.scheduledTimer(
             timeInterval: 8,
             target: self,

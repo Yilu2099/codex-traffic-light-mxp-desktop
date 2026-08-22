@@ -166,7 +166,16 @@ struct StatusPopoverView: View {
 
             VStack(spacing: 0) {
                 let members = rankedMembers
-                if !members.isEmpty {
+                if model.ranking == nil {
+                    HStack(spacing: 10) {
+                        ProgressView().controlSize(.small)
+                        Text(model.syncDetail)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(muted)
+                        Spacer()
+                    }
+                    .padding(18)
+                } else if !members.isEmpty {
                     ForEach(Array(members.enumerated()), id: \.element.id) { index, member in
                         memberRow(member)
                         if index < members.count - 1 { line.frame(height: 1) }

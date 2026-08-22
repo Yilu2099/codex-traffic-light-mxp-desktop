@@ -45,8 +45,13 @@ enum StatusPopoverCapture {
             ]}
             """
         }
-        model.ranking = try? JSONDecoder().decode(TeamRankingSnapshot.self, from: Data(rankingJSON.utf8))
-        model.syncDetail = "刚刚同步"
+        if previewState == "loading" {
+            model.ranking = nil
+            model.syncDetail = "正在读取团队数据…"
+        } else {
+            model.ranking = try? JSONDecoder().decode(TeamRankingSnapshot.self, from: Data(rankingJSON.utf8))
+            model.syncDetail = "刚刚同步"
+        }
         model.websiteURL = URL(string: "https://c.wanhe.cn")
 
         let view = NSHostingView(rootView: StatusPopoverView(model: model, openWebsite: { _ in }, quit: {}))
