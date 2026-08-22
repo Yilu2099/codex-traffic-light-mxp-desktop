@@ -323,16 +323,31 @@ struct StatusPopoverView: View {
         if member.tokens <= 0 && member.sessions <= 0 {
             return member.hasEverJoined ? "今日暂无使用" : "还未加入"
         }
-        if member.tokenSource == "today_live" {
-            if let recentTime = validLastActive(member) {
-                return "活跃 \(recentTime)"
-            }
-            return "今日活跃"
-        }
-        if let lastActive = member.lastActive, !lastActive.isEmpty, lastActive != "-" {
-            return "更新 \(lastActive)"
+        if let lastActive = validLastActive(member) {
+            return isOnline(lastActive) ? "在线" : "最后 \(lastActive)"
         }
         return officialDate(member)
+    }
+
+    private func isOnline(_ lastActive: String, now: Date = Date()) -> Bool {
+        let parts = lastActive.split(separator: ":", omittingEmptySubsequences: false)
+        guard parts.count == 2,
+              let hour = Int(parts[0]), (0 ... 23).contains(hour),
+              let minute = Int(parts[1]), (0 ... 59).contains(minute)
+        else { return false }
+
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Asia/Hong_Kong") ?? .current
+        var components = calendar.dateComponents([.year, .month, .day], from: now)
+        components.hour = hour
+        components.minute = minute
+        components.second = 0
+        guard var activeAt = calendar.date(from: components) else { return false }
+        if activeAt > now, let previousDay = calendar.date(byAdding: .day, value: -1, to: activeAt) {
+            activeAt = previousDay
+        }
+        let elapsed = now.timeIntervalSince(activeAt)
+        return elapsed >= 0 && elapsed <= 20 * 60
     }
 
     private func validLastActive(_ member: TeamRankingMember) -> String? {
