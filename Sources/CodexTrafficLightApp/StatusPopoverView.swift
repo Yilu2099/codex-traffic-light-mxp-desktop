@@ -76,6 +76,7 @@ struct StatusPopoverView: View {
             .frame(width: 38, height: 38)
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(green.opacity(0.12), lineWidth: 1))
+            .shadow(color: green.opacity(0.18), radius: 5, y: 3)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text("万合创新局")
