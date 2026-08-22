@@ -1,52 +1,38 @@
-**Source visual truth**
+# 日搓夜搓状态栏设计验收
 
-- `/Users/lu/.codex/attachments/e0bef83e-0692-405f-8780-936b83c49b75/codex-clipboard-7284f3e8-eda1-4446-9ee1-0276d5b81b02.png`
-- Source pixels: 874 × 776. The source is a cropped @2x-style capture of the 456-point Mac status popover member list.
+## Source visual truth
 
-**Rendered implementation**
+- 选定方案：`/Users/lu/.codex/generated_images/01a02722-77db-79d0-af46-8e9267c19584/exec-9b1e95f5-5680-4625-8d62-82cad4c535cd.png`
+- 概念稿尺寸：987 × 1593 px。
+- 设计重点：克制的单绿色语义色、弱化卡片层级、周余额下方统一呈现日搓与夜搓。
 
-- `/Users/lu/.codex/generated_images/01a02540-13a2-7633-880b-b0a0e3e9904e/statusbar-compact-countdown-preview.png`
-- Implementation pixels: 912 × 1280 at a 456 × 640 point popover viewport and 2× density.
-- State: light appearance, quota card plus member list with active, pending, zero-token, and large-token examples.
-- Normalization: the implementation was scaled to the source width in `/tmp/weekly-balance-countdown-comparison.jpg`; the member-row regions were compared visually. The source is cropped and contains different live members, so copy differences other than the requested countdown rule are not fidelity findings.
+## Rendered implementation
 
-**Full-view comparison evidence**
+- 实际 SwiftUI 截图：`/Users/lu/.codex/generated_images/01a02722-77db-79d0-af46-8e9267c19584/grind-status-popover-v1.2.6-local-final.png`
+- 对照图：`/Users/lu/.codex/generated_images/01a02722-77db-79d0-af46-8e9267c19584/grind-status-design-comparison.png`
+- 实现尺寸：912 × 1280 px，对应 456 × 640 pt、2× 密度的真实状态栏弹窗。
+- 状态：浅色外观；张璐、乔月、陈佳欣三种成员状态；含周余额、Token、日搓和夜搓。
+- 归一化：对照图将概念稿与真实弹窗等高排列。概念稿不是固定 456 × 640 pt 的像素规范，因此真实实现按可用弹窗高度压缩密度，不将合理尺寸差异视为缺陷。
 
-- The existing warm palette, card radius, avatar scale, ranking column, member information hierarchy, Token column, dividers, and green semantic color remain unchanged.
-- The quota card and list preserve the original vertical rhythm; shortening the countdown does not introduce empty-looking rows or disturb alignment.
+## Full-view and focused evidence
 
-**Focused region comparison evidence**
+- 完整视图保留周余额总览、成员排序、头像、Token 列和最近动态。
+- 日搓/夜搓已移到每位成员周余额下方，形成稳定的三行信息层级。
+- 张璐真实数据为日搓 09:42、夜搓 02:04；乔月为日搓 07:42、夜搓 03:12。
+- 状态栏仅使用绿色强调与中性灰，取消多色竞争；字号和行距适合 456 pt 宽度。
 
-- Source rows 3 and 4 wrap `6天15小时后刷新` / `6天17小时后刷新` onto a second line.
-- Revised active row renders `周余额 78% · 5天后刷新` on one line.
-- Revised pending rows render `周余额待同步 · 刷新待更新` on one line at the same 456-point popover width.
-- The right Token column remains aligned and does not collide with the quota text.
+## Findings and comparison history
 
-**Findings**
+- 初版问题：颜色较多、日搓夜搓位置分散、长文案影响行间节奏。
+- 修正：统一语义色；将时间胶囊置于周余额下；最近动态缩为 `12次 · 活跃 10:36`；Token 使用紧凑中文单位。
+- 数据修正：日搓只认 05:00–10:59 首次本机开启对话；夜搓只认 23:00–04:59 人类发起或互动事件，后台完成不计入。
+- 未发现 P0、P1、P2 视觉问题。
 
-- No remaining P0, P1, or P2 visual issues in the requested countdown and member-row scope.
-- Typography: the quota row keeps the existing system font, semantic weight, color, and hierarchy; single-line tightening is bounded to 82% only when needed.
-- Spacing: row height and column spacing remain consistent; removing the forced second line restores even row rhythm.
-- Colors: existing green, muted gray, warm background, and divider tokens are unchanged.
-- Images: existing bundled avatars and brand assets are unchanged and remain sharp at 2× capture density.
-- Copy: at or above one day the countdown now shows whole days only; below one day it shows rounded-up hours only.
+## Verification
 
-**Comparison history**
-
-- Initial P1: long day-and-hour countdown wrapped in the source rows, increasing row density inconsistently.
-- Fix: shortened the day-level format to `X天后刷新` and constrained the quota line to one line with controlled tightening.
-- Post-fix evidence: the rendered implementation keeps active and pending quota states on one line without changing the Token column or row height.
-
-**Implementation checklist**
-
-- [x] Apply compact countdown rule to shared Mac formatter.
-- [x] Apply the same rule to the website formatter.
-- [x] Keep member quota text on one line in both clients.
-- [x] Run website tests/build and all 67 Mac client tests/build.
-- [x] Inspect the real 456 × 640 Mac renderer and narrow website text output.
-
-**Follow-up polish**
-
-- None required for this scope.
+- [x] 真实 456 × 640 pt SwiftUI 渲染截图。
+- [x] 68 项 Mac 客户端测试全部通过。
+- [x] `git diff --check` 通过。
+- [x] 版本号 1.2.7。
 
 final result: passed

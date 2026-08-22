@@ -291,6 +291,7 @@ public struct TeamUsagePayload: Codable, Equatable, Sendable {
     public var officialUsage: OfficialCodexUsageReport
     public var todayLiveUsage: TodayLiveUsageReport
     public var sessionActivity: [TeamSessionActivity]
+    public var grindHistory: [TeamGrindHistoryDay]
     public var projects: [TeamProjectActivity]
     public var sessions: [TeamUsageSession]
 }
@@ -692,6 +693,10 @@ public struct TeamUsageSyncService: Sendable {
             codexHome: configuration.codexHome,
             days: configuration.collectDays
         )
+        let grindHistory = CodexGrindHistoryCollector().collect(
+            codexHome: configuration.codexHome,
+            days: min(30, configuration.collectDays)
+        )
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return TeamUsagePayload(
@@ -709,6 +714,7 @@ public struct TeamUsageSyncService: Sendable {
             officialUsage: officialUsage,
             todayLiveUsage: todayLiveUsage,
             sessionActivity: sessionActivity,
+            grindHistory: grindHistory,
             projects: ProjectActivityStore().report(days: configuration.collectDays),
             sessions: []
         )

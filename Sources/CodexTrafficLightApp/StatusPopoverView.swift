@@ -15,13 +15,13 @@ struct StatusPopoverView: View {
     let openWebsite: (String?) -> Void
     let quit: () -> Void
 
-    private let canvas = Color(red: 0.975, green: 0.965, blue: 0.945)
-    private let card = Color(red: 1.0, green: 0.995, blue: 0.985)
-    private let ink = Color(red: 0.12, green: 0.115, blue: 0.105)
-    private let muted = Color(red: 0.49, green: 0.47, blue: 0.43)
-    private let line = Color(red: 0.88, green: 0.85, blue: 0.79)
-    private let green = Color(red: 0.18, green: 0.54, blue: 0.32)
-    private let warm = Color(red: 0.82, green: 0.43, blue: 0.20)
+    private let canvas = Color(red: 0.985, green: 0.982, blue: 0.974)
+    private let card = Color.white
+    private let ink = Color(red: 0.10, green: 0.105, blue: 0.10)
+    private let muted = Color(red: 0.43, green: 0.44, blue: 0.42)
+    private let line = Color(red: 0.90, green: 0.90, blue: 0.87)
+    private let green = Color(red: 0.25, green: 0.52, blue: 0.35)
+    private let softSurface = Color(red: 0.955, green: 0.95, blue: 0.93)
     private let roster: [(id: String, name: String, avatar: String)] = [
         ("zlu", "张璐", "58.png"),
         ("qiubo", "仇博", "193.png"),
@@ -111,7 +111,7 @@ struct StatusPopoverView: View {
                         .foregroundStyle(muted)
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
                         Text(remaining.map(String.init) ?? "--")
-                            .font(.system(size: 39, weight: .heavy, design: .rounded))
+                            .font(.system(size: 38, weight: .bold, design: .rounded))
                             .foregroundStyle(ink)
                         Text("% 剩余")
                             .font(.system(size: 13, weight: .bold))
@@ -143,9 +143,8 @@ struct StatusPopoverView: View {
             .foregroundStyle(muted)
         }
         .padding(18)
-        .background(card, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .background(green.opacity(0.025), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(line, lineWidth: 1))
-        .shadow(color: ink.opacity(0.045), radius: 12, y: 5)
     }
 
     private var rankingSection: some View {
@@ -162,10 +161,10 @@ struct StatusPopoverView: View {
                 Spacer()
                 Text("实时")
                     .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(warm)
+                    .foregroundStyle(green)
                     .padding(.horizontal, 9)
                     .padding(.vertical, 5)
-                    .background(warm.opacity(0.10), in: Capsule())
+                    .background(green.opacity(0.08), in: Capsule())
             }
 
             VStack(spacing: 0) {
@@ -188,46 +187,42 @@ struct StatusPopoverView: View {
             }
             .background(card, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(line, lineWidth: 1))
-            .shadow(color: ink.opacity(0.04), radius: 10, y: 4)
         }
     }
 
     private func memberRow(_ member: TeamRankingMember, rank: Int) -> some View {
         Button { openWebsite(member.id) } label: {
-            HStack(spacing: 12) {
+            HStack(spacing: 8) {
                 Text(String(format: "%02d", rank))
                     .font(.system(size: 13, weight: .heavy, design: .rounded))
                     .foregroundStyle(rankColor(rank))
-                    .frame(width: 26)
+                    .frame(width: 22)
                 avatar(member)
                 VStack(alignment: .leading, spacing: 4) {
                     Text(displayName(member))
-                        .font(.system(size: 16, weight: .bold))
+                        .font(.system(size: 17, weight: .semibold))
                         .foregroundStyle(ink)
                         .lineLimit(1)
                     Text(memberActivity(member))
-                        .font(.system(size: 12, weight: .medium))
+                        .font(.system(size: 11, weight: .regular))
                         .foregroundStyle(muted)
                         .lineLimit(1)
                         .minimumScaleFactor(0.82)
                         .allowsTightening(true)
                         .layoutPriority(1)
-                    Text(grindActivity(member))
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(warm)
-                        .lineLimit(1)
                     Text(memberQuotaText(member))
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(.system(size: 9, weight: .semibold))
                         .foregroundStyle(member.weeklyQuota == nil ? muted : green)
                         .lineLimit(1)
                         .minimumScaleFactor(0.82)
                         .allowsTightening(true)
                         .layoutPriority(1)
+                    grindActivityCapsule(member)
                 }
-                Spacer(minLength: 8)
+                Spacer(minLength: 5)
                 VStack(alignment: .trailing, spacing: 4) {
                     Text(formatTokens(member.tokens))
-                        .font(.system(size: 17, weight: .heavy, design: .rounded))
+                        .font(.system(size: 15, weight: .bold, design: .rounded))
                         .foregroundStyle(ink)
                     Text("Token")
                         .font(.system(size: 10, weight: .bold))
@@ -238,7 +233,7 @@ struct StatusPopoverView: View {
                     .font(.system(size: 11, weight: .bold))
                     .foregroundStyle(muted.opacity(0.65))
             }
-            .padding(.horizontal, 14)
+            .padding(.horizontal, 10)
             .padding(.vertical, 14)
             .contentShape(Rectangle())
         }
@@ -247,7 +242,7 @@ struct StatusPopoverView: View {
 
     private func avatar(_ member: TeamRankingMember) -> some View {
         ZStack {
-            Circle().fill(rankColor(abs(member.id.hashValue) % 3 + 1).opacity(0.14))
+            Circle().fill(green.opacity(0.11))
             if let image = localAvatar(member) {
                 Image(nsImage: image)
                     .resizable()
@@ -262,7 +257,7 @@ struct StatusPopoverView: View {
                     .foregroundStyle(ink)
             }
         }
-        .frame(width: 56, height: 56)
+        .frame(width: 50, height: 50)
         .clipShape(Circle())
     }
 
@@ -338,7 +333,7 @@ struct StatusPopoverView: View {
         }
         if member.tokenSource == "today_live" {
             if let recentTime = validLastActive(member) {
-                return "\(member.sessions) 次会话 · 最近活跃：\(recentTime)"
+                return "\(member.sessions)次 · 活跃 \(recentTime)"
             }
             return "\(member.sessions) 次会话"
         }
@@ -353,8 +348,24 @@ struct StatusPopoverView: View {
         return lastActive
     }
 
-    private func grindActivity(_ member: TeamRankingMember) -> String {
-        "日搓 \(member.dayGrindTime ?? "--") · 夜搓 \(member.nightGrindTime ?? "--")"
+    private func grindActivityCapsule(_ member: TeamRankingMember) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: "sun.max")
+                .font(.system(size: 9, weight: .medium))
+            Text("日搓 \(member.dayGrindTime ?? "--")")
+            Rectangle()
+                .fill(line)
+                .frame(width: 1, height: 11)
+            Image(systemName: "moon")
+                .font(.system(size: 9, weight: .medium))
+            Text("夜搓 \(member.nightGrindTime ?? "--")")
+        }
+        .font(.system(size: 9.5, weight: .medium))
+        .foregroundStyle(muted)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 4)
+        .background(softSurface, in: Capsule())
+        .fixedSize(horizontal: true, vertical: false)
     }
 
     private func memberQuotaText(_ member: TeamRankingMember) -> String {
@@ -435,18 +446,17 @@ struct StatusPopoverView: View {
 
     private func rankColor(_ rank: Int) -> Color {
         switch rank {
-        case 1: return warm
-        case 2: return Color(red: 0.38, green: 0.45, blue: 0.50)
-        case 3: return Color(red: 0.66, green: 0.42, blue: 0.26)
+        case 1: return green
+        case 2, 3: return Color(red: 0.34, green: 0.38, blue: 0.36)
         default: return muted
         }
     }
 
     private func formatTokens(_ value: Int) -> String {
         if value >= 100_000_000 {
-            return String(format: value >= 1_000_000_000 ? "%.1f 亿" : "%.2f 亿", Double(value) / 100_000_000)
+            return String(format: value >= 1_000_000_000 ? "%.1f亿" : "%.2f亿", Double(value) / 100_000_000)
         }
-        if value >= 10_000 { return String(format: "%.1f 万", Double(value) / 10_000) }
+        if value >= 10_000 { return String(format: "%.1f万", Double(value) / 10_000) }
         return NumberFormatter.localizedString(from: NSNumber(value: value), number: .decimal)
     }
 }

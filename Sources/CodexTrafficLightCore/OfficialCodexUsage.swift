@@ -41,6 +41,18 @@ public struct TeamSessionActivity: Codable, Equatable, Sendable {
     public var updatedAt: String?
 }
 
+public struct TeamGrindHistoryDay: Codable, Equatable, Sendable {
+    public var grindDay: String
+    public var dayGrindTime: String?
+    public var nightGrindTime: String?
+
+    public init(grindDay: String, dayGrindTime: String? = nil, nightGrindTime: String? = nil) {
+        self.grindDay = grindDay
+        self.dayGrindTime = dayGrindTime
+        self.nightGrindTime = nightGrindTime
+    }
+}
+
 public struct OfficialCodexUsageCollector: Sendable {
     private let codexBinary: String
     private let initializeTimeout: TimeInterval
@@ -201,7 +213,7 @@ public struct CodexSessionFileCounter: Sendable {
         let formatter = DateFormatter()
         formatter.calendar = Calendar(identifier: .gregorian)
         formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.timeZone = TimeZone(identifier: "Asia/Shanghai")
         formatter.dateFormat = "yyyy-MM-dd'T'HH-mm-ss"
         return formatter.date(from: text)
     }
@@ -224,6 +236,103 @@ public struct CodexSessionFileCounter: Sendable {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter.string(from: date)
+    }
+}
+
+public struct CodexGrindHistoryCollector: Sendable {
+    private struct EventEnvelope: Decodable {
+        struct Payload: Decodable {
+            var type: String?
+            var role: String?
+        }
+        var timestamp: String?
+        var type: String?
+        var payload: Payload?
+
+        var isUserInteraction: Bool {
+            (type == "event_msg" && payload?.type == "user_message")
+                || (type == "response_item" && payload?.type == "message" && payload?.role == "user")
+        }
+    }
+
+    private let timezone = TimeZone(identifier: "Asia/Shanghai")!
+
+    public init() {}
+
+    public func collect(codexHome: URL, days: Int = 30, now: Date = Date()) -> [TeamGrindHistoryDay] {
+        let cutoff = now.addingTimeInterval(-Double(max(1, days) + 1) * 86_400)
+        let roots = ["sessions", "archived_sessions"].map { codexHome.appendingPathComponent($0) }
+        var history: [String: (day: Date?, night: Date?)] = [:]
+
+        func record(_ date: Date, allowDayStart: Bool) {
+            guard date >= cutoff else { return }
+            let components = Calendar(identifier: .gregorian).dateComponents(in: timezone, from: date)
+            guard let hour = components.hour else { return }
+            let day = grindDay(for: date, hour: hour)
+            var current = history[day] ?? (nil, nil)
+            if allowDayStart, hour >= 5 && hour < 11, current.day == nil || date < current.day! { current.day = date }
+            if hour >= 23 || hour < 5, current.night == nil || date > current.night! { current.night = date }
+            history[day] = current
+        }
+
+        for root in roots {
+            guard let enumerator = FileManager.default.enumerator(
+                at: root,
+                includingPropertiesForKeys: [.contentModificationDateKey],
+                options: [.skipsHiddenFiles]
+            ) else { continue }
+            for case let url as URL in enumerator where url.pathExtension == "jsonl" {
+                let modifiedAt = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+                let startedAt = CodexSessionFileCounter().timestampFromFilename(url.lastPathComponent) ?? modifiedAt
+                guard max(startedAt, modifiedAt) >= cutoff else { continue }
+                record(startedAt, allowDayStart: true)
+                guard let data = try? Data(contentsOf: url),
+                      let text = String(data: data, encoding: .utf8) else { continue }
+                text.enumerateLines { line, _ in
+                    guard let event = try? JSONDecoder().decode(EventEnvelope.self, from: Data(line.utf8)),
+                          event.isUserInteraction,
+                          let timestamp = event.timestamp,
+                          let date = Self.isoDate(timestamp) else { return }
+                    record(date, allowDayStart: false)
+                }
+            }
+        }
+
+        return history.keys.sorted().suffix(max(1, days)).map { day in
+            let item = history[day] ?? (nil, nil)
+            return TeamGrindHistoryDay(
+                grindDay: day,
+                dayGrindTime: item.day.map(timeString),
+                nightGrindTime: item.night.map(timeString)
+            )
+        }
+    }
+
+    private func grindDay(for date: Date, hour: Int) -> String {
+        let adjusted = hour < 5 ? Calendar(identifier: .gregorian).date(byAdding: .day, value: -1, to: date) ?? date : date
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_CA")
+        formatter.timeZone = timezone
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: adjusted)
+    }
+
+    private func timeString(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_GB")
+        formatter.timeZone = timezone
+        formatter.dateFormat = "HH:mm"
+        return formatter.string(from: date)
+    }
+
+    private static func isoDate(_ value: String) -> Date? {
+        let precise = ISO8601DateFormatter()
+        precise.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let relaxed = ISO8601DateFormatter()
+        relaxed.formatOptions = [.withInternetDateTime]
+        return precise.date(from: value) ?? relaxed.date(from: value)
     }
 }
 

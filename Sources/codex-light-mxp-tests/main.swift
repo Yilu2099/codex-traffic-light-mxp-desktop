@@ -1211,11 +1211,11 @@ func testOfficialCodexUsageParsesDailyBuckets() throws {
     try expectEqual(report.dataThrough, "2026-08-21", "official usage should expose its latest settled day")
 }
 
-func testSessionCounterUsesFilenameAndMetadataWithoutReadingContents() throws {
+func testSessionCounterUsesLocalFilenameAndMetadataWithoutReadingContents() throws {
     let counter = CodexSessionFileCounter()
     let date = counter.timestampFromFilename("rollout-2026-08-20T15-20-05-01a01e0a-969e-7b82-82e3-cb289445d9be.jsonl")
     try expect(date != nil, "session counter should read the timestamp encoded in a filename")
-    try expectEqual(Int(date!.timeIntervalSince1970), 1_787_239_205, "session counter should parse the filename without opening its contents")
+    try expectEqual(Int(date!.timeIntervalSince1970), 1_787_210_405, "session counter should treat the filename timestamp as Shanghai local time")
 
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     let sessions = root.appendingPathComponent("sessions/2026/08/20")
@@ -1234,6 +1234,35 @@ func testSessionCounterUsesFilenameAndMetadataWithoutReadingContents() throws {
     try expectEqual(Int(activityDate?.timeIntervalSince1970 ?? 0), Int(modifiedAt.timeIntervalSince1970), "recent activity should come from file metadata")
     let startedDate = activity?.startedAt.flatMap { activityFormatter.date(from: $0) }
     try expectEqual(Int(startedDate?.timeIntervalSince1970 ?? 0), Int(date!.timeIntervalSince1970), "session start should come from filename metadata")
+}
+
+func testGrindHistoryCollectorReadsOnlyEventTimestamps() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let sessions = root.appendingPathComponent("sessions/2026/08/22")
+    try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let file = sessions.appendingPathComponent("rollout-2026-08-22T00-55-00-01a01e0a-969e-7b82-82e3-cb289445d9be.jsonl")
+    let contents = [
+        #"{"timestamp":"2026-08-20T22:25:00.000Z","type":"session_meta","payload":{"private":"do not inspect"}}"#,
+        #"{"timestamp":"2026-08-21T15:15:00.000Z","type":"event_msg","payload":{"type":"agent_message","private":"do not inspect"}}"#,
+        #"{"timestamp":"2026-08-21T17:56:28.000Z","type":"event_msg","payload":{"type":"user_message","private":"do not inspect"}}"#,
+        #"{"timestamp":"2026-08-21T18:04:52.000Z","type":"response_item","payload":{"type":"message","role":"user","private":"do not inspect"}}"#,
+        #"{"timestamp":"2026-08-21T19:06:08.000Z","type":"event_msg","payload":{"type":"agent_message","private":"do not inspect"}}"#,
+        #"{"timestamp":"2026-08-21T22:14:00.000Z","type":"event_msg","payload":{"type":"agent_message","private":"do not inspect"}}"#,
+    ].joined(separator: "\n")
+    try contents.write(to: file, atomically: true, encoding: .utf8)
+    let morningFile = sessions.appendingPathComponent("rollout-2026-08-22T09-42-45-01a02722-77db-79d0-af46-8e9267c19584.jsonl")
+    try #"{"timestamp":"2026-08-22T01:42:47.000Z","type":"session_meta","payload":{"private":"do not inspect"}}"#
+        .write(to: morningFile, atomically: true, encoding: .utf8)
+    let now = ISO8601DateFormatter().date(from: "2026-08-22T04:00:00Z")!
+    try FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: file.path)
+    try FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: morningFile.path)
+
+    let history = CodexGrindHistoryCollector().collect(codexHome: root, days: 30, now: now)
+    try expectEqual(history, [
+        TeamGrindHistoryDay(grindDay: "2026-08-21", dayGrindTime: nil, nightGrindTime: "02:04"),
+        TeamGrindHistoryDay(grindDay: "2026-08-22", dayGrindTime: "09:42", nightGrindTime: nil),
+    ], "grind history should use local session starts and ignore unattended agent completion events")
 }
 
 func testTodayLiveCollectorStartsAtEOFAndCountsOnlyAppendedUsage() throws {
@@ -1400,7 +1429,8 @@ let tests: [(String, () throws -> Void)] = [
     ("team ranking distinguishes joined members", testTeamRankingDistinguishesJoinedMemberFromInvitePlaceholder),
     ("avatar disk cache persists by URL", testAvatarDiskCachePersistsByRemoteURL),
     ("official Codex usage parses daily buckets", testOfficialCodexUsageParsesDailyBuckets),
-    ("session counter uses filename and metadata only", testSessionCounterUsesFilenameAndMetadataWithoutReadingContents),
+    ("session counter uses local filename and metadata only", testSessionCounterUsesLocalFilenameAndMetadataWithoutReadingContents),
+    ("grind history reads event timestamps only", testGrindHistoryCollectorReadsOnlyEventTimestamps),
     ("today live collector tails appended usage only", testTodayLiveCollectorStartsAtEOFAndCountsOnlyAppendedUsage),
     ("project audit sanitizes workspace and session", testProjectActivityStoreKeepsOnlySanitizedProjectAudit),
     ("desktop monitor installer migrates packaged monitor", testDesktopMonitorInstallerMigratesPackagedMonitor),

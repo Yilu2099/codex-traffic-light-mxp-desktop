@@ -22,9 +22,9 @@ enum StatusPopoverCapture {
         )
         let rankingJSON = """
         {"updatedAt":"2026-08-21 13:36","members":[
-          {"id":"zlu","name":"张璐","avatar":"/avatars/58.png","tokens":1210000000,"sessions":12,"lastActive":"13:13","grindDay":"2026-08-21","dayGrindTime":"06:25","nightGrindTime":"02:35","officialUsage":{"dataThrough":"2026-08-20"},"tokenSource":"today_live","todayLiveUpdatedAt":"2026-08-21T05:36:00Z","weeklyQuota":{"weeklyRemainingPercent":78,"weeklyUsedPercent":22,"weeklyResetsAt":"2026-08-27T03:33:00.000Z","updatedAt":"2026-08-21T05:36:00.000Z"}},
-          {"id":"lyf","name":"李阳峰","avatar":"/avatars/169.png","tokens":66066000,"sessions":2,"lastActive":"12:36","grindDay":"2026-08-21","dayGrindTime":"08:10","nightGrindTime":null,"officialUsage":{"dataThrough":"2026-08-20"},"tokenSource":"today_live","todayLiveUpdatedAt":"2026-08-21T05:35:00Z"},
-          {"id":"qiaoyue","name":"乔月","avatar":"/avatars/201.png","tokens":0,"sessions":0}
+          {"id":"zlu","name":"张璐","avatar":"/avatars/58.png","tokens":1210000000,"sessions":12,"lastActive":"10:36","grindDay":"2026-08-22","dayGrindTime":"09:42","nightGrindTime":"02:04","officialUsage":{"dataThrough":"2026-08-20"},"tokenSource":"today_live","todayLiveUpdatedAt":"2026-08-22T02:36:00Z","weeklyQuota":{"weeklyRemainingPercent":78,"weeklyUsedPercent":22,"weeklyResetsAt":"2026-08-27T03:33:00.000Z","updatedAt":"2026-08-22T02:36:00.000Z"}},
+          {"id":"qiaoyue","name":"乔月","avatar":"/avatars/201.png","tokens":66066000,"sessions":2,"lastActive":"10:35","grindDay":"2026-08-22","dayGrindTime":"07:42","nightGrindTime":"03:12","officialUsage":{"dataThrough":"2026-08-20"},"tokenSource":"today_live","todayLiveUpdatedAt":"2026-08-22T02:35:00Z"},
+          {"id":"qiubo","name":"仇博","avatar":"/avatars/193.png","tokens":0,"sessions":0}
         ]}
         """
         model.ranking = try? JSONDecoder().decode(TeamRankingSnapshot.self, from: Data(rankingJSON.utf8))
