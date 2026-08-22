@@ -104,7 +104,12 @@ public struct CodexSessionQuotaCollector: Sendable {
         }
         if weekly == nil {
             weekly = windows.first(where: { Self.int($0["window_minutes"] ?? $0["windowDurationMins"]) ?? 0 > 300 })
-                ?? (windows.count > 1 ? windows[1] : windows.first)
+            let allDurationsMissing = windows.allSatisfy {
+                Self.int($0["window_minutes"] ?? $0["windowDurationMins"]) == nil
+            }
+            if weekly == nil, allDurationsMissing {
+                weekly = windows.count > 1 ? windows[1] : windows.first
+            }
         }
         guard let weekly, let weeklyUsed = Self.double(weekly["used_percent"] ?? weekly["usedPercent"]) else { return nil }
         let fiveUsed = fiveHour.flatMap { Self.double($0["used_percent"] ?? $0["usedPercent"]) }

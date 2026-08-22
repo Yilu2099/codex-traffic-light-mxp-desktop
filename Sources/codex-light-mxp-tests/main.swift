@@ -716,6 +716,25 @@ func testSessionQuotaCollectorUsesNewestCodexRateLimitEvent() throws {
     try expectEqual(observation?.weeklyResetsAt, Date(timeIntervalSince1970: 1_787_561_781), "session quota should keep reset time")
 }
 
+func testSessionQuotaCollectorRejectsFiveHourOnlyEventAsWeeklyQuota() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("codex-session-five-hour-only-tests-\(UUID().uuidString)", isDirectory: true)
+    let sessions = root.appendingPathComponent("sessions", isDirectory: true)
+    try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let event = #"{"timestamp":"2026-08-22T06:30:00.000Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":0,"window_minutes":300,"resets_at":1787390000}}}}"#
+    try Data((event + "\n").utf8).write(to: sessions.appendingPathComponent("rollout-five-hour-only.jsonl"))
+
+    let observation = CodexSessionQuotaCollector().collect(
+        codexHome: root,
+        now: Date(timeIntervalSince1970: 1_787_389_000),
+        fileMaxAge: 86_400
+    )
+
+    try expectEqual(observation, nil, "a 300 minute quota must never be reported as weekly quota")
+}
+
 func testAppServerQuotaMapperFallsBackToTopLevelRateLimits() throws {
     let topLevel = appServerSnapshot(primaryUsed: 39, primaryDuration: 300, secondaryUsed: 65, secondaryDuration: 10_080)
     let data = appServerRateLimitsResponse(rateLimits: topLevel)
@@ -1424,6 +1443,7 @@ let tests: [(String, () throws -> Void)] = [
     ("hook bridge updates task and quota", testHookBridgeUpdatesTaskAndQuotaFromPayload),
     ("hook bridge quota-only event does not create task", testHookBridgeQuotaOnlyEventDoesNotCreateTask),
     ("session quota collector uses newest Codex event", testSessionQuotaCollectorUsesNewestCodexRateLimitEvent),
+    ("session quota collector rejects five hour only event", testSessionQuotaCollectorRejectsFiveHourOnlyEventAsWeeklyQuota),
     ("app-server quota mapper reads codex limit", testAppServerQuotaMapperReadsCodexLimitByExactDurations),
     ("app-server quota mapper falls back top-level", testAppServerQuotaMapperFallsBackToTopLevelRateLimits),
     ("app-server quota mapper clamps remaining", testAppServerQuotaMapperClampsRemainingPercent),
