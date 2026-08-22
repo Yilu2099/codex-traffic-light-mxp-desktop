@@ -26,6 +26,20 @@ public struct QuotaSnapshot: Codable, Equatable {
     }
 }
 
+public struct QuotaAnomalyRecord: Codable, Equatable {
+    public var previous: QuotaSnapshot
+    public var rejected: QuotaSnapshot
+    public var reason: String
+    public var receivedAt: Date
+
+    public init(previous: QuotaSnapshot, rejected: QuotaSnapshot, reason: String, receivedAt: Date) {
+        self.previous = previous
+        self.rejected = rejected
+        self.reason = reason
+        self.receivedAt = receivedAt
+    }
+}
+
 public struct StateSnapshot: Codable, Equatable {
     public var updatedAt: Date
     public var quota: QuotaSnapshot?

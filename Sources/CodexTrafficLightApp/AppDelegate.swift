@@ -149,7 +149,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
                     return ranking
                 }.value
                 self?.isTeamSyncing = false
-                self?.reconcileSyncedQuota(ranking, configuration: configuration)
                 self?.statusBar.applyTeamRanking(
                     ranking,
                     websiteURL: service.websiteURL,
@@ -179,7 +178,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
                     return ranking
                 }.value
                 self?.isTeamRankingRefreshing = false
-                self?.reconcileSyncedQuota(ranking, configuration: configuration)
                 self?.statusBar.applyTeamRanking(
                     ranking,
                     websiteURL: service.websiteURL,
@@ -189,27 +187,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
                 self?.isTeamRankingRefreshing = false
                 AppDelegate.appendTeamSyncLog("ranking refresh failed: \(error)")
             }
-        }
-    }
-
-    private func reconcileSyncedQuota(
-        _ ranking: TeamRankingSnapshot,
-        configuration: TeamSyncConfiguration
-    ) {
-        guard let synced = ranking.weeklyQuota(for: configuration.userID),
-              let syncedUpdatedAt = synced.updatedAtDate else { return }
-        let local = store.read().quota
-        guard local == nil || syncedUpdatedAt > local!.updatedAt else { return }
-        do {
-            currentSnapshot = try store.updateQuota(
-                weeklyPercent: synced.weeklyRemainingPercent,
-                weeklyResetsAt: synced.weeklyResetsAtDate,
-                source: "team-ranking",
-                now: syncedUpdatedAt
-            )
-            statusBar.apply(snapshot: currentSnapshot)
-        } catch {
-            AppDelegate.appendQuotaLog("team quota reconcile failed: \(error)")
         }
     }
 
@@ -230,18 +207,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
             )
             let localIsFresh = localObservation.map { now.timeIntervalSince($0.observedAt) <= 15 * 60 } ?? false
             let existing = backgroundStore.read().quota
-            let localIsNewer = localObservation.map { existing == nil || $0.observedAt > existing!.updatedAt } ?? false
-            let localRepairsInvalidFullWeek = localObservation.map { observation in
-                guard let existing,
-                      existing.source == CodexSessionQuotaCollector.source,
-                      existing.weeklyRemainingPercent == 100,
-                      observation.weeklyRemainingPercent < 100,
-                      let existingReset = existing.weeklyResetsAt,
-                      let observedReset = observation.weeklyResetsAt else { return false }
-                return abs(existingReset.timeIntervalSince(observedReset)) < 60
+            let shouldApplyLocal = localObservation.map {
+                CodexSessionQuotaCollector.shouldApply($0, over: existing, now: now)
             } ?? false
 
-            if let localObservation, localIsNewer || localRepairsInvalidFullWeek {
+            if let localObservation, shouldApplyLocal {
                 _ = try? backgroundStore.updateQuota(
                     weeklyPercent: localObservation.weeklyRemainingPercent,
                     weeklyResetsAt: localObservation.weeklyResetsAt,

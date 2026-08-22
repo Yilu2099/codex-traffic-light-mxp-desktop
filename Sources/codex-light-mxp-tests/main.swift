@@ -105,6 +105,21 @@ func testQuotaExtractorReadsQuotaAndRateLimitsNesting() throws {
     try expectEqual(QuotaExtractor.extract(from: rateLimitsData)?.weeklyRemainingPercent, 35, "extractor should parse numeric string percents")
 }
 
+func testQuotaExtractorRejectsSparkLimit() throws {
+    let data = """
+    {
+      "rateLimits": {
+        "limit_id": "codex_bengalfox",
+        "limit_name": "GPT-5.3-Codex-Spark",
+        "weekly_remaining_percent": 100,
+        "weekly_resets_at": 1788011074
+      }
+    }
+    """.data(using: .utf8)!
+
+    try expectEqual(QuotaExtractor.extract(from: data), nil, "hook quota extraction must ignore Spark's independent limit")
+}
+
 func testQuotaExtractorRequiresBothWindows() throws {
     let data = """
     {
@@ -189,6 +204,58 @@ func testStateFileContainsOnlyCurrentQuotaKeys() throws {
     let body = try String(contentsOf: stateURL, encoding: .utf8)
     try expect(body.contains("\"weekly_remaining_percent\""), "state should contain weekly quota")
     try expect(!body.contains("aggregate_state") && !body.contains("provider_quotas") && !body.contains("tasks"), "state should not persist removed traffic-light data")
+}
+
+func testStateStoreRejectsImpossibleFullQuotaBeforeKnownReset() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("codex-quota-anomaly-tests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = StateStore(stateURL: root.appendingPathComponent("state.json"))
+    let now = Date(timeIntervalSince1970: 1_780_000_000)
+    let knownReset = now.addingTimeInterval(2 * 86_400)
+    let wrongReset = now.addingTimeInterval(7 * 86_400)
+    _ = try store.updateQuota(
+        weeklyPercent: 28,
+        weeklyResetsAt: knownReset,
+        source: "legacy-unverified",
+        now: now
+    )
+    let protected = try store.updateQuota(
+        weeklyPercent: 100,
+        weeklyResetsAt: wrongReset,
+        source: "legacy-unverified",
+        now: now.addingTimeInterval(60)
+    )
+    try expectEqual(protected.quota?.weeklyRemainingPercent, 28, "impossible 100 percent should keep previous quota")
+    try expectEqual(protected.quota?.weeklyResetsAt, knownReset, "impossible reset jump should keep previous reset")
+    let anomalies = store.readQuotaAnomalies()
+    try expectEqual(anomalies.count, 1, "rejected quota should be recorded locally")
+    try expectEqual(anomalies.first?.rejected.weeklyRemainingPercent, 100, "rejected value should remain auditable")
+    try expectEqual(anomalies.first?.reason, "unexpected_full_quota_before_known_reset", "rejection reason should be explicit")
+}
+
+func testStateStoreAcceptsOfficialCodexReset() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("codex-official-reset-tests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = StateStore(stateURL: root.appendingPathComponent("state.json"))
+    let now = Date(timeIntervalSince1970: 1_780_000_000)
+    _ = try store.updateQuota(
+        weeklyPercent: 28,
+        weeklyResetsAt: now.addingTimeInterval(2 * 86_400),
+        source: CodexSessionQuotaCollector.source,
+        now: now
+    )
+    let reset = try store.updateQuota(
+        weeklyPercent: 100,
+        weeklyResetsAt: now.addingTimeInterval(7 * 86_400),
+        source: CodexSessionQuotaCollector.source,
+        now: now.addingTimeInterval(60)
+    )
+
+    try expectEqual(reset.quota?.weeklyRemainingPercent, 100, "an exact Codex source should accept an official reset")
+    try expectEqual(reset.quota?.weeklyResetsAt, now.addingTimeInterval(7 * 86_400), "official reset should keep the latest reset window")
+    try expectEqual(store.readQuotaAnomalies().count, 0, "official Codex resets should not be recorded as anomalies")
 }
 
 func testHookLogLineIncludesEventAndTask() throws {
@@ -298,6 +365,8 @@ func appServerRateLimitsResponse(
 }
 
 func appServerSnapshot(
+    limitID: String = "codex",
+    limitName: String = "Codex",
     primaryUsed: Double? = nil,
     primaryDuration: Int? = nil,
     secondaryUsed: Double? = nil,
@@ -313,8 +382,8 @@ func appServerSnapshot(
     let individual = individualRemaining.map { #"{"limit":"100","used":"1","remainingPercent":\#($0),"resetsAt":1781189000}"# } ?? "null"
     return """
     {
-      "limitId": "codex",
-      "limitName": "Codex",
+      "limitId": "\(limitID)",
+      "limitName": "\(limitName)",
       "primary": \(window(primaryUsed, primaryDuration)),
       "secondary": \(window(secondaryUsed, secondaryDuration)),
       "credits": null,
@@ -347,8 +416,8 @@ func testSessionQuotaCollectorUsesNewestCodexRateLimitEvent() throws {
     try FileManager.default.createDirectory(at: archived, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: root) }
 
-    let older = #"{"timestamp":"2026-08-22T06:20:00.000Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":63,"window_minutes":10080,"resets_at":1787561781}}}}"#
-    let newer = #"{"timestamp":"2026-08-22T06:30:00.000Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":40,"window_minutes":300,"resets_at":1787390000},"secondary":{"used_percent":72,"window_minutes":10080,"resets_at":1787561781}}}}"#
+    let older = #"{"timestamp":"2026-08-22T06:20:00.000Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"codex","primary":{"used_percent":63,"window_minutes":10080,"resets_at":1787561781}}}}"#
+    let newer = #"{"timestamp":"2026-08-22T06:30:00.000Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"codex","primary":{"used_percent":40,"window_minutes":300,"resets_at":1787390000},"secondary":{"used_percent":72,"window_minutes":10080,"resets_at":1787561781}}}}"#
     try Data((older + "\n").utf8).write(to: sessions.appendingPathComponent("rollout-old.jsonl"))
     try Data((newer + "\n").utf8).write(to: archived.appendingPathComponent("rollout-new.jsonl"))
 
@@ -362,6 +431,48 @@ func testSessionQuotaCollectorUsesNewestCodexRateLimitEvent() throws {
     try expectEqual(observation?.weeklyResetsAt, Date(timeIntervalSince1970: 1_787_561_781), "session quota should keep reset time")
 }
 
+func testSessionQuotaCollectorIgnoresSparkRateLimitEvent() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("codex-session-spark-quota-tests-\(UUID().uuidString)", isDirectory: true)
+    let sessions = root.appendingPathComponent("sessions", isDirectory: true)
+    try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let codex = #"{"timestamp":"2026-08-22T06:20:00.000Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"codex","primary":{"used_percent":78,"window_minutes":10080,"resets_at":1787561781}}}}"#
+    let spark = #"{"timestamp":"2026-08-22T06:30:00.000Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"codex_bengalfox","limit_name":"GPT-5.3-Codex-Spark","primary":{"used_percent":0,"window_minutes":300,"resets_at":1787390000},"secondary":{"used_percent":0,"window_minutes":10080,"resets_at":1788011074}}}}"#
+    try Data((codex + "\n" + spark + "\n").utf8).write(to: sessions.appendingPathComponent("rollout-mixed.jsonl"))
+
+    let observation = CodexSessionQuotaCollector().collect(
+        codexHome: root,
+        now: Date(timeIntervalSince1970: 1_787_389_000),
+        fileMaxAge: 86_400
+    )
+
+    try expectEqual(observation?.weeklyRemainingPercent, 22, "Spark's independent 100% bucket must not replace the Codex weekly quota")
+    try expectEqual(observation?.weeklyResetsAt, Date(timeIntervalSince1970: 1_787_561_781), "collector should retain the Codex reset window")
+}
+
+func testSessionQuotaCollectorRepairsNewerSparkContamination() throws {
+    let now = Date(timeIntervalSince1970: 1_787_389_000)
+    let observation = CodexSessionQuotaObservation(
+        weeklyRemainingPercent: 22,
+        weeklyResetsAt: Date(timeIntervalSince1970: 1_787_561_781),
+        observedAt: now.addingTimeInterval(-60)
+    )
+    let contaminated = QuotaSnapshot(
+        weeklyRemainingPercent: 100,
+        weeklyResetsAt: Date(timeIntervalSince1970: 1_788_011_074),
+        source: "team-ranking",
+        updatedAt: now
+    )
+
+    try expectEqual(
+        CodexSessionQuotaCollector.shouldApply(observation, over: contaminated, now: now),
+        true,
+        "a fresh exact Codex observation should repair a newer Spark weekly window"
+    )
+}
+
 func testSessionQuotaCollectorRejectsLegacy300MinuteEvent() throws {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("codex-session-legacy-window-tests-\(UUID().uuidString)", isDirectory: true)
@@ -369,7 +480,7 @@ func testSessionQuotaCollectorRejectsLegacy300MinuteEvent() throws {
     try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: root) }
 
-    let event = #"{"timestamp":"2026-08-22T06:30:00.000Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":0,"window_minutes":300,"resets_at":1787390000}}}}"#
+    let event = #"{"timestamp":"2026-08-22T06:30:00.000Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"codex","primary":{"used_percent":0,"window_minutes":300,"resets_at":1787390000}}}}"#
     try Data((event + "\n").utf8).write(to: sessions.appendingPathComponent("rollout-legacy-window.jsonl"))
 
     let observation = CodexSessionQuotaCollector().collect(
@@ -388,6 +499,28 @@ func testAppServerQuotaMapperFallsBackToTopLevelRateLimits() throws {
     let quota = try CodexAppServerQuotaMapper.quotaValues(from: data)
 
     try expectEqual(quota.weeklyRemainingPercent, Optional(35), "mapper should read top-level weekly window")
+}
+
+func testAppServerQuotaMapperRejectsSparkFallback() throws {
+    let spark = appServerSnapshot(
+        limitID: "codex_bengalfox",
+        limitName: "GPT-5.3-Codex-Spark",
+        primaryUsed: 0,
+        primaryDuration: 300,
+        secondaryUsed: 0,
+        secondaryDuration: 10_080
+    )
+    let data = appServerRateLimitsResponse(
+        rateLimitsByLimitId: #"{"codex_bengalfox": \#(spark)}"#,
+        rateLimits: spark
+    )
+
+    do {
+        _ = try CodexAppServerQuotaMapper.quotaValues(from: data)
+        throw TestFailure(description: "Spark must never be accepted as the primary Codex weekly quota")
+    } catch CodexAppServerQuotaError.missingQuota {
+        // Expected: wait for an exact Codex bucket instead of publishing 100%.
+    }
 }
 
 func testAppServerQuotaMapperClampsRemainingPercent() throws {
@@ -744,12 +877,18 @@ func testTeamUsageCollectorBuildsDailySessionDelta() throws {
 
 func testTeamQuotaReportUsesWeeklyPercentAndReset() throws {
     let reset = Date(timeIntervalSince1970: 2_000)
-    let report = TeamQuotaReport(weeklyRemainingPercent: 79, weeklyResetsAt: reset, updatedAt: Date(timeIntervalSince1970: 1_000))
+    let report = TeamQuotaReport(
+        weeklyRemainingPercent: 79,
+        weeklyResetsAt: reset,
+        updatedAt: Date(timeIntervalSince1970: 1_000),
+        source: CodexSessionQuotaCollector.source
+    )
     try expectEqual(report.weeklyRemainingPercent, 79, "team quota should keep weekly remaining percent")
     try expectEqual(report.weeklyUsedPercent, 21, "team quota should derive weekly used percent")
     try expect(report.weeklyResetsAt != nil, "team quota should include reset time")
     try expectEqual(report.weeklyResetsAtDate, reset, "team quota should parse its reset time for client synchronization")
     try expectEqual(report.updatedAtDate, Date(timeIntervalSince1970: 1_000), "team quota should parse its update time for freshness checks")
+    try expectEqual(report.source, CodexSessionQuotaCollector.source, "team quota should preserve its source for server-side echo protection")
 }
 
 func testTeamRankingURLUsesWebsiteOrigin() throws {
@@ -1079,19 +1218,25 @@ let tests: [(String, () throws -> Void)] = [
     ("quota extractor reads top-level snake case", testQuotaExtractorReadsTopLevelSnakeCase),
     ("quota extractor reads nested camel case and clamps", testQuotaExtractorReadsNestedCamelCaseAndClamps),
     ("quota extractor reads quota and rate limits nesting", testQuotaExtractorReadsQuotaAndRateLimitsNesting),
+    ("quota extractor rejects Spark limit", testQuotaExtractorRejectsSparkLimit),
     ("quota extractor requires weekly data", testQuotaExtractorRequiresBothWindows),
     ("quota extractor reads zero percent and reset dates", testQuotaExtractorReadsZeroPercentAndResetDates),
     ("old JSON decodes without quota", testStateSnapshotDecodesOldJSONWithoutQuota),
     ("legacy provider quota migrates", testStateSnapshotMigratesLegacyCodexProviderQuota),
     ("state JSON contains only current quota", testStateFileContainsOnlyCurrentQuotaKeys),
+    ("state store rejects impossible full quota", testStateStoreRejectsImpossibleFullQuotaBeforeKnownReset),
+    ("state store accepts official Codex reset", testStateStoreAcceptsOfficialCodexReset),
     ("hook log line", testHookLogLineIncludesEventAndTask),
     ("hook log line includes quota summary", testHookLogLineIncludesQuotaSummary),
     ("hook bridge updates quota and project audit", testHookBridgeUpdatesQuotaAndProjectAudit),
     ("hook bridge quota-only event skips project", testHookBridgeQuotaOnlyEventDoesNotRecordProject),
     ("session quota collector uses newest Codex event", testSessionQuotaCollectorUsesNewestCodexRateLimitEvent),
+    ("session quota collector ignores Spark limit", testSessionQuotaCollectorIgnoresSparkRateLimitEvent),
+    ("session quota collector repairs Spark contamination", testSessionQuotaCollectorRepairsNewerSparkContamination),
     ("session quota collector rejects legacy 300-minute event", testSessionQuotaCollectorRejectsLegacy300MinuteEvent),
     ("app-server quota mapper reads codex limit", testAppServerQuotaMapperReadsCodexLimitByExactDurations),
     ("app-server quota mapper falls back top-level", testAppServerQuotaMapperFallsBackToTopLevelRateLimits),
+    ("app-server quota mapper rejects Spark fallback", testAppServerQuotaMapperRejectsSparkFallback),
     ("app-server quota mapper clamps remaining", testAppServerQuotaMapperClampsRemainingPercent),
     ("app-server quota mapper reads reset times", testAppServerQuotaMapperReadsResetTimes),
     ("app-server quota mapper allows weekly-only window", testAppServerQuotaMapperAllowsWeeklyOnlyWindow),

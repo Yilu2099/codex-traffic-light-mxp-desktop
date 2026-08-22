@@ -92,14 +92,15 @@ public enum CodexAppServerQuotaMapper {
     }
 
     private static func codexSnapshot(from response: AppServerRateLimitsResponse) -> AppServerRateLimitSnapshot? {
-        if let codex = response.rateLimitsByLimitId?["codex"] {
-            return codex
+        if let byLimitID = response.rateLimitsByLimitId, !byLimitID.isEmpty {
+            if let codex = byLimitID["codex"] {
+                return codex
+            }
+            return byLimitID.values.first(where: { $0.limitId?.lowercased() == "codex" })
         }
-        if let byLimitID = response.rateLimitsByLimitId,
-           let codex = byLimitID.values.first(where: { $0.limitId == "codex" }) {
-            return codex
-        }
-        return response.rateLimits
+        guard let legacy = response.rateLimits,
+              legacy.limitId == nil || legacy.limitId?.lowercased() == "codex" else { return nil }
+        return legacy
     }
 
     private static func quotaValues(from snapshot: AppServerRateLimitSnapshot) -> QuotaValues? {

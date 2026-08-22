@@ -32,6 +32,11 @@ public enum QuotaExtractor {
 
     public static func extract(from object: Any) -> QuotaValues? {
         if let dictionary = object as? [String: Any] {
+            if let limitID = (dictionary["limit_id"] ?? dictionary["limitId"]) as? String,
+               !limitID.isEmpty,
+               limitID.lowercased() != CodexSessionQuotaCollector.primaryLimitID {
+                return nil
+            }
             if let values = values(in: dictionary) {
                 return values
             }
