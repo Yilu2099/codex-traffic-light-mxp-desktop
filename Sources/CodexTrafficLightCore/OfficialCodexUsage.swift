@@ -264,13 +264,13 @@ public struct CodexGrindHistoryCollector: Sendable {
         let roots = ["sessions", "archived_sessions"].map { codexHome.appendingPathComponent($0) }
         var history: [String: (day: Date?, night: Date?)] = [:]
 
-        func record(_ date: Date, allowDayStart: Bool) {
+        func recordUserInteraction(_ date: Date) {
             guard date >= cutoff else { return }
             let components = Calendar(identifier: .gregorian).dateComponents(in: timezone, from: date)
             guard let hour = components.hour else { return }
             let day = grindDay(for: date, hour: hour)
             var current = history[day] ?? (nil, nil)
-            if allowDayStart, hour >= 5 && hour < 11, current.day == nil || date < current.day! { current.day = date }
+            if hour >= 5, current.day == nil || date < current.day! { current.day = date }
             if hour >= 23 || hour < 5, current.night == nil || date > current.night! { current.night = date }
             history[day] = current
         }
@@ -285,7 +285,6 @@ public struct CodexGrindHistoryCollector: Sendable {
                 let modifiedAt = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
                 let startedAt = CodexSessionFileCounter().timestampFromFilename(url.lastPathComponent) ?? modifiedAt
                 guard max(startedAt, modifiedAt) >= cutoff else { continue }
-                record(startedAt, allowDayStart: true)
                 guard let data = try? Data(contentsOf: url),
                       let text = String(data: data, encoding: .utf8) else { continue }
                 text.enumerateLines { line, _ in
@@ -295,7 +294,7 @@ public struct CodexGrindHistoryCollector: Sendable {
                           let date = Self.isoDate(timestamp) else { return }
                     // Day start is the first prompt actually sent by the user,
                     // including prompts in a conversation created on an older day.
-                    record(date, allowDayStart: true)
+                    recordUserInteraction(date)
                 }
             }
         }

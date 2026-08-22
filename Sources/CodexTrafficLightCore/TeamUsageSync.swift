@@ -301,6 +301,7 @@ public struct TeamUsagePayload: Codable, Equatable, Sendable {
     public var todayLiveUsage: TodayLiveUsageReport
     public var sessionActivity: [TeamSessionActivity]
     public var grindHistory: [TeamGrindHistoryDay]
+    public var grindHistoryMode: String
     public var projects: [TeamProjectActivity]
     public var sessions: [TeamUsageSession]
 }
@@ -742,6 +743,7 @@ public struct TeamUsageSyncService: Sendable {
             todayLiveUsage: todayLiveUsage,
             sessionActivity: sessionActivity,
             grindHistory: grindHistory,
+            grindHistoryMode: "interaction_v3",
             projects: ProjectActivityStore().report(days: configuration.collectDays),
             sessions: calendarUsage
         )

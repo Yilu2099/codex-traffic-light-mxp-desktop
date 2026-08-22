@@ -869,17 +869,36 @@ func testGrindHistoryCollectorReadsOnlyEventTimestamps() throws {
     let morningFile = sessions.appendingPathComponent("rollout-2026-08-22T09-42-45-01a02722-77db-79d0-af46-8e9267c19584.jsonl")
     try [
         #"{"timestamp":"2026-08-22T01:42:47.000Z","type":"session_meta","payload":{"private":"do not inspect"}}"#,
-        #"{"timestamp":"2026-08-22T01:05:00.000Z","type":"response_item","payload":{"type":"message","role":"user","private":"do not inspect"}}"#,
+        #"{"timestamp":"2026-08-22T02:30:00.000Z","type":"response_item","payload":{"type":"message","role":"user","private":"do not inspect"}}"#,
     ].joined(separator: "\n")
         .write(to: morningFile, atomically: true, encoding: .utf8)
-    let now = ISO8601DateFormatter().date(from: "2026-08-22T04:00:00Z")!
+    let continuedConversation = sessions.appendingPathComponent("rollout-2026-08-21T19-30-00-01a025a7-5636-7730-a6f7-b0c98fae3d95.jsonl")
+    try [
+        #"{"timestamp":"2026-08-21T11:30:00.000Z","type":"session_meta","payload":{}}"#,
+        #"{"timestamp":"2026-08-22T02:08:12.000Z","type":"event_msg","payload":{"type":"user_message"}}"#,
+    ].joined(separator: "\n")
+        .write(to: continuedConversation, atomically: true, encoding: .utf8)
+    let laterNewConversation = sessions.appendingPathComponent("rollout-2026-08-22T10-57-13-01a02766-a3b7-7a12-8f5e-1de50869504a.jsonl")
+    try [
+        #"{"timestamp":"2026-08-22T02:57:13.000Z","type":"session_meta","payload":{}}"#,
+        #"{"timestamp":"2026-08-22T02:57:20.000Z","type":"response_item","payload":{"type":"message","role":"user"}}"#,
+    ].joined(separator: "\n")
+        .write(to: laterNewConversation, atomically: true, encoding: .utf8)
+    let afternoonOnly = sessions.appendingPathComponent("rollout-2026-08-23T14-15-00-01a027ce-7a41-75a3-9277-aaf9945bc022.jsonl")
+    try #"{"timestamp":"2026-08-23T06:15:09.000Z","type":"response_item","payload":{"type":"message","role":"user"}}"#
+        .write(to: afternoonOnly, atomically: true, encoding: .utf8)
+    let now = ISO8601DateFormatter().date(from: "2026-08-23T08:00:00Z")!
     try FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: file.path)
     try FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: morningFile.path)
+    try FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: continuedConversation.path)
+    try FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: laterNewConversation.path)
+    try FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: afternoonOnly.path)
 
     let history = CodexGrindHistoryCollector().collect(codexHome: root, days: 30, now: now)
     try expectEqual(history, [
         TeamGrindHistoryDay(grindDay: "2026-08-21", dayGrindTime: nil, nightGrindTime: "02:04"),
-        TeamGrindHistoryDay(grindDay: "2026-08-22", dayGrindTime: "09:05", nightGrindTime: nil),
+        TeamGrindHistoryDay(grindDay: "2026-08-22", dayGrindTime: "10:08", nightGrindTime: nil),
+        TeamGrindHistoryDay(grindDay: "2026-08-23", dayGrindTime: "14:15", nightGrindTime: nil),
     ], "grind history should use the first user prompt even in an older conversation")
 }
 
