@@ -160,8 +160,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
             let localIsFresh = localObservation.map { now.timeIntervalSince($0.observedAt) <= 15 * 60 } ?? false
             let existing = backgroundStore.read().providerQuota(for: ProviderQuotaSnapshot.codexProviderID)
             let localIsNewer = localObservation.map { existing == nil || $0.observedAt > existing!.updatedAt } ?? false
+            let localRepairsInvalidFullWeek = localObservation.map { observation in
+                guard let existing,
+                      existing.source == CodexSessionQuotaCollector.source,
+                      existing.weeklyRemainingPercent == 100,
+                      observation.weeklyRemainingPercent < 100,
+                      let existingReset = existing.weeklyResetsAt,
+                      let observedReset = observation.weeklyResetsAt else { return false }
+                return abs(existingReset.timeIntervalSince(observedReset)) < 60
+            } ?? false
 
-            if let localObservation, localIsNewer {
+            if let localObservation, localIsNewer || localRepairsInvalidFullWeek {
                 _ = try? backgroundStore.updateProviderQuota(
                     providerID: ProviderQuotaSnapshot.codexProviderID,
                     fiveHourPercent: localObservation.fiveHourRemainingPercent,
