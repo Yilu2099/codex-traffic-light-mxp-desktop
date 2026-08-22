@@ -1,5 +1,6 @@
 import Cocoa
 import CodexTrafficLightCore
+import Darwin
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDelegate {
@@ -10,8 +11,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
     private var teamSyncTimer: Timer?
     private var teamRankingTimer: Timer?
     private var presenceTimer: Timer?
+    private var teamSyncWatchdogTimer: Timer?
     private var teamSyncConfiguration: TeamSyncConfiguration?
     private var isTeamSyncing = false
+    private var teamSyncStartedAt: Date?
     private var isTeamRankingRefreshing = false
     private var isPresenceSyncing = false
     private var presenceFailureLogged = false
@@ -99,6 +102,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
             userInfo: nil,
             repeats: true
         )
+        teamSyncWatchdogTimer = Timer.scheduledTimer(
+            timeInterval: 30,
+            target: self,
+            selector: #selector(teamSyncWatchdogTimerFired),
+            userInfo: nil,
+            repeats: true
+        )
     }
 
     @objc private func teamSyncTimerFired() {
@@ -111,6 +121,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
 
     @objc private func presenceTimerFired() {
         syncPresence()
+    }
+
+    @objc private func teamSyncWatchdogTimerFired() {
+        guard let startedAt = teamSyncStartedAt,
+              Date().timeIntervalSince(startedAt) >= 150 else { return }
+        AppDelegate.appendTeamSyncLog("sync watchdog: team sync exceeded 150 seconds; restarting app")
+        Darwin.exit(75)
     }
 
     private func syncPresence() {
@@ -137,6 +154,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
     private func syncTeamData() {
         guard let configuration = teamSyncConfiguration, !isTeamSyncing else { return }
         isTeamSyncing = true
+        teamSyncStartedAt = Date()
         let quota = TeamQuotaReport.from(snapshot: store.read())
         let quotaDiagnostic = latestQuotaDiagnostic
         let service = TeamUsageSyncService(configuration: configuration)
@@ -154,6 +172,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
                     return ranking
                 }.value
                 self?.isTeamSyncing = false
+                self?.teamSyncStartedAt = nil
                 guard self?.selectedRankingRange == requestedRange else { return }
                 self?.statusBar.applyTeamRanking(
                     ranking,
@@ -163,6 +182,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
                 )
             } catch {
                 self?.isTeamSyncing = false
+                self?.teamSyncStartedAt = nil
                 self?.statusBar.setTeamSyncDetail("团队数据同步失败，稍后重试", websiteURL: service.websiteURL)
                 AppDelegate.appendTeamSyncLog("sync failed: \(error)")
             }
@@ -378,6 +398,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
         teamSyncTimer?.invalidate()
         teamRankingTimer?.invalidate()
         presenceTimer?.invalidate()
+        teamSyncWatchdogTimer?.invalidate()
         NSApp.terminate(nil)
     }
 }

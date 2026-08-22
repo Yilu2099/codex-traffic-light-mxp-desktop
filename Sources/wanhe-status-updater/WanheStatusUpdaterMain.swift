@@ -41,6 +41,11 @@ struct WanheStatusUpdater {
             return
         }
         do {
+            try ensureMainAppLaunchAgent()
+        } catch {
+            appendLog("main app watchdog repair failed: \(error)")
+        }
+        do {
             let manifest = try await fetchManifest(configuration)
             guard manifest.enabled, manifest.updateAvailable else {
                 appendLog("checked: current=\(ClientVersion.current) latest=\(manifest.latestVersion) available=false")
@@ -132,6 +137,7 @@ struct WanheStatusUpdater {
         let required = [
             "CodexTrafficLightApp", "codex-light-mxp", "codex-light-hook-mxp", "wanhe-status-updater",
             "codex-light-codex-monitor", "com.codex.traffic-light-codex-monitor.plist.template",
+            "com.codex.traffic-light-mxp.plist.template",
             "CodexTrafficLightMXP_CodexTrafficLightApp.bundle", "VERSION",
         ]
         for name in required where !fileManager.fileExists(atPath: payload.appendingPathComponent(name).path) {
@@ -160,6 +166,42 @@ struct WanheStatusUpdater {
             let link = bin.appendingPathComponent(name)
             try? FileManager.default.removeItem(at: link)
             try? FileManager.default.createSymbolicLink(atPath: link.path, withDestinationPath: "../../.wanhe-codex-token/app/current/\(name)")
+        }
+    }
+
+    static func ensureMainAppLaunchAgent(home: URL = FileManager.default.homeDirectoryForCurrentUser) throws {
+        let current = home.appendingPathComponent(".wanhe-codex-token/app/current", isDirectory: true)
+        let templateURL = current.appendingPathComponent("com.codex.traffic-light-mxp.plist.template")
+        guard FileManager.default.fileExists(atPath: templateURL.path) else { return }
+
+        let launchAgents = home.appendingPathComponent("Library/LaunchAgents", isDirectory: true)
+        try FileManager.default.createDirectory(at: launchAgents, withIntermediateDirectories: true)
+        let plistURL = launchAgents.appendingPathComponent("\(appLabel).plist")
+        let template = try String(contentsOf: templateURL, encoding: .utf8)
+        let rendered = template
+            .replacingOccurrences(of: "__APP_PATH__", with: current.appendingPathComponent("CodexTrafficLightApp").path)
+            .replacingOccurrences(of: "__HOME__", with: home.path)
+        let existing = try? String(contentsOf: plistURL, encoding: .utf8)
+        let domain = "gui/\(getuid())"
+
+        if existing != rendered {
+            try rendered.write(to: plistURL, atomically: true, encoding: .utf8)
+            _ = run("/bin/launchctl", ["bootout", "\(domain)/\(appLabel)"])
+            let bootstrap = run("/bin/launchctl", ["bootstrap", domain, plistURL.path])
+            guard bootstrap.status == 0 else {
+                throw UpdateFailure.commandFailed("launchctl bootstrap \(bootstrap.output)")
+            }
+            appendLog("repaired: main app launch agent KeepAlive enabled")
+            return
+        }
+
+        let state = run("/bin/launchctl", ["print", "\(domain)/\(appLabel)"])
+        if state.status != 0 {
+            let bootstrap = run("/bin/launchctl", ["bootstrap", domain, plistURL.path])
+            guard bootstrap.status == 0 else {
+                throw UpdateFailure.commandFailed("launchctl bootstrap \(bootstrap.output)")
+            }
+            appendLog("repaired: main app launch agent was missing and has been restored")
         }
     }
 

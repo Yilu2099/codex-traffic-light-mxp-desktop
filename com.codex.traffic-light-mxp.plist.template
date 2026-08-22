@@ -12,7 +12,10 @@
   <key>RunAtLoad</key>
   <true/>
   <key>KeepAlive</key>
-  <false/>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
   <key>StandardOutPath</key>
   <string>__HOME__/Library/Logs/codex-traffic-light-mxp.out.log</string>
   <key>StandardErrorPath</key>
