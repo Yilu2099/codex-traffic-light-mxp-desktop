@@ -23,6 +23,14 @@ func testCommandContract() throws {
     try expectEqual(CommandContract.auditCommandName, "audit", "audit command should be named audit")
 }
 
+func testGrindDisplayFormatterUsesConciseLabels() throws {
+    try expectEqual(GrindDisplayFormatter.start(nil), "待开工", "missing start should show only the waiting label")
+    try expectEqual(GrindDisplayFormatter.start(""), "待开工", "empty start should show only the waiting label")
+    try expectEqual(GrindDisplayFormatter.start("08:15"), "今日开工 08:15", "known start should retain its time")
+    try expectEqual(GrindDisplayFormatter.finish(nil), "收工未记录", "missing finish should use a natural empty state")
+    try expectEqual(GrindDisplayFormatter.finish("00:49"), "收工 00:49", "finish should not repeat yesterday")
+}
+
 func testQuotaSnapshotClampsPercentValues() throws {
     let updatedAt = Date(timeIntervalSince1970: 1_234)
 
@@ -1285,6 +1293,7 @@ func testDesktopMonitorInstallerMigratesPackagedMonitor() throws {
 
 let tests: [(String, () throws -> Void)] = [
     ("command contract", testCommandContract),
+    ("grind display formatter", testGrindDisplayFormatterUsesConciseLabels),
     ("quota snapshot clamps", testQuotaSnapshotClampsPercentValues),
     ("quota snapshot stores reset dates", testQuotaSnapshotStoresResetDates),
     ("quota extractor reads top-level snake case", testQuotaExtractorReadsTopLevelSnakeCase),

@@ -516,12 +516,12 @@ struct StatusPopoverView: View {
             HStack(spacing: 0) {
                 grindBandSegment(
                     icon: "sun.max.fill",
-                    text: "今日开工 \(member.dayGrindTime ?? "--")",
+                    text: GrindDisplayFormatter.start(member.dayGrindTime),
                     foreground: dayInk
                 )
                 grindBandSegment(
                     icon: "moon.fill",
-                    text: "昨日收工 \(member.nightGrindTime ?? "--")",
+                    text: GrindDisplayFormatter.finish(member.nightGrindTime),
                     foreground: nightInk
                 )
             }
