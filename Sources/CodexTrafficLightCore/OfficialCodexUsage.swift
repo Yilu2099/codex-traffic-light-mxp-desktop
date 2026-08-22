@@ -272,15 +272,15 @@ public struct CodexGrindHistoryCollector: Sendable {
             }
 
             var hasUserAuthoredContent: Bool {
-                guard let content, !content.isEmpty else { return true }
+                guard let content, !content.isEmpty else { return false }
                 return content.contains { item in
-                    guard item.type == "input_text" else { return true }
+                    guard item.type == "input_text" else { return false }
                     return Self.isUserAuthored(item.text ?? "")
                 }
             }
 
             var hasUserAuthoredMessage: Bool {
-                guard let message else { return true }
+                guard let message else { return false }
                 return Self.isUserAuthored(message)
             }
         }

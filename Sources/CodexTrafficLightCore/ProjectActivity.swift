@@ -175,6 +175,7 @@ private struct ProjectConversationSummaryCollector {
     private func cleanedSummary(_ raw: String) -> String? {
         var value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty, !ignoredPrefixes.contains(where: value.hasPrefix) else { return nil }
+        guard value.range(of: #"^</?[a-zA-Z][^>]*>$"#, options: .regularExpression) == nil else { return nil }
         value = value.replacingOccurrences(of: #"```[\s\S]*?```"#, with: "[代码操作]", options: .regularExpression)
         value = value.replacingOccurrences(of: #"https?://\S+"#, with: "[链接]", options: .regularExpression)
         value = value.replacingOccurrences(of: #"(?:/[\w.\-\p{Han} ]+){2,}"#, with: "[本地项目]", options: .regularExpression)

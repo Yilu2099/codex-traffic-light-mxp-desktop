@@ -882,7 +882,7 @@ func testGrindHistoryCollectorReadsOnlyEventTimestamps() throws {
     ].joined(separator: "\n")
         .write(to: continuedConversation, atomically: true, encoding: .utf8)
     let environmentOnlyConversation = sessions.appendingPathComponent("rollout-2026-08-22T07-31-00-01a02710-a3b7-7a12-8f5e-1de50869504a.jsonl")
-    try #"{"timestamp":"2026-08-21T23:31:00.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<recommended_plugins>system context</recommended_plugins>"},{"type":"input_text","text":"<environment_context>system context</environment_context>"},{"type":"input_text","text":"<app-context>system context</app-context>"}]}}"#
+    try #"{"timestamp":"2026-08-21T23:31:00.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_image","image_url":"hidden"},{"type":"input_text","text":"<recommended_plugins>system context</recommended_plugins>"},{"type":"input_text","text":"<environment_context>system context</environment_context>"},{"type":"input_text","text":"<app-context>system context</app-context>"}]}}"#
         .write(to: environmentOnlyConversation, atomically: true, encoding: .utf8)
     let laterNewConversation = sessions.appendingPathComponent("rollout-2026-08-22T10-57-13-01a02766-a3b7-7a12-8f5e-1de50869504a.jsonl")
     try [
@@ -903,10 +903,8 @@ func testGrindHistoryCollectorReadsOnlyEventTimestamps() throws {
 
     let report = CodexGrindHistoryCollector().collectDetailed(codexHome: root, days: 30, now: now)
     try expectEqual(report.history, [
-        TeamGrindHistoryDay(grindDay: "2026-08-21", dayGrindTime: nil, nightGrindTime: "02:04"),
         TeamGrindHistoryDay(grindDay: "2026-08-22", dayGrindTime: "10:03", nightGrindTime: nil),
-        TeamGrindHistoryDay(grindDay: "2026-08-23", dayGrindTime: "14:15", nightGrindTime: nil),
-    ], "grind history should use the first authored prompt in an old conversation and ignore environment-only setup")
+    ], "grind history should require authored text and ignore attachment-only or environment-only setup")
     let continued = report.sessions.first { $0.sessionId == "01a025a7-5636-7730-a6f7-b0c98fae3d95" && $0.day == "2026-08-22" }
     try expectEqual(continued?.dayTurnCount, 2, "interaction summary should deduplicate duplicate encodings of one user turn")
     try expectEqual(continued?.firstDayUserAt, "2026-08-22T02:03:00.500Z", "interaction summary should retain the first authored turn in an old conversation")
@@ -1021,6 +1019,7 @@ func testProjectActivityAddsOnlySanitizedWorkSummary() throws {
         #"{"timestamp":"\#(timestamp)","type":"session_meta","payload":{"cwd":"\#(repository.path)","source":"vscode"}}"#,
         #"{"timestamp":"\#(timestamp)","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>自动上下文</environment_context>"}]}}"#,
         #"{"timestamp":"\#(timestamp)","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"请修复 /Users/example/private/project 的开工时间并检查 https://internal.example/token"}]}}"#,
+        #"{"timestamp":"\#(timestamp)","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"</image>"}]}}"#,
     ].joined(separator: "\n")
     try lines.write(to: sessionURL, atomically: true, encoding: .utf8)
     let store = ProjectActivityStore(activityURL: activityURL)
