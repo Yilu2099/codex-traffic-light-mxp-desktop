@@ -2,6 +2,36 @@ import AppKit
 import SwiftUI
 import CodexTrafficLightCore
 
+enum StatusRankingRange: String, CaseIterable, Equatable {
+    case today
+    case week
+    case month
+
+    var shortLabel: String {
+        switch self {
+        case .today: return "实时"
+        case .week: return "周"
+        case .month: return "月"
+        }
+    }
+
+    var heading: String {
+        switch self {
+        case .today: return "今日团队活跃"
+        case .week: return "本周团队活跃"
+        case .month: return "本月团队活跃"
+        }
+    }
+
+    var emptyUsageText: String {
+        switch self {
+        case .today: return "今日暂无使用"
+        case .week: return "本周暂无使用"
+        case .month: return "本月暂无使用"
+        }
+    }
+}
+
 @MainActor
 final class StatusPopoverModel: ObservableObject {
     @Published var snapshot: StateSnapshot?
@@ -9,11 +39,14 @@ final class StatusPopoverModel: ObservableObject {
     @Published var syncedQuota: TeamQuotaReport?
     @Published var syncDetail: String = "正在读取团队数据…"
     @Published var websiteURL: URL?
+    @Published var selectedRange: StatusRankingRange = .today
+    @Published var isRangeLoading = false
 }
 
 struct StatusPopoverView: View {
     @ObservedObject var model: StatusPopoverModel
     let openWebsite: (String?) -> Void
+    let selectRange: (StatusRankingRange) -> Void
     let openGuide: () -> Void
     let quit: () -> Void
 
@@ -155,16 +188,11 @@ struct StatusPopoverView: View {
     private var rankingSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
-                Text("今日团队活跃")
+                Text(model.selectedRange.heading)
                     .font(.system(size: 17, weight: .bold, design: .rounded))
                     .foregroundStyle(ink)
                 Spacer()
-                Text("实时")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(green)
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 4)
-                    .background(green.opacity(0.08), in: Capsule())
+                rangeSwitch
             }
 
             VStack(spacing: 0) {
@@ -173,6 +201,34 @@ struct StatusPopoverView: View {
             .background(card, in: RoundedRectangle(cornerRadius: 17, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 17, style: .continuous).stroke(line, lineWidth: 1))
         }
+    }
+
+    private var rangeSwitch: some View {
+        HStack(spacing: 2) {
+            ForEach(StatusRankingRange.allCases, id: \.rawValue) { range in
+                Button {
+                    guard range != model.selectedRange else { return }
+                    selectRange(range)
+                } label: {
+                    Text(range.shortLabel)
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(range == model.selectedRange ? green : muted)
+                        .padding(.horizontal, range == .today ? 9 : 8)
+                        .padding(.vertical, 4)
+                        .background(
+                            range == model.selectedRange ? green.opacity(0.09) : Color.clear,
+                            in: Capsule()
+                        )
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("切换到\(range.heading)")
+                .accessibilityAddTraits(range == model.selectedRange ? .isSelected : [])
+            }
+        }
+        .padding(2)
+        .background(line.opacity(0.42), in: Capsule())
+        .opacity(model.isRangeLoading ? 0.72 : 1)
+        .animation(.easeOut(duration: 0.16), value: model.selectedRange)
     }
 
     @ViewBuilder
@@ -372,7 +428,7 @@ struct StatusPopoverView: View {
 
     private func memberActiveText(_ member: TeamRankingMember) -> String {
         if member.tokens <= 0 && member.sessions <= 0 {
-            return member.hasEverJoined ? "今日暂无使用" : "还未加入"
+            return member.hasEverJoined ? model.selectedRange.emptyUsageText : "还未加入"
         }
         if let lastActive = validLastActive(member) {
             return (member.online ?? isOnline(lastActive)) ? "在线" : "最后 \(lastActive)"

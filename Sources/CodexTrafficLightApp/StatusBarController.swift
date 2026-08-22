@@ -5,6 +5,7 @@ import SwiftUI
 @MainActor
 protocol StatusBarControllerDelegate: AnyObject {
     func statusBarDidRequestQuit()
+    func statusBarDidSelectRankingRange(_ range: StatusRankingRange)
 }
 
 @MainActor
@@ -59,6 +60,7 @@ final class StatusBarController {
         let rootView = StatusPopoverView(
             model: popoverModel,
             openWebsite: { [weak self] memberID in self?.openTeamWebsite(memberID: memberID) },
+            selectRange: { [weak self] range in self?.selectRankingRange(range) },
             openGuide: { [weak self] in self?.openTeamGuide() },
             quit: { [weak self] in self?.delegate?.statusBarDidRequestQuit() }
         )
@@ -91,6 +93,16 @@ final class StatusBarController {
             refreshQuotaPresentation()
         }
         if let syncDetail { popoverModel.syncDetail = syncDetail }
+        popoverModel.isRangeLoading = false
+    }
+
+    func setRankingRange(_ range: StatusRankingRange, isLoading: Bool) {
+        popoverModel.selectedRange = range
+        popoverModel.isRangeLoading = isLoading
+    }
+
+    func setRankingRangeLoading(_ isLoading: Bool) {
+        popoverModel.isRangeLoading = isLoading
     }
 
     func setTeamSyncDetail(_ detail: String, websiteURL: URL? = nil) {
@@ -222,6 +234,11 @@ final class StatusBarController {
         guideURL.append(path: "guide")
         NSWorkspace.shared.open(guideURL)
         popover.performClose(nil)
+    }
+
+    private func selectRankingRange(_ range: StatusRankingRange) {
+        setRankingRange(range, isLoading: true)
+        delegate?.statusBarDidSelectRankingRange(range)
     }
 
     private func updateBreathingFrame() {

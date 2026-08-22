@@ -17,6 +17,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
     private var presenceFailureLogged = false
     private var latestQuotaDiagnostic: TeamQuotaDiagnostic?
     private let quotaRefreshCoordinator = QuotaRefreshCoordinator()
+    private var selectedRankingRange: StatusRankingRange = .today
+    private var rankingRequestSequence = 0
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if let release = Bundle.main.executableURL?.deletingLastPathComponent() {
@@ -138,12 +140,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
         let quota = TeamQuotaReport.from(snapshot: store.read())
         let quotaDiagnostic = latestQuotaDiagnostic
         let service = TeamUsageSyncService(configuration: configuration)
+        let requestedRange = selectedRankingRange
         statusBar.setTeamSyncDetail("正在同步本机数据…", websiteURL: service.websiteURL)
         Task { [weak self] in
             do {
                 let ranking = try await Task.detached(priority: .utility) {
                     _ = try await service.sync(quota: quota, quotaDiagnostic: quotaDiagnostic)
-                    let ranking = try await service.fetchRanking(range: "today")
+                    let ranking = try await service.fetchRanking(range: requestedRange.rawValue)
                     await PersistentAvatarCachePrefetcher.prefetch(
                         ranking: ranking,
                         websiteURL: service.websiteURL
@@ -151,6 +154,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
                     return ranking
                 }.value
                 self?.isTeamSyncing = false
+                guard self?.selectedRankingRange == requestedRange else { return }
                 self?.statusBar.applyTeamRanking(
                     ranking,
                     websiteURL: service.websiteURL,
@@ -165,28 +169,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
         }
     }
 
-    private func refreshTeamRanking() {
-        guard let configuration = teamSyncConfiguration, !isTeamRankingRefreshing, !isTeamSyncing else { return }
+    private func refreshTeamRanking(range: StatusRankingRange? = nil, force: Bool = false) {
+        guard let configuration = teamSyncConfiguration else { return }
+        if !force && (isTeamRankingRefreshing || isTeamSyncing) { return }
+        let requestedRange = range ?? selectedRankingRange
+        selectedRankingRange = requestedRange
+        rankingRequestSequence += 1
+        let requestSequence = rankingRequestSequence
         isTeamRankingRefreshing = true
         let service = TeamUsageSyncService(configuration: configuration)
         Task { [weak self] in
             do {
                 let ranking = try await Task.detached(priority: .utility) {
-                    let ranking = try await service.fetchRanking(range: "today")
+                    let ranking = try await service.fetchRanking(range: requestedRange.rawValue)
                     await PersistentAvatarCachePrefetcher.prefetch(
                         ranking: ranking,
                         websiteURL: service.websiteURL
                     )
                     return ranking
                 }.value
-                self?.isTeamRankingRefreshing = false
-                self?.statusBar.applyTeamRanking(
+                guard let self else { return }
+                guard self.rankingRequestSequence == requestSequence,
+                      self.selectedRankingRange == requestedRange else { return }
+                self.isTeamRankingRefreshing = false
+                self.statusBar.applyTeamRanking(
                     ranking,
                     websiteURL: service.websiteURL,
                     currentUserID: configuration.userID
                 )
             } catch {
-                self?.isTeamRankingRefreshing = false
+                guard let self else { return }
+                guard self.rankingRequestSequence == requestSequence else { return }
+                self.isTeamRankingRefreshing = false
+                self.statusBar.setRankingRangeLoading(false)
                 AppDelegate.appendTeamSyncLog("ranking refresh failed: \(error)")
             }
         }
@@ -350,6 +365,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
         } catch {
             return -1
         }
+    }
+
+    func statusBarDidSelectRankingRange(_ range: StatusRankingRange) {
+        selectedRankingRange = range
+        refreshTeamRanking(range: range, force: true)
     }
 
     func statusBarDidRequestQuit() {

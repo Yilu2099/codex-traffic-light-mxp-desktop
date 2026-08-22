@@ -969,6 +969,8 @@ func testTeamRankingURLUsesWebsiteOrigin() throws {
     let service = TeamUsageSyncService(configuration: configuration)
     try expectEqual(service.websiteURL.absoluteString, "https://meet.example.com/", "website link should use the ranking origin")
     try expectEqual(service.rankingsURL().absoluteString, "https://meet.example.com/api/rankings?range=today", "menu should fetch today's ranking")
+    try expectEqual(service.rankingsURL(range: "week").absoluteString, "https://meet.example.com/api/rankings?range=week", "menu should fetch this week's ranking")
+    try expectEqual(service.rankingsURL(range: "month").absoluteString, "https://meet.example.com/api/rankings?range=month", "menu should fetch this month's ranking")
     try expectEqual(service.presenceURL.absoluteString, "https://meet.example.com/api/presence", "presence should use a lightweight endpoint on the ranking origin")
     let activeAt = Date(timeIntervalSince1970: 1_700_000_000)
     let payload = service.makePresencePayload(lastActiveAt: activeAt, now: activeAt.addingTimeInterval(5))
