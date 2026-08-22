@@ -14,6 +14,7 @@ final class StatusPopoverModel: ObservableObject {
 struct StatusPopoverView: View {
     @ObservedObject var model: StatusPopoverModel
     let openWebsite: (String?) -> Void
+    let openGuide: () -> Void
     let quit: () -> Void
 
     private let canvas = Color(red: 0.985, green: 0.982, blue: 0.974)
@@ -224,15 +225,17 @@ struct StatusPopoverView: View {
     }
 
     private func joinedMemberDetails(_ member: TeamRankingMember) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
+        let online = validLastActive(member).map { isOnline($0) } ?? false
+        return VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 7) {
                 Text(displayName(member))
                     .font(.system(size: 16, weight: .bold))
                     .foregroundStyle(ink)
                     .lineLimit(1)
-                Circle()
-                    .fill(member.tokens > 0 || member.sessions > 0 ? green : muted.opacity(0.45))
-                    .frame(width: 5, height: 5)
+                onlineStatusDot(
+                    isOnline: online,
+                    hasActivity: member.tokens > 0 || member.sessions > 0
+                )
                 Text(memberActiveText(member))
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(muted)
@@ -253,6 +256,28 @@ struct StatusPopoverView: View {
             grindActivityBand(member)
         }
         .frame(maxWidth: .infinity)
+    }
+
+    private func onlineStatusDot(isOnline: Bool, hasActivity: Bool) -> some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !isOnline)) { context in
+            let duration = 1.8
+            let phase = context.date.timeIntervalSinceReferenceDate
+                .truncatingRemainder(dividingBy: duration) / duration
+            ZStack {
+                if isOnline {
+                    Circle()
+                        .stroke(green.opacity(0.46 * (1 - phase)), lineWidth: 1.25)
+                        .frame(width: 5, height: 5)
+                        .scaleEffect(0.7 + 2.5 * phase)
+                }
+                Circle()
+                    .fill(hasActivity ? green : muted.opacity(0.45))
+                    .frame(width: 5, height: 5)
+            }
+            .frame(width: 5, height: 5)
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 
     private func avatar(_ member: TeamRankingMember) -> some View {
@@ -277,11 +302,23 @@ struct StatusPopoverView: View {
     }
 
     private var versionNote: some View {
-        Text("v\(ClientVersion.current)")
-            .font(.system(size: 12, weight: .semibold, design: .monospaced))
-            .foregroundStyle(muted.opacity(0.78))
-            .frame(maxWidth: .infinity, alignment: .center)
-            .padding(.horizontal, 4)
+        HStack(spacing: 9) {
+            Text("v\(ClientVersion.current)")
+                .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                .foregroundStyle(muted.opacity(0.78))
+            Circle()
+                .fill(line)
+                .frame(width: 3, height: 3)
+            Button(action: openGuide) {
+                Label("使用说明", systemImage: "book.closed")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(green)
+            }
+            .buttonStyle(.plain)
+            .disabled(model.websiteURL == nil)
+        }
+        .frame(maxWidth: .infinity, alignment: .center)
+        .padding(.horizontal, 4)
     }
 
     private var footer: some View {

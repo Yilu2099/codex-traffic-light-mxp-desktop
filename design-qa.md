@@ -1,40 +1,33 @@
-# 状态栏成员卡片精简版设计验收
+**Comparison target**
 
-- 源视觉：`/tmp/codex-remote-attachments/01a02797-a437-7831-a01e-a1276383d662/68DBAF21-7E45-4B17-9DDF-983510DB94EA/1-照片-1.jpg`
-- 加入成员截图：`/Users/lu/Desktop/开发/创新局/预览/2026-08-22-状态栏精简卡片/status-popover-v1.2.15-slanted.png`
-- 未加入成员截图：`/Users/lu/Desktop/开发/创新局/预览/2026-08-22-状态栏精简卡片/status-popover-v1.2.15-unjoined.png`
-- 视口：SwiftUI 面板 `456 × 640 pt`，2x 截图为 `912 × 1280 px`，浅色模式。
-- 源图尺寸：`1280 × 607 px`。源图用于确认作息条的暖黄/灰蓝配色、圆角和中央斜切接缝；新版其余信息层级继续以用户已确认的精简卡片为准。
-- 状态：两名已加入成员，以及一名未加入成员。
+- Source visual truth: `/Users/lu/.codex/generated_images/01a02843-3c59-7ba1-958e-9dcbaff28517/exec-db62fc30-7c83-4860-9551-1af26ae80656.png`
+- Rendered implementation: `/Users/lu/Desktop/开发/创新局/预览/2026-08-22-在线波纹与使用说明/status-popover-v1.2.32.png`
+- Combined comparison: `/Users/lu/Desktop/开发/创新局/预览/2026-08-22-在线波纹与使用说明/design-qa-comparison.png`
+- Viewport: native 456 x 640 SwiftUI popover capture at display density 2.
+- State: 张璐 online within 20 minutes; 乔月 offline with last-active time.
 
-## Findings
+**Findings**
 
-- 无 P0 / P1 / P2 遗留问题。
-- 删除排名圆标和会话次数是本轮明确需求，不属于还原偏差。
-- 字体与排版：姓名使用 18pt 粗体，辅助信息保持紧凑；捕获状态中没有文案换行或截断。
-- 间距与布局：头像增至 72pt；Token 收入姓名行后，不再挤压下方信息；所有已加入成员共享同一内容宽度。
-- 进度与作息条：周余额轨道固定为 54pt；开工收工条占满统一内容列，两半等宽，并加入约 14pt 落差的中央斜切和 2.5pt 暖白接缝。斜切只改变背景轮廓，不侵占文字安全区。
-- 颜色与视觉令牌：保留暖白、绿色、暖黄日间和灰蓝夜间配色，没有新增抢眼边框。
-- 图像与图标：复用真实头像资源和 SF Symbols，没有占位图或重绘头像。
-- 文案与内容：与网站最新口径统一为 `开工 / 收工`，凌晨收工明确标注 `次日`；状态栏不再显示会话次数；未加入成员只显示头像、姓名和 `众神未归位`。
+- No actionable P0/P1/P2 mismatch remains.
+- The pulse halo is centered on the existing 5 pt green dot, expands without changing row layout, and appears only for the online member.
+- The implementation intentionally keeps the newer “今日开工 / 昨日收工” copy instead of the older source mock wording.
 
-## 聚焦区域
+**Required fidelity surfaces**
 
-本轮同时打开源视觉与 1.2.15 真实 SwiftUI 捕获，按同一作息条状态检查中央斜切、圆角、配色、文字居中和单行稳定性；另用未加入状态捕获检查精简逻辑未被改动。
+- Typography: existing system/PingFang sizes and weights are unchanged.
+- Spacing: the dot retains its original 5 pt layout footprint; the halo draws outside it without moving adjacent text.
+- Colors: the halo reuses the existing semantic green with decreasing opacity.
+- Assets: the production avatar and brand assets remain unchanged.
+- Copy: online/last-time behavior follows the 20-minute rule; the selected motion introduces no new status copy.
 
-## Comparison History
+**Interaction and runtime checks**
 
-1. 1.2.14 的规整等分条满足固定宽度，但用户反馈中央平直分割缺少原版设计感。
-2. 1.2.15 恢复中央斜切拼接，同时保持两段等宽；真实捕获确认 `收工 次日 02:04` 仍为单行。
-3. 补充捕获未加入成员状态，确认其余 Token、活跃时间、额度和作息信息仍全部隐藏。
+- Swift release test suite: 54/54 passed.
+- Native SwiftUI capture completed successfully.
+- Website guide desktop and 390 px mobile views rendered without overflow or console errors.
 
-## 实现清单
+**Comparison history**
 
-- 移除排名数字。
-- 移除状态栏会话次数。
-- 头像扩大为 72pt。
-- Token 移入姓名状态行。
-- 统一额度进度轨道和开工收工条尺寸，并恢复带暖白接缝的斜切拼接。
-- 未加入成员精简为头像、姓名和 `众神未归位`。
+- First implementation comparison passed; no P0/P1/P2 fixes were required.
 
 final result: passed

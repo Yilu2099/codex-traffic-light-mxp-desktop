@@ -54,7 +54,7 @@ enum StatusPopoverCapture {
         }
         model.websiteURL = URL(string: "https://c.wanhe.cn")
 
-        let view = NSHostingView(rootView: StatusPopoverView(model: model, openWebsite: { _ in }, quit: {}))
+        let view = NSHostingView(rootView: StatusPopoverView(model: model, openWebsite: { _ in }, openGuide: {}, quit: {}))
         view.appearance = NSAppearance(named: .aqua)
         view.frame = NSRect(x: 0, y: 0, width: 456, height: 640)
         view.layoutSubtreeIfNeeded()

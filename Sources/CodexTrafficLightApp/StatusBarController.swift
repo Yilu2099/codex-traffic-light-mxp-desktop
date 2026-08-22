@@ -59,6 +59,7 @@ final class StatusBarController {
         let rootView = StatusPopoverView(
             model: popoverModel,
             openWebsite: { [weak self] memberID in self?.openTeamWebsite(memberID: memberID) },
+            openGuide: { [weak self] in self?.openTeamGuide() },
             quit: { [weak self] in self?.delegate?.statusBarDidRequestQuit() }
         )
         let hostingController = NSHostingController(rootView: rootView)
@@ -212,6 +213,13 @@ final class StatusBarController {
         var components = URLComponents(url: teamWebsiteURL, resolvingAgainstBaseURL: false)
         if let memberID { components?.queryItems = [URLQueryItem(name: "member", value: memberID)] }
         NSWorkspace.shared.open(components?.url ?? teamWebsiteURL)
+        popover.performClose(nil)
+    }
+
+    private func openTeamGuide() {
+        guard var guideURL = teamWebsiteURL else { return }
+        guideURL.append(path: "guide")
+        NSWorkspace.shared.open(guideURL)
         popover.performClose(nil)
     }
 
