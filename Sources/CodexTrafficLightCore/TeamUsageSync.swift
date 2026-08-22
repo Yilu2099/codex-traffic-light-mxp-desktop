@@ -300,10 +300,39 @@ public struct TeamUsagePayload: Codable, Equatable, Sendable {
     public var officialUsage: OfficialCodexUsageReport
     public var todayLiveUsage: TodayLiveUsageReport
     public var sessionActivity: [TeamSessionActivity]
+    public var interactionSummary: [TeamSessionInteractionSummary]
     public var grindHistory: [TeamGrindHistoryDay]
     public var grindHistoryMode: String
     public var projects: [TeamProjectActivity]
     public var sessions: [TeamUsageSession]
+}
+
+public struct TeamSessionInteractionSummary: Codable, Equatable, Sendable {
+    public var sessionId: String
+    public var day: String
+    public var firstDayUserAt: String?
+    public var lastDayUserAt: String?
+    public var dayTurnCount: Int
+    public var lastNightUserAt: String?
+    public var nightTurnCount: Int
+
+    public init(
+        sessionId: String,
+        day: String,
+        firstDayUserAt: String? = nil,
+        lastDayUserAt: String? = nil,
+        dayTurnCount: Int = 0,
+        lastNightUserAt: String? = nil,
+        nightTurnCount: Int = 0
+    ) {
+        self.sessionId = sessionId
+        self.day = day
+        self.firstDayUserAt = firstDayUserAt
+        self.lastDayUserAt = lastDayUserAt
+        self.dayTurnCount = dayTurnCount
+        self.lastNightUserAt = lastNightUserAt
+        self.nightTurnCount = nightTurnCount
+    }
 }
 
 public struct TeamUsageSyncResult: Codable, Equatable, Sendable {
@@ -721,7 +750,7 @@ public struct TeamUsageSyncService: Sendable {
             codexHome: configuration.codexHome,
             days: configuration.collectDays
         )
-        let grindHistory = CodexGrindHistoryCollector().collect(
+        let interactionReport = CodexGrindHistoryCollector().collectDetailed(
             codexHome: configuration.codexHome,
             days: min(30, configuration.collectDays)
         )
@@ -742,8 +771,9 @@ public struct TeamUsageSyncService: Sendable {
             officialUsage: officialUsage,
             todayLiveUsage: todayLiveUsage,
             sessionActivity: sessionActivity,
-            grindHistory: grindHistory,
-            grindHistoryMode: "interaction_v3",
+            interactionSummary: interactionReport.sessions,
+            grindHistory: interactionReport.history,
+            grindHistoryMode: "interaction_v4",
             projects: ProjectActivityStore().report(days: configuration.collectDays),
             sessions: calendarUsage
         )

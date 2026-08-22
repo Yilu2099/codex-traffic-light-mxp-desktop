@@ -240,6 +240,11 @@ public struct CodexSessionFileCounter: Sendable {
 }
 
 public struct CodexGrindHistoryCollector: Sendable {
+    private struct InteractionDates {
+        var day: [Date] = []
+        var night: [Date] = []
+    }
+
     private struct EventEnvelope: Decodable {
         struct Payload: Decodable {
             struct Content: Decodable {
@@ -249,21 +254,34 @@ public struct CodexGrindHistoryCollector: Sendable {
 
             var type: String?
             var role: String?
+            var message: String?
             var content: [Content]?
+
+            private static let systemPrefixes = [
+                "<recommended_plugins>", "# AGENTS.md instructions", "<environment_context>",
+                "<app-context>", "<permissions instructions>", "<collaboration_mode>",
+                "<apps_instructions>", "<plugins_instructions>",
+                "Continue where you left off. The previous model attempt failed or timed out.",
+                "The following is the Codex agent history",
+            ]
+
+            private static func isUserAuthored(_ value: String) -> Bool {
+                let text = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !text.isEmpty else { return false }
+                return !systemPrefixes.contains { text.hasPrefix($0) }
+            }
 
             var hasUserAuthoredContent: Bool {
                 guard let content, !content.isEmpty else { return true }
-                let systemPrefixes = [
-                    "<recommended_plugins>", "# AGENTS.md instructions", "<environment_context>",
-                    "<app-context>", "<permissions instructions>", "<collaboration_mode>",
-                    "<apps_instructions>", "<plugins_instructions>",
-                ]
                 return content.contains { item in
                     guard item.type == "input_text" else { return true }
-                    let text = (item.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard !text.isEmpty else { return false }
-                    return !systemPrefixes.contains { text.hasPrefix($0) }
+                    return Self.isUserAuthored(item.text ?? "")
                 }
+            }
+
+            var hasUserAuthoredMessage: Bool {
+                guard let message else { return true }
+                return Self.isUserAuthored(message)
             }
         }
         var timestamp: String?
@@ -271,7 +289,9 @@ public struct CodexGrindHistoryCollector: Sendable {
         var payload: Payload?
 
         var isUserInteraction: Bool {
-            if type == "event_msg", payload?.type == "user_message" { return true }
+            if type == "event_msg", payload?.type == "user_message" {
+                return payload?.hasUserAuthoredMessage == true
+            }
             return type == "response_item"
                 && payload?.type == "message"
                 && payload?.role == "user"
@@ -284,11 +304,20 @@ public struct CodexGrindHistoryCollector: Sendable {
     public init() {}
 
     public func collect(codexHome: URL, days: Int = 30, now: Date = Date()) -> [TeamGrindHistoryDay] {
+        collectDetailed(codexHome: codexHome, days: days, now: now).history
+    }
+
+    public func collectDetailed(
+        codexHome: URL,
+        days: Int = 30,
+        now: Date = Date()
+    ) -> (history: [TeamGrindHistoryDay], sessions: [TeamSessionInteractionSummary]) {
         let cutoff = now.addingTimeInterval(-Double(max(1, days) + 1) * 86_400)
         let roots = ["sessions", "archived_sessions"].map { codexHome.appendingPathComponent($0) }
         var history: [String: (day: Date?, night: Date?)] = [:]
+        var interactionDates: [String: InteractionDates] = [:]
 
-        func recordUserInteraction(_ date: Date) {
+        func recordUserInteraction(_ date: Date, sessionID: String) {
             guard date >= cutoff else { return }
             let components = Calendar(identifier: .gregorian).dateComponents(in: timezone, from: date)
             guard let hour = components.hour else { return }
@@ -297,6 +326,12 @@ public struct CodexGrindHistoryCollector: Sendable {
             if hour >= 5, current.day == nil || date < current.day! { current.day = date }
             if hour >= 23 || hour < 5, current.night == nil || date > current.night! { current.night = date }
             history[day] = current
+
+            let key = "\(sessionID)|\(day)"
+            var summary = interactionDates[key] ?? InteractionDates()
+            if hour >= 5 { summary.day.append(date) }
+            if hour >= 23 || hour < 5 { summary.night.append(date) }
+            interactionDates[key] = summary
         }
 
         for root in roots {
@@ -309,21 +344,19 @@ public struct CodexGrindHistoryCollector: Sendable {
                 let modifiedAt = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
                 let startedAt = CodexSessionFileCounter().timestampFromFilename(url.lastPathComponent) ?? modifiedAt
                 guard max(startedAt, modifiedAt) >= cutoff else { continue }
-                guard let data = try? Data(contentsOf: url),
-                      let text = String(data: data, encoding: .utf8) else { continue }
-                text.enumerateLines { line, _ in
+                let sessionID = sessionID(from: url)
+                enumerateLines(in: url) { line in
+                    guard line.contains("\"user_message\"") || line.contains("\"role\":\"user\"") else { return }
                     guard let event = try? JSONDecoder().decode(EventEnvelope.self, from: Data(line.utf8)),
                           event.isUserInteraction,
                           let timestamp = event.timestamp,
                           let date = Self.isoDate(timestamp) else { return }
-                    // Day start is the first prompt actually sent by the user,
-                    // including prompts in a conversation created on an older day.
-                    recordUserInteraction(date)
+                    recordUserInteraction(date, sessionID: sessionID)
                 }
             }
         }
 
-        return history.keys.sorted().suffix(max(1, days)).map { day in
+        let grindHistory = history.keys.sorted().suffix(max(1, days)).map { day in
             let item = history[day] ?? (nil, nil)
             return TeamGrindHistoryDay(
                 grindDay: day,
@@ -331,6 +364,51 @@ public struct CodexGrindHistoryCollector: Sendable {
                 nightGrindTime: item.night.map(timeString)
             )
         }
+        let sessionSummaries = interactionDates.keys.sorted().compactMap { key -> TeamSessionInteractionSummary? in
+            guard let values = interactionDates[key] else { return nil }
+            let parts = key.split(separator: "|", maxSplits: 1).map(String.init)
+            guard parts.count == 2 else { return nil }
+            let dayDates = uniqueTurns(values.day)
+            let nightDates = uniqueTurns(values.night)
+            return TeamSessionInteractionSummary(
+                sessionId: parts[0],
+                day: parts[1],
+                firstDayUserAt: dayDates.first.map(isoString),
+                lastDayUserAt: dayDates.last.map(isoString),
+                dayTurnCount: dayDates.count,
+                lastNightUserAt: nightDates.last.map(isoString),
+                nightTurnCount: nightDates.count
+            )
+        }
+        return (grindHistory, sessionSummaries)
+    }
+
+    private func enumerateLines(in url: URL, visit: (String) -> Void) {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return }
+        defer { try? handle.close() }
+        var buffer = Data()
+        while let chunk = try? handle.read(upToCount: 64 * 1024), !chunk.isEmpty {
+            buffer.append(chunk)
+            while let newline = buffer.firstIndex(of: 0x0A) {
+                let line = buffer.subdata(in: buffer.startIndex..<newline)
+                if let text = String(data: line, encoding: .utf8) { visit(text) }
+                buffer.removeSubrange(buffer.startIndex...newline)
+            }
+        }
+        if !buffer.isEmpty, let text = String(data: buffer, encoding: .utf8) { visit(text) }
+    }
+
+    private func uniqueTurns(_ values: [Date]) -> [Date] {
+        values.sorted().reduce(into: []) { result, date in
+            if let previous = result.last, date.timeIntervalSince(previous) < 2.5 { return }
+            result.append(date)
+        }
+    }
+
+    private func sessionID(from url: URL) -> String {
+        let filename = url.deletingPathExtension().lastPathComponent
+        let pattern = #"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"#
+        return filename.range(of: pattern, options: .regularExpression).map { String(filename[$0]) } ?? filename
     }
 
     private func grindDay(for date: Date, hour: Int) -> String {
@@ -349,6 +427,12 @@ public struct CodexGrindHistoryCollector: Sendable {
         formatter.locale = Locale(identifier: "en_GB")
         formatter.timeZone = timezone
         formatter.dateFormat = "HH:mm"
+        return formatter.string(from: date)
+    }
+
+    private func isoString(_ date: Date) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter.string(from: date)
     }
 

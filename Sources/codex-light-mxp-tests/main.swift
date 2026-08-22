@@ -875,6 +875,8 @@ func testGrindHistoryCollectorReadsOnlyEventTimestamps() throws {
     let continuedConversation = sessions.appendingPathComponent("rollout-2026-08-21T19-30-00-01a025a7-5636-7730-a6f7-b0c98fae3d95.jsonl")
     try [
         #"{"timestamp":"2026-08-21T11:30:00.000Z","type":"session_meta","payload":{}}"#,
+        #"{"timestamp":"2026-08-22T02:03:00.000Z","type":"event_msg","payload":{"type":"user_message","message":"first authored turn"}}"#,
+        #"{"timestamp":"2026-08-22T02:03:00.500Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"first authored turn"}]}}"#,
         #"{"timestamp":"2026-08-22T02:08:12.000Z","type":"event_msg","payload":{"type":"user_message"}}"#,
     ].joined(separator: "\n")
         .write(to: continuedConversation, atomically: true, encoding: .utf8)
@@ -898,12 +900,16 @@ func testGrindHistoryCollectorReadsOnlyEventTimestamps() throws {
     try FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: laterNewConversation.path)
     try FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: afternoonOnly.path)
 
-    let history = CodexGrindHistoryCollector().collect(codexHome: root, days: 30, now: now)
-    try expectEqual(history, [
+    let report = CodexGrindHistoryCollector().collectDetailed(codexHome: root, days: 30, now: now)
+    try expectEqual(report.history, [
         TeamGrindHistoryDay(grindDay: "2026-08-21", dayGrindTime: nil, nightGrindTime: "02:04"),
-        TeamGrindHistoryDay(grindDay: "2026-08-22", dayGrindTime: "10:08", nightGrindTime: nil),
+        TeamGrindHistoryDay(grindDay: "2026-08-22", dayGrindTime: "10:03", nightGrindTime: nil),
         TeamGrindHistoryDay(grindDay: "2026-08-23", dayGrindTime: "14:15", nightGrindTime: nil),
     ], "grind history should use the first authored prompt in an old conversation and ignore environment-only setup")
+    let continued = report.sessions.first { $0.sessionId == "01a025a7-5636-7730-a6f7-b0c98fae3d95" && $0.day == "2026-08-22" }
+    try expectEqual(continued?.dayTurnCount, 2, "interaction summary should deduplicate duplicate encodings of one user turn")
+    try expectEqual(continued?.firstDayUserAt, "2026-08-22T02:03:00.000Z", "interaction summary should retain the first turn in an old conversation")
+    try expectEqual(continued?.lastDayUserAt, "2026-08-22T02:08:12.000Z", "interaction summary should retain the last turn in an old conversation")
 }
 
 func testTodayLiveCollectorStartsAtEOFAndCountsOnlyAppendedUsage() throws {
