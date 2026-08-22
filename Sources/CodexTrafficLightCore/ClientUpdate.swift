@@ -2,7 +2,7 @@ import CryptoKit
 import Foundation
 
 public enum ClientVersion {
-    public static let current = "1.2.29"
+    public static let current = "1.2.30"
     public static let signingPublicKeyBase64 = "kx2EJhi8RR4A+CTuoSs4Fx5f59+oicxN5z9wMPra3nc="
 
     public static func compare(_ left: String, _ right: String) -> ComparisonResult {
