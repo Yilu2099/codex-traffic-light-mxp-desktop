@@ -389,26 +389,52 @@ struct StatusPopoverView: View {
     }
 
     private func grindActivityBand(_ member: TeamRankingMember) -> some View {
-        HStack(spacing: 0) {
-            grindBandSegment(
-                icon: "sun.max.fill",
-                text: "开工 \(member.dayGrindTime ?? "--")",
-                foreground: dayInk,
-                background: dayTint
-            )
-            grindBandSegment(
-                icon: "moon.fill",
-                text: "收工 \(finishTimeText(member.nightGrindTime))",
-                foreground: nightInk,
-                background: nightTint
-            )
+        ZStack {
+            GeometryReader { proxy in
+                let width = proxy.size.width
+                let height = proxy.size.height
+                let middle = width / 2
+                let slant: CGFloat = 7
+                let seam: CGFloat = 1.25
+
+                Path { path in
+                    path.move(to: .zero)
+                    path.addLine(to: CGPoint(x: middle + slant - seam, y: 0))
+                    path.addLine(to: CGPoint(x: middle - slant - seam, y: height))
+                    path.addLine(to: CGPoint(x: 0, y: height))
+                    path.closeSubpath()
+                }
+                .fill(dayTint)
+
+                Path { path in
+                    path.move(to: CGPoint(x: middle + slant + seam, y: 0))
+                    path.addLine(to: CGPoint(x: width, y: 0))
+                    path.addLine(to: CGPoint(x: width, y: height))
+                    path.addLine(to: CGPoint(x: middle - slant + seam, y: height))
+                    path.closeSubpath()
+                }
+                .fill(nightTint)
+            }
+
+            HStack(spacing: 0) {
+                grindBandSegment(
+                    icon: "sun.max.fill",
+                    text: "开工 \(member.dayGrindTime ?? "--")",
+                    foreground: dayInk
+                )
+                grindBandSegment(
+                    icon: "moon.fill",
+                    text: "收工 \(finishTimeText(member.nightGrindTime))",
+                    foreground: nightInk
+                )
+            }
         }
-        .frame(maxWidth: .infinity)
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(line.opacity(0.6), lineWidth: 0.5))
+        .frame(maxWidth: .infinity, minHeight: 29)
+        .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).stroke(line.opacity(0.55), lineWidth: 0.5))
     }
 
-    private func grindBandSegment(icon: String, text: String, foreground: Color, background: Color) -> some View {
+    private func grindBandSegment(icon: String, text: String, foreground: Color) -> some View {
         HStack(spacing: 5) {
             Image(systemName: icon)
                 .font(.system(size: 9, weight: .semibold))
@@ -420,7 +446,6 @@ struct StatusPopoverView: View {
         .foregroundStyle(foreground)
         .frame(maxWidth: .infinity)
         .padding(.vertical, 5.5)
-        .background(background)
     }
 
     private func finishTimeText(_ value: String?) -> String {
