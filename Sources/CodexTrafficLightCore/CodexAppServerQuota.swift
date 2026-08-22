@@ -238,6 +238,7 @@ public struct CodexAppServerQuotaCollector {
             weeklyPercent: weekly,
             weeklyResetsAt: quota.weeklyResetsAt,
             source: Self.source,
+            limitID: CodexSessionQuotaCollector.primaryLimitID,
             now: now
         )
     }

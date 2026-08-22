@@ -47,6 +47,7 @@ public final class StateStore {
         weeklyPercent: Int,
         weeklyResetsAt: Date? = nil,
         source: String,
+        limitID: String? = nil,
         now: Date = Date()
     ) throws -> StateSnapshot {
         var snapshot = read()
@@ -54,6 +55,7 @@ public final class StateStore {
             weeklyRemainingPercent: weeklyPercent,
             weeklyResetsAt: weeklyResetsAt,
             source: source,
+            limitID: limitID,
             updatedAt: now
         )
         if let previous = snapshot.quota,
@@ -80,7 +82,8 @@ public final class StateStore {
     }
 
     private static func quotaAnomalyReason(previous: QuotaSnapshot, incoming: QuotaSnapshot, now: Date) -> String? {
-        if [CodexSessionQuotaCollector.source, CodexAppServerQuotaCollector.source].contains(incoming.source) {
+        if incoming.limitID == CodexSessionQuotaCollector.primaryLimitID,
+           [CodexSessionQuotaCollector.source, CodexAppServerQuotaCollector.source].contains(incoming.source) {
             return nil
         }
         guard let previousReset = previous.weeklyResetsAt,

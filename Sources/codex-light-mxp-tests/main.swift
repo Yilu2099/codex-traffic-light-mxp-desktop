@@ -244,12 +244,14 @@ func testStateStoreAcceptsOfficialCodexReset() throws {
         weeklyPercent: 28,
         weeklyResetsAt: now.addingTimeInterval(2 * 86_400),
         source: CodexSessionQuotaCollector.source,
+        limitID: CodexSessionQuotaCollector.primaryLimitID,
         now: now
     )
     let reset = try store.updateQuota(
         weeklyPercent: 100,
         weeklyResetsAt: now.addingTimeInterval(7 * 86_400),
         source: CodexSessionQuotaCollector.source,
+        limitID: CodexSessionQuotaCollector.primaryLimitID,
         now: now.addingTimeInterval(60)
     )
 
@@ -881,7 +883,8 @@ func testTeamQuotaReportUsesWeeklyPercentAndReset() throws {
         weeklyRemainingPercent: 79,
         weeklyResetsAt: reset,
         updatedAt: Date(timeIntervalSince1970: 1_000),
-        source: CodexSessionQuotaCollector.source
+        source: CodexSessionQuotaCollector.source,
+        limitID: CodexSessionQuotaCollector.primaryLimitID
     )
     try expectEqual(report.weeklyRemainingPercent, 79, "team quota should keep weekly remaining percent")
     try expectEqual(report.weeklyUsedPercent, 21, "team quota should derive weekly used percent")
@@ -889,6 +892,18 @@ func testTeamQuotaReportUsesWeeklyPercentAndReset() throws {
     try expectEqual(report.weeklyResetsAtDate, reset, "team quota should parse its reset time for client synchronization")
     try expectEqual(report.updatedAtDate, Date(timeIntervalSince1970: 1_000), "team quota should parse its update time for freshness checks")
     try expectEqual(report.source, CodexSessionQuotaCollector.source, "team quota should preserve its source for server-side echo protection")
+    try expectEqual(report.limitID, CodexSessionQuotaCollector.primaryLimitID, "team quota should explicitly identify the primary Codex limit")
+
+    let unverified = StateSnapshot(
+        updatedAt: Date(timeIntervalSince1970: 1_000),
+        quota: QuotaSnapshot(
+            weeklyRemainingPercent: 100,
+            weeklyResetsAt: reset,
+            source: CodexSessionQuotaCollector.source,
+            updatedAt: Date(timeIntervalSince1970: 1_000)
+        )
+    )
+    try expectEqual(TeamQuotaReport.from(snapshot: unverified), nil, "a cached quota without an exact Codex limit id must not be uploaded")
 }
 
 func testTeamRankingURLUsesWebsiteOrigin() throws {

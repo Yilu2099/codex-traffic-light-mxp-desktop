@@ -517,7 +517,8 @@ struct StatusPopoverView: View {
         if let quota = model.syncedQuota {
             return (quota.weeklyRemainingPercent, quota.weeklyResetsAtDate)
         }
-        guard let quota = model.snapshot?.quota else { return nil }
+        guard let quota = model.snapshot?.quota,
+              quota.limitID == CodexSessionQuotaCollector.primaryLimitID else { return nil }
         return (quota.weeklyRemainingPercent, quota.weeklyResetsAt)
     }
 

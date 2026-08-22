@@ -131,7 +131,8 @@ final class StatusBarController {
     }
 
     private func weeklyQuota(from snapshot: StateSnapshot?) -> (remainingPercent: Int?, resetsAt: Date?)? {
-        guard let quota = snapshot?.quota else { return nil }
+        guard let quota = snapshot?.quota,
+              quota.limitID == CodexSessionQuotaCollector.primaryLimitID else { return nil }
         return (quota.weeklyRemainingPercent, quota.weeklyResetsAt)
     }
 

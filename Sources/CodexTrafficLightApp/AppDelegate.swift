@@ -216,6 +216,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
                     weeklyPercent: localObservation.weeklyRemainingPercent,
                     weeklyResetsAt: localObservation.weeklyResetsAt,
                     source: CodexSessionQuotaCollector.source,
+                    limitID: CodexSessionQuotaCollector.primaryLimitID,
                     now: localObservation.observedAt
                 )
             } else if localIsFresh {
