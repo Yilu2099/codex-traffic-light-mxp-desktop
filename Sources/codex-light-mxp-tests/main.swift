@@ -760,6 +760,13 @@ func testTeamRankingURLUsesWebsiteOrigin() throws {
     let service = TeamUsageSyncService(configuration: configuration)
     try expectEqual(service.websiteURL.absoluteString, "https://meet.example.com/", "website link should use the ranking origin")
     try expectEqual(service.rankingsURL().absoluteString, "https://meet.example.com/api/rankings?range=today", "menu should fetch today's ranking")
+    try expectEqual(service.presenceURL.absoluteString, "https://meet.example.com/api/presence", "presence should use a lightweight endpoint on the ranking origin")
+    let activeAt = Date(timeIntervalSince1970: 1_700_000_000)
+    let payload = service.makePresencePayload(lastActiveAt: activeAt, now: activeAt.addingTimeInterval(5))
+    try expectEqual(payload.collector, "wanhe-codex-mac-presence", "presence payload should identify the lightweight collector")
+    try expect(payload.lastActiveAt?.hasPrefix("2023-11-14T22:13:20") == true, "presence payload should contain only the latest activity timestamp")
+    let marker = TeamUsageSyncService.presenceMarkerURL(home: URL(fileURLWithPath: "/tmp/member-home"))
+    try expectEqual(marker.path, "/tmp/member-home/Library/Application Support/CodexTrafficLight/last-activity", "presence should read the monitor marker without scanning sessions")
 }
 
 func testTeamRankingDecodesLegacyTodayActivity() throws {
@@ -770,6 +777,14 @@ func testTeamRankingDecodesLegacyTodayActivity() throws {
     try expectEqual(ranking.members.first?.tokens, 1_200, "legacy ranking should preserve today's token total")
     try expectEqual(ranking.members.first?.lastActive, "13:13", "legacy ranking should expose its last update time")
     try expectEqual(ranking.members.first?.officialUsage, nil, "legacy ranking may omit official metadata")
+}
+
+func testTeamRankingDecodesRealtimePresence() throws {
+    let data = """
+    {"updatedAt":"2026-08-22 21:30","members":[{"id":"zlu","name":"张璐","tokens":1200,"sessions":12,"lastActive":"21:30","online":true}]}
+    """.data(using: .utf8)!
+    let ranking = try JSONDecoder().decode(TeamRankingSnapshot.self, from: data)
+    try expectEqual(ranking.members.first?.online, true, "team ranking should expose the realtime presence flag")
 }
 
 func testTeamRankingDecodesMemberWeeklyQuota() throws {
@@ -1099,6 +1114,7 @@ let tests: [(String, () throws -> Void)] = [
     ("team quota report uses weekly data", testTeamQuotaReportUsesWeeklyPercentAndReset),
     ("team ranking URL uses website origin", testTeamRankingURLUsesWebsiteOrigin),
     ("team ranking decodes legacy today activity", testTeamRankingDecodesLegacyTodayActivity),
+    ("team ranking decodes realtime presence", testTeamRankingDecodesRealtimePresence),
     ("team ranking decodes member weekly quota", testTeamRankingDecodesMemberWeeklyQuota),
     ("team ranking distinguishes joined members", testTeamRankingDistinguishesJoinedMemberFromInvitePlaceholder),
     ("avatar disk cache persists by URL", testAvatarDiskCachePersistsByRemoteURL),

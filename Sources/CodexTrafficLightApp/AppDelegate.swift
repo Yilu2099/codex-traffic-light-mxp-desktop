@@ -9,9 +9,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
     private var quotaTimer: Timer?
     private var teamSyncTimer: Timer?
     private var teamRankingTimer: Timer?
+    private var presenceTimer: Timer?
     private var teamSyncConfiguration: TeamSyncConfiguration?
     private var isTeamSyncing = false
     private var isTeamRankingRefreshing = false
+    private var isPresenceSyncing = false
+    private var presenceFailureLogged = false
     private let quotaRefreshCoordinator = QuotaRefreshCoordinator()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -79,6 +82,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
             userInfo: nil,
             repeats: true
         )
+        Timer.scheduledTimer(
+            timeInterval: 3,
+            target: self,
+            selector: #selector(presenceTimerFired),
+            userInfo: nil,
+            repeats: false
+        )
+        presenceTimer = Timer.scheduledTimer(
+            timeInterval: Defaults.presenceRefreshSeconds,
+            target: self,
+            selector: #selector(presenceTimerFired),
+            userInfo: nil,
+            repeats: true
+        )
     }
 
     @objc private func teamSyncTimerFired() {
@@ -87,6 +104,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
 
     @objc private func teamRankingTimerFired() {
         refreshTeamRanking()
+    }
+
+    @objc private func presenceTimerFired() {
+        syncPresence()
+    }
+
+    private func syncPresence() {
+        guard let configuration = teamSyncConfiguration, !isPresenceSyncing else { return }
+        isPresenceSyncing = true
+        let markerURL = TeamUsageSyncService.presenceMarkerURL()
+        let lastActiveAt = (try? markerURL.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+        let service = TeamUsageSyncService(configuration: configuration)
+        Task { [weak self] in
+            do {
+                _ = try await service.syncPresence(lastActiveAt: lastActiveAt)
+                self?.isPresenceSyncing = false
+                self?.presenceFailureLogged = false
+            } catch {
+                self?.isPresenceSyncing = false
+                if self?.presenceFailureLogged == false {
+                    AppDelegate.appendTeamSyncLog("presence sync failed: \(error)")
+                    self?.presenceFailureLogged = true
+                }
+            }
+        }
     }
 
     private func syncTeamData() {
@@ -321,6 +363,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
         quotaTimer?.invalidate()
         teamSyncTimer?.invalidate()
         teamRankingTimer?.invalidate()
+        presenceTimer?.invalidate()
         NSApp.terminate(nil)
     }
 }

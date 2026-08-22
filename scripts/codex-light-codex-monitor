@@ -5,12 +5,15 @@ CODEX_HOME_DIR="${CODEX_HOME:-$HOME/.codex}"
 LOG_DB="$CODEX_HOME_DIR/logs_2.sqlite"
 STATE_DB="$CODEX_HOME_DIR/state_5.sqlite"
 STATE_CMD="$HOME/.codex/bin/codex-light-mxp"
+PRESENCE_FILE="$HOME/Library/Application Support/CodexTrafficLight/last-activity"
 POLL_SECONDS="${CODEX_LIGHT_MONITOR_POLL_SECONDS:-2}"
 ACTIVE_WINDOW_SECONDS="${CODEX_LIGHT_MONITOR_ACTIVE_WINDOW_SECONDS:-6}"
 PROJECT_AUDIT_REFRESH_SECONDS="${CODEX_LIGHT_PROJECT_AUDIT_REFRESH_SECONDS:-60}"
+PRESENCE_TOUCH_SECONDS="${CODEX_LIGHT_PRESENCE_TOUCH_SECONDS:-5}"
 
 last_project_audit_key=""
 last_project_audit_at=0
+last_presence_touch_at=0
 
 while true; do
   now="$(date +%s)"
@@ -44,6 +47,11 @@ while true; do
       cwd="${rest%%$'\t'*}"
       [[ -z "$thread_id" ]] && thread_id="codex-desktop"
       [[ -z "$cwd" || "$cwd" == "$rest" ]] && cwd="$PWD"
+      if (( now - last_presence_touch_at >= PRESENCE_TOUCH_SECONDS )); then
+        mkdir -p "${PRESENCE_FILE:h}"
+        touch "$PRESENCE_FILE"
+        last_presence_touch_at="$now"
+      fi
       project_audit_key="$thread_id|$cwd"
       if [[ "$project_audit_key" != "$last_project_audit_key" ]] || (( now - last_project_audit_at >= PROJECT_AUDIT_REFRESH_SECONDS )); then
         "$STATE_CMD" --task "$thread_id" --workspace "$cwd" audit >/dev/null 2>&1 || true

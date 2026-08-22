@@ -225,7 +225,7 @@ struct StatusPopoverView: View {
     }
 
     private func joinedMemberDetails(_ member: TeamRankingMember) -> some View {
-        let online = validLastActive(member).map { isOnline($0) } ?? false
+        let online = member.online ?? (validLastActive(member).map { isOnline($0) } ?? false)
         return VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 7) {
                 Text(displayName(member))
@@ -234,7 +234,7 @@ struct StatusPopoverView: View {
                     .lineLimit(1)
                 onlineStatusDot(
                     isOnline: online,
-                    hasActivity: member.tokens > 0 || member.sessions > 0
+                    hasActivity: online || member.tokens > 0 || member.sessions > 0
                 )
                 Text(memberActiveText(member))
                     .font(.system(size: 10, weight: .medium))
@@ -371,7 +371,7 @@ struct StatusPopoverView: View {
             return member.hasEverJoined ? "今日暂无使用" : "还未加入"
         }
         if let lastActive = validLastActive(member) {
-            return isOnline(lastActive) ? "在线" : "最后 \(lastActive)"
+            return (member.online ?? isOnline(lastActive)) ? "在线" : "最后 \(lastActive)"
         }
         return officialDate(member)
     }
