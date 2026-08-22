@@ -32,7 +32,7 @@ public struct TodayCodexUsageCollector: Sendable {
     public init(
         stateURL: URL = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".wanhe-codex-token/today-live.json"),
-        timeZone: TimeZone = TimeZone(identifier: "Asia/Shanghai") ?? .current
+        timeZone: TimeZone = TimeZone(identifier: "Asia/Hong_Kong") ?? .current
     ) {
         self.stateURL = stateURL
         self.timeZone = timeZone

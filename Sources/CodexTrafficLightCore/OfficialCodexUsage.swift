@@ -213,7 +213,7 @@ public struct CodexSessionFileCounter: Sendable {
         let formatter = DateFormatter()
         formatter.calendar = Calendar(identifier: .gregorian)
         formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = TimeZone(identifier: "Asia/Shanghai")
+        formatter.timeZone = TimeZone(identifier: "Asia/Hong_Kong")
         formatter.dateFormat = "yyyy-MM-dd'T'HH-mm-ss"
         return formatter.date(from: text)
     }
@@ -227,7 +227,7 @@ public struct CodexSessionFileCounter: Sendable {
         let formatter = DateFormatter()
         formatter.calendar = Calendar(identifier: .gregorian)
         formatter.locale = Locale(identifier: "en_CA")
-        formatter.timeZone = TimeZone(identifier: "Asia/Shanghai")
+        formatter.timeZone = TimeZone(identifier: "Asia/Hong_Kong")
         formatter.dateFormat = "yyyy-MM-dd"
         return formatter.string(from: date)
     }
@@ -255,7 +255,7 @@ public struct CodexGrindHistoryCollector: Sendable {
         }
     }
 
-    private let timezone = TimeZone(identifier: "Asia/Shanghai")!
+    private let timezone = TimeZone(identifier: "Asia/Hong_Kong")!
 
     public init() {}
 
@@ -293,7 +293,9 @@ public struct CodexGrindHistoryCollector: Sendable {
                           event.isUserInteraction,
                           let timestamp = event.timestamp,
                           let date = Self.isoDate(timestamp) else { return }
-                    record(date, allowDayStart: false)
+                    // Day start is the first prompt actually sent by the user,
+                    // including prompts in a conversation created on an older day.
+                    record(date, allowDayStart: true)
                 }
             }
         }

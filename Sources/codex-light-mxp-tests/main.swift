@@ -1162,6 +1162,8 @@ func testTeamUsageCollectorBuildsDailySessionDelta() throws {
     {"type":"session_meta","payload":{"model":"gpt-5.6-sol"}}
     {"type":"event_msg","timestamp":"2026-08-21T01:00:00.000Z","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":80,"cached_input_tokens":20,"cache_write_input_tokens":0,"output_tokens":20,"reasoning_output_tokens":5,"total_tokens":100}}}}
     {"type":"event_msg","timestamp":"2026-08-21T02:00:00.000Z","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":120,"cached_input_tokens":30,"cache_write_input_tokens":0,"output_tokens":30,"reasoning_output_tokens":8,"total_tokens":150}}}}
+    {"type":"event_msg","timestamp":"2026-08-21T15:59:00.000Z","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":145,"cached_input_tokens":35,"cache_write_input_tokens":0,"output_tokens":36,"reasoning_output_tokens":9,"total_tokens":180}}}}
+    {"type":"event_msg","timestamp":"2026-08-21T16:01:00.000Z","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":175,"cached_input_tokens":40,"cache_write_input_tokens":0,"output_tokens":45,"reasoning_output_tokens":11,"total_tokens":220}}}}
     """.data(using: .utf8)!
     let sessions = CodexTeamUsageCollector().parseSessionData(
         data,
@@ -1169,8 +1171,10 @@ func testTeamUsageCollectorBuildsDailySessionDelta() throws {
         configuration: configuration,
         device: device
     )
-    try expectEqual(sessions.count, 1, "collector should aggregate a session into one daily record")
-    try expectEqual(sessions.first?.totalTokens, 150, "collector should add cumulative deltas without double counting")
+    try expectEqual(sessions.count, 2, "collector should split one session at Hong Kong midnight")
+    try expectEqual(sessions.map(\.day), ["2026-08-21", "2026-08-22"], "collector should use Hong Kong calendar days")
+    try expectEqual(sessions.map(\.utcDay), ["2026-08-21", "2026-08-21"], "collector should retain the matching official UTC bucket")
+    try expectEqual(sessions.map(\.totalTokens), [180, 40], "collector should add cumulative deltas without double counting")
     try expectEqual(sessions.first?.model, "gpt-5.6-sol", "collector should preserve the session model")
     try expectEqual(sessions.first?.deviceId, "mac-1", "collector should use the hardware device id")
 }
@@ -1296,7 +1300,10 @@ func testGrindHistoryCollectorReadsOnlyEventTimestamps() throws {
     ].joined(separator: "\n")
     try contents.write(to: file, atomically: true, encoding: .utf8)
     let morningFile = sessions.appendingPathComponent("rollout-2026-08-22T09-42-45-01a02722-77db-79d0-af46-8e9267c19584.jsonl")
-    try #"{"timestamp":"2026-08-22T01:42:47.000Z","type":"session_meta","payload":{"private":"do not inspect"}}"#
+    try [
+        #"{"timestamp":"2026-08-22T01:42:47.000Z","type":"session_meta","payload":{"private":"do not inspect"}}"#,
+        #"{"timestamp":"2026-08-22T01:05:00.000Z","type":"response_item","payload":{"type":"message","role":"user","private":"do not inspect"}}"#,
+    ].joined(separator: "\n")
         .write(to: morningFile, atomically: true, encoding: .utf8)
     let now = ISO8601DateFormatter().date(from: "2026-08-22T04:00:00Z")!
     try FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: file.path)
@@ -1305,8 +1312,8 @@ func testGrindHistoryCollectorReadsOnlyEventTimestamps() throws {
     let history = CodexGrindHistoryCollector().collect(codexHome: root, days: 30, now: now)
     try expectEqual(history, [
         TeamGrindHistoryDay(grindDay: "2026-08-21", dayGrindTime: nil, nightGrindTime: "02:04"),
-        TeamGrindHistoryDay(grindDay: "2026-08-22", dayGrindTime: "09:42", nightGrindTime: nil),
-    ], "grind history should use local session starts and ignore unattended agent completion events")
+        TeamGrindHistoryDay(grindDay: "2026-08-22", dayGrindTime: "09:05", nightGrindTime: nil),
+    ], "grind history should use the first user prompt even in an older conversation")
 }
 
 func testTodayLiveCollectorStartsAtEOFAndCountsOnlyAppendedUsage() throws {

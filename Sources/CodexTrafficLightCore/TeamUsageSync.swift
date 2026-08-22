@@ -272,6 +272,8 @@ public struct TeamUsageSession: Codable, Equatable, Sendable {
     public var deviceId: String
     public var sessionId: String
     public var day: String
+    /// UTC calendar bucket used only to reconcile against OpenAI's official daily totals.
+    public var utcDay: String
     public var model: String
     public var inputTokens: Int
     public var cachedInputTokens: Int
@@ -407,14 +409,13 @@ public struct CodexTeamUsageCollector: Sendable {
 
     public init() {}
 
-    @available(*, unavailable, message: "Team sync uses OfficialCodexUsageCollector; conversation log scanning is intentionally disabled")
     public func collect(configuration: TeamSyncConfiguration, device: TeamDeviceIdentity) -> [TeamUsageSession] {
         let roots = ["sessions", "archived_sessions"].map { configuration.codexHome.appendingPathComponent($0) }
         let cutoff = Date().addingTimeInterval(-Double(configuration.collectDays) * 86_400)
         let cacheURL = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".wanhe-codex-token/usage-cache.json")
         let oldCache = loadCache(from: cacheURL)
-        let profileKey = "\(configuration.userID)|\(device.id)|\(configuration.collectDays)"
+        let profileKey = "v2|\(configuration.userID)|\(device.id)|\(configuration.collectDays)"
         var nextCache: [String: FileCacheEntry] = [:]
         var newest: [String: TeamUsageSession] = [:]
         for root in roots {
@@ -429,13 +430,13 @@ public struct CodexTeamUsageCollector: Sendable {
                 }
                 nextCache[file.path] = FileCacheEntry(signature: signature, profileKey: profileKey, records: records)
                 for record in records {
-                    let key = "\(record.sessionId)|\(record.day)"
+                    let key = "\(record.sessionId)|\(record.day)|\(record.utcDay)"
                     if newest[key] == nil || record.updatedAt >= newest[key]!.updatedAt { newest[key] = record }
                 }
             }
         }
         saveCache(nextCache, to: cacheURL)
-        return newest.values.sorted { ($0.day, $0.sessionId) < ($1.day, $1.sessionId) }
+        return newest.values.sorted { ($0.day, $0.utcDay, $0.sessionId) < ($1.day, $1.utcDay, $1.sessionId) }
     }
 
     public func parseSessionData(
@@ -493,7 +494,7 @@ public struct CodexTeamUsageCollector: Sendable {
                 daily: &daily
             )
         }
-        return daily.values.sorted { $0.day < $1.day }
+        return daily.values.sorted { ($0.day, $0.utcDay) < ($1.day, $1.utcDay) }
     }
 
     private func parseLines(
@@ -518,7 +519,7 @@ public struct CodexTeamUsageCollector: Sendable {
                 daily: &daily
             )
         }
-        return daily.values.sorted { $0.day < $1.day }
+        return daily.values.sorted { ($0.day, $0.utcDay) < ($1.day, $1.utcDay) }
     }
 
     private func processLine(
@@ -560,7 +561,9 @@ public struct CodexTeamUsageCollector: Sendable {
         let timestamp = date(from: event["timestamp"]) ?? Date()
         guard timestamp >= cutoff, delta.totalTokens > 0 else { return }
         let day = dayString(timestamp)
-        var record = daily[day] ?? TeamUsageSession(
+        let utcDay = utcDayString(timestamp)
+        let calendarKey = "\(day)|\(utcDay)"
+        var record = daily[calendarKey] ?? TeamUsageSession(
             userId: configuration.userID,
             userName: configuration.userName,
             team: configuration.team,
@@ -569,6 +572,7 @@ public struct CodexTeamUsageCollector: Sendable {
             deviceId: device.id,
             sessionId: sessionID,
             day: day,
+            utcDay: utcDay,
             model: model,
             inputTokens: 0,
             cachedInputTokens: 0,
@@ -586,7 +590,7 @@ public struct CodexTeamUsageCollector: Sendable {
         record.reasoningOutputTokens += delta.reasoningOutputTokens
         record.totalTokens += delta.totalTokens
         record.updatedAt = isoString(timestamp)
-        daily[day] = record
+        daily[calendarKey] = record
     }
 
     private func jsonlFiles(under root: URL, cutoff: Date) -> [URL] {
@@ -657,7 +661,16 @@ public struct CodexTeamUsageCollector: Sendable {
         let formatter = DateFormatter()
         formatter.calendar = Calendar(identifier: .gregorian)
         formatter.locale = Locale(identifier: "en_CA")
-        formatter.timeZone = TimeZone(identifier: "Asia/Shanghai")
+        formatter.timeZone = TimeZone(identifier: "Asia/Hong_Kong")
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: date)
+    }
+
+    private func utcDayString(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_CA")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
         formatter.dateFormat = "yyyy-MM-dd"
         return formatter.string(from: date)
     }
@@ -689,6 +702,9 @@ public struct TeamUsageSyncService: Sendable {
         let device = TeamDeviceIdentity.current()
         let officialUsage = try cachedOfficialUsage()
         let todayLiveUsage = TodayCodexUsageCollector().collect(codexHome: configuration.codexHome)
+        // Reads only session metadata and token_count totals. Prompt text, code,
+        // filenames and raw conversation content are never included in payloads.
+        let calendarUsage = CodexTeamUsageCollector().collect(configuration: configuration, device: device)
         let sessionActivity = CodexSessionFileCounter().collect(
             codexHome: configuration.codexHome,
             days: configuration.collectDays
@@ -716,7 +732,7 @@ public struct TeamUsageSyncService: Sendable {
             sessionActivity: sessionActivity,
             grindHistory: grindHistory,
             projects: ProjectActivityStore().report(days: configuration.collectDays),
-            sessions: []
+            sessions: calendarUsage
         )
     }
 
