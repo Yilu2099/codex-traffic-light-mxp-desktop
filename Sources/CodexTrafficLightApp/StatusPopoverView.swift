@@ -42,14 +42,14 @@ struct StatusPopoverView: View {
         VStack(spacing: 0) {
             header
             ScrollView(showsIndicators: false) {
-                VStack(spacing: 18) {
+                VStack(spacing: 12) {
                     quotaCard
                     rankingSection
                     privacyNote
                 }
                 .padding(.horizontal, 20)
-                .padding(.top, 18)
-                .padding(.bottom, 16)
+                .padding(.top, 12)
+                .padding(.bottom, 12)
             }
             footer
         }
@@ -59,7 +59,7 @@ struct StatusPopoverView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 10) {
             Group {
                 if let logo = brandLogo {
                     Image(nsImage: logo)
@@ -73,17 +73,17 @@ struct StatusPopoverView: View {
                         .background(green.opacity(0.13))
                 }
             }
-            .frame(width: 38, height: 38)
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(green.opacity(0.12), lineWidth: 1))
-            .shadow(color: green.opacity(0.18), radius: 5, y: 3)
+            .frame(width: 34, height: 34)
+            .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).stroke(green.opacity(0.12), lineWidth: 1))
+            .shadow(color: green.opacity(0.16), radius: 4, y: 2)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text("万合创新局")
-                    .font(.system(size: 17, weight: .bold, design: .rounded))
+                    .font(.system(size: 16, weight: .bold, design: .rounded))
                     .foregroundStyle(ink)
                 Text("Codex 团队活跃 · 用起来，更要做出结果")
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(muted)
             }
             Spacer()
@@ -94,11 +94,11 @@ struct StatusPopoverView: View {
                     .foregroundStyle(green)
             }
             .padding(.horizontal, 10)
-            .padding(.vertical, 7)
+            .padding(.vertical, 6)
             .background(green.opacity(0.09), in: Capsule())
         }
         .padding(.horizontal, 20)
-        .padding(.vertical, 16)
+        .padding(.vertical, 10)
         .background(card)
         .overlay(alignment: .bottom) { line.frame(height: 1) }
     }
@@ -107,67 +107,67 @@ struct StatusPopoverView: View {
         let quota = weeklyQuota
         let remaining = quota?.remainingPercent
         let used = Double(100 - (remaining ?? 0)) / 100
-        return VStack(alignment: .leading, spacing: 14) {
+        return VStack(alignment: .leading, spacing: 9) {
             HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 5) {
+                VStack(alignment: .leading, spacing: 3) {
                     Label("个人周余额", systemImage: "gauge.with.dots.needle.67percent")
-                        .font(.system(size: 12, weight: .bold))
+                        .font(.system(size: 11, weight: .bold))
                         .foregroundStyle(muted)
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
                         Text(remaining.map(String.init) ?? "--")
-                            .font(.system(size: 38, weight: .bold, design: .rounded))
+                            .font(.system(size: 30, weight: .bold, design: .rounded))
                             .foregroundStyle(ink)
                         Text("% 剩余")
-                            .font(.system(size: 13, weight: .bold))
+                            .font(.system(size: 11.5, weight: .bold))
                             .foregroundStyle(muted)
                     }
                 }
                 Spacer()
-                VStack(alignment: .trailing, spacing: 5) {
+                VStack(alignment: .trailing, spacing: 2) {
                     Text("下次刷新")
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(muted)
                     Text(resetRelativeText)
-                        .font(.system(size: 14, weight: .bold))
+                        .font(.system(size: 13, weight: .bold))
                         .foregroundStyle(ink)
                     Text(resetAbsoluteText)
-                        .font(.system(size: 11, weight: .medium))
+                        .font(.system(size: 10, weight: .medium))
                         .foregroundStyle(muted)
                 }
             }
             ProgressView(value: max(0, min(1, used)))
                 .tint(green)
-                .scaleEffect(x: 1, y: 1.7, anchor: .center)
+                .scaleEffect(x: 1, y: 1.25, anchor: .center)
             HStack {
                 Text("已用 \(remaining.map { 100 - $0 } ?? 0)%")
                 Spacer()
                 Text("额度不参与排名")
             }
-            .font(.system(size: 11, weight: .medium))
+            .font(.system(size: 10, weight: .medium))
             .foregroundStyle(muted)
         }
-        .padding(18)
-        .background(green.opacity(0.025), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(line, lineWidth: 1))
+        .padding(14)
+        .background(green.opacity(0.025), in: RoundedRectangle(cornerRadius: 17, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 17, style: .continuous).stroke(line, lineWidth: 1))
     }
 
     private var rankingSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("今日团队活跃")
-                        .font(.system(size: 18, weight: .bold, design: .rounded))
+                        .font(.system(size: 17, weight: .bold, design: .rounded))
                         .foregroundStyle(ink)
                     Text("按 Token 用量排序 · 点击查看成员详情")
-                        .font(.system(size: 11, weight: .medium))
+                        .font(.system(size: 10, weight: .medium))
                         .foregroundStyle(muted)
                 }
                 Spacer()
                 Text("实时")
-                    .font(.system(size: 11, weight: .bold))
+                    .font(.system(size: 10, weight: .bold))
                     .foregroundStyle(green)
                     .padding(.horizontal, 9)
-                    .padding(.vertical, 5)
+                    .padding(.vertical, 4)
                     .background(green.opacity(0.08), in: Capsule())
             }
 
@@ -189,21 +189,21 @@ struct StatusPopoverView: View {
                     .padding(18)
                 }
             }
-            .background(card, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(line, lineWidth: 1))
+            .background(card, in: RoundedRectangle(cornerRadius: 17, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 17, style: .continuous).stroke(line, lineWidth: 1))
         }
     }
 
     private func memberRow(_ member: TeamRankingMember) -> some View {
         Button { openWebsite(member.id) } label: {
-            HStack(alignment: .center, spacing: 12) {
+            HStack(alignment: .center, spacing: 10) {
                 avatar(member)
                 if member.hasEverJoined {
                     joinedMemberDetails(member)
                 } else {
                     HStack(spacing: 10) {
                         Text(displayName(member))
-                            .font(.system(size: 18, weight: .bold))
+                            .font(.system(size: 16, weight: .bold))
                             .foregroundStyle(ink)
                             .lineLimit(1)
                         Text("众神未归位")
@@ -214,32 +214,32 @@ struct StatusPopoverView: View {
                     }
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, member.hasEverJoined ? 13 : 11)
+            .padding(.horizontal, 11)
+            .padding(.vertical, member.hasEverJoined ? 9 : 8)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
 
     private func joinedMemberDetails(_ member: TeamRankingMember) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 7) {
                 Text(displayName(member))
-                    .font(.system(size: 18, weight: .bold))
+                    .font(.system(size: 16, weight: .bold))
                     .foregroundStyle(ink)
                     .lineLimit(1)
                 Circle()
                     .fill(member.tokens > 0 || member.sessions > 0 ? green : muted.opacity(0.45))
                     .frame(width: 5, height: 5)
                 Text(memberActiveText(member))
-                    .font(.system(size: 10.5, weight: .medium))
+                    .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(muted)
                     .lineLimit(1)
                     .minimumScaleFactor(0.78)
                 Spacer(minLength: 6)
                 VStack(alignment: .trailing, spacing: 1) {
                     Text(formatTokens(member.tokens))
-                        .font(.system(size: 13.5, weight: .bold, design: .rounded))
+                        .font(.system(size: 13, weight: .bold, design: .rounded))
                         .foregroundStyle(ink)
                     Text("Token")
                         .font(.system(size: 8.5, weight: .bold))
@@ -270,7 +270,7 @@ struct StatusPopoverView: View {
                     .foregroundStyle(ink)
             }
         }
-        .frame(width: 72, height: 72)
+        .frame(width: 56, height: 56)
         .clipShape(Circle())
     }
 
@@ -288,7 +288,7 @@ struct StatusPopoverView: View {
                 Label("打开团队排行榜", systemImage: "safari")
                     .font(.system(size: 13, weight: .bold))
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 10)
+                    .padding(.vertical, 9)
             }
             .buttonStyle(.borderedProminent)
             .tint(green)
@@ -298,17 +298,9 @@ struct StatusPopoverView: View {
                 .font(.system(size: 9, weight: .medium, design: .monospaced))
                 .foregroundStyle(muted.opacity(0.62))
 
-            Button(action: quit) {
-                Image(systemName: "power")
-                    .font(.system(size: 13, weight: .bold))
-                    .frame(width: 20)
-                    .padding(.vertical, 10)
-            }
-            .buttonStyle(.bordered)
-            .help("退出")
         }
         .padding(.horizontal, 20)
-        .padding(.vertical, 14)
+        .padding(.vertical, 9)
         .background(card)
         .overlay(alignment: .top) { line.frame(height: 1) }
     }
@@ -429,9 +421,9 @@ struct StatusPopoverView: View {
                 )
             }
         }
-        .frame(maxWidth: .infinity, minHeight: 29)
-        .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).stroke(line.opacity(0.55), lineWidth: 0.5))
+        .frame(maxWidth: .infinity, minHeight: 25)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(line.opacity(0.55), lineWidth: 0.5))
     }
 
     private func grindBandSegment(icon: String, text: String, foreground: Color) -> some View {
@@ -445,7 +437,7 @@ struct StatusPopoverView: View {
         }
         .foregroundStyle(foreground)
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 5.5)
+        .padding(.vertical, 3.5)
     }
 
     private func finishTimeText(_ value: String?) -> String {
