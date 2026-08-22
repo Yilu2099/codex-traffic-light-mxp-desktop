@@ -179,16 +179,13 @@ final class StatusBarController {
             if breathingFrames.isEmpty {
                 breathingFrames = (0..<24).map { index in
                     let progress = CGFloat(index) / 23
-                    let wave = (sin((Double(index) / 24 * 2 * .pi) - (.pi / 2)) + 1) / 2
-                    let intensity = CGFloat(0.54 + (0.46 * wave * wave * (3 - (2 * wave))))
                     return makeQuotaIndicator(
                         color: healthyGreen,
                         glow: 0.82,
                         coreTop: healthyGreenTop,
                         coreBottom: healthyGreenBottom,
                         rim: healthyGreenRim,
-                        haloProgress: progress,
-                        coreIntensity: intensity
+                        haloProgress: progress
                     )
                 }
             }
@@ -256,8 +253,7 @@ final class StatusBarController {
         coreTop: NSColor? = nil,
         coreBottom: NSColor? = nil,
         rim: NSColor? = nil,
-        haloProgress: CGFloat? = nil,
-        coreIntensity: CGFloat = 1
+        haloProgress: CGFloat? = nil
     ) -> NSImage {
         let size = NSSize(width: 18, height: 18)
         let image = NSImage(size: size)
@@ -292,7 +288,7 @@ final class StatusBarController {
         haloRing.stroke()
 
         let softGlowRect = NSRect(x: 1.8, y: 1.8, width: 14.4, height: 14.4)
-        color.withAlphaComponent((0.20 + (0.24 * coreIntensity)) * glow).setFill()
+        color.withAlphaComponent(0.44 * glow).setFill()
         NSBezierPath(ovalIn: softGlowRect).fill()
 
         let rimRect = NSRect(x: 2.25, y: 2.25, width: 13.5, height: 13.5)
@@ -311,10 +307,7 @@ final class StatusBarController {
             NSBezierPath(ovalIn: coreRect).fill()
         }
 
-        (rim ?? color).withAlphaComponent(0.43 * (1 - coreIntensity)).setFill()
-        NSBezierPath(ovalIn: coreRect).fill()
-
-        NSColor.white.withAlphaComponent(0.22 + (0.58 * coreIntensity)).setFill()
+        NSColor.white.withAlphaComponent(0.80).setFill()
         NSBezierPath(ovalIn: NSRect(x: 5.15, y: 10.0, width: 3.25, height: 2.2)).fill()
 
         image.isTemplate = false
