@@ -1032,7 +1032,7 @@ func testProjectActivityStoreKeepsOnlySanitizedProjectAudit() throws {
 
 func testProjectActivityAddsOnlySanitizedWorkSummary() throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent("codex-project-summary-\(UUID().uuidString)")
-    let repository = root.appendingPathComponent("创新局")
+    let repository = root.appendingPathComponent("客户门户")
     let activityURL = root.appendingPathComponent("support/project-activity.json")
     let codexHome = root.appendingPathComponent("codex")
     let sessionURL = codexHome.appendingPathComponent("sessions/2026/08/22/rollout-test.jsonl")
@@ -1042,17 +1042,23 @@ func testProjectActivityAddsOnlySanitizedWorkSummary() throws {
     let now = Date()
     let formatter = ISO8601DateFormatter()
     formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    let purposeTimestamp = formatter.string(from: now.addingTimeInterval(-60))
     let timestamp = formatter.string(from: now)
     let lines = [
         #"{"timestamp":"\#(timestamp)","type":"session_meta","payload":{"cwd":"\#(repository.path)","source":"vscode"}}"#,
         #"{"timestamp":"\#(timestamp)","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>自动上下文</environment_context>"}]}}"#,
+        #"{"timestamp":"\#(purposeTimestamp)","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"这个项目是一个用于客户提交需求和查看进度的服务平台"}]}}"#,
         #"{"timestamp":"\#(timestamp)","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"请修复 /Users/example/private/project 的开工时间并检查 https://internal.example/token"}]}}"#,
         #"{"timestamp":"\#(timestamp)","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"</image>"}]}}"#,
     ].joined(separator: "\n")
     try lines.write(to: sessionURL, atomically: true, encoding: .utf8)
     let store = ProjectActivityStore(activityURL: activityURL)
     try store.record(workspace: repository.path, taskID: "session:test", now: now)
-    let summary = store.report(days: 30, now: now, codexHome: codexHome).first?.summary ?? ""
+    let report = store.report(days: 30, now: now, codexHome: codexHome).first
+    let summary = report?.summary ?? ""
+    let purpose = report?.purpose ?? ""
+    try expect(purpose.contains("客户提交需求和查看进度"), "project audit should retain a stable project purpose")
+    try expect(!purpose.contains("请修复"), "project purpose should not be replaced by the latest maintenance task")
     try expect(summary.contains("请修复"), "project audit should retain a short work description")
     try expect(summary.contains("[本地项目]"), "project audit should redact full local paths")
     try expect(summary.contains("[链接]"), "project audit should redact URLs")

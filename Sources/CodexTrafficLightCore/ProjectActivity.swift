@@ -7,6 +7,7 @@ public struct TeamProjectActivity: Codable, Equatable, Sendable {
     public var sessionCount: Int
     public var firstActiveAt: String
     public var lastActiveAt: String
+    public var purpose: String?
     public var summary: String?
 }
 
@@ -14,6 +15,8 @@ private struct ProjectActivityRecord: Codable {
     var id: String
     var name: String
     var sessions: [String: TimeInterval]
+    var purpose: String? = nil
+    var purposeScore: Int? = nil
 }
 
 private struct ProjectActivityLedger: Codable {
@@ -47,12 +50,25 @@ public final class ProjectActivityStore {
 
     public func report(days: Int = 30, now: Date = Date(), codexHome: URL? = nil) -> [TeamProjectActivity] {
         let cutoff = now.addingTimeInterval(-Double(max(1, days)) * 86_400).timeIntervalSince1970
-        let summaries = codexHome.map {
+        let conversationDigests = codexHome.map {
             ProjectConversationSummaryCollector().collect(codexHome: $0, days: days, now: now)
         } ?? [:]
+        var ledger = read()
+        var purposeChanged = false
+        for key in Array(ledger.projects.keys) {
+            guard var record = ledger.projects[key] else { continue }
+            let suggestion = Self.purposeSuggestion(name: record.name, digest: conversationDigests[record.id])
+            if record.purpose == nil || suggestion.score > (record.purposeScore ?? -1) {
+                record.purpose = suggestion.text
+                record.purposeScore = suggestion.score
+                ledger.projects[key] = record
+                purposeChanged = true
+            }
+        }
+        if purposeChanged { try? write(ledger) }
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return read().projects.values.compactMap { record in
+        return ledger.projects.values.compactMap { record in
             let timestamps = record.sessions.values.filter { $0 >= cutoff }
             guard let first = timestamps.min(), let last = timestamps.max() else { return nil }
             return TeamProjectActivity(
@@ -61,7 +77,8 @@ public final class ProjectActivityStore {
                 sessionCount: timestamps.count,
                 firstActiveAt: formatter.string(from: Date(timeIntervalSince1970: first)),
                 lastActiveAt: formatter.string(from: Date(timeIntervalSince1970: last)),
-                summary: summaries[record.id]
+                purpose: record.purpose,
+                summary: conversationDigests[record.id]?.latest
             )
         }
         .sorted { left, right in
@@ -70,6 +87,26 @@ public final class ProjectActivityStore {
         }
         .prefix(30)
         .map { $0 }
+    }
+
+    private static func purposeSuggestion(
+        name: String,
+        digest: ProjectConversationDigest?
+    ) -> (text: String, score: Int) {
+        let normalized = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if normalized.contains("创新局") {
+            return ("团队共同使用 Codex 的用量排行与协作管理平台", 1_000)
+        }
+        if normalized.contains("智替") {
+            return ("面向股票研究、选股与买卖点辅助的智能工具", 1_000)
+        }
+        if normalized.contains("香港房产") || normalized.contains("入港通") || normalized.contains("港盘通") {
+            return ("香港楼盘查询、估价与找房服务的产品研发项目", 1_000)
+        }
+        if let candidate = digest?.purpose, let score = digest?.purposeScore {
+            return (candidate, score)
+        }
+        return ("围绕「\(name)」持续开发与维护的 Codex 项目", 0)
     }
 
     public static func projectIdentity(workspace: String) -> (id: String, name: String)? {
@@ -116,6 +153,12 @@ public final class ProjectActivityStore {
     }
 }
 
+private struct ProjectConversationDigest {
+    var latest: String?
+    var purpose: String?
+    var purposeScore: Int?
+}
+
 private struct ProjectConversationSummaryCollector {
     private let ignoredPrefixes = [
         "<recommended_plugins>", "# AGENTS.md instructions", "<environment_context>",
@@ -124,7 +167,7 @@ private struct ProjectConversationSummaryCollector {
         "<image name=", "Continue where you left off.", "The following is the Codex agent history",
     ]
 
-    func collect(codexHome: URL, days: Int, now: Date) -> [String: String] {
+    func collect(codexHome: URL, days: Int, now: Date) -> [String: ProjectConversationDigest] {
         let cutoff = now.addingTimeInterval(-Double(max(1, days) + 1) * 86_400)
         var candidates: [String: [(Date, String)]] = [:]
         for folder in ["sessions", "archived_sessions"] {
@@ -167,9 +210,39 @@ private struct ProjectConversationSummaryCollector {
                 candidates[projectID, default: []].append(contentsOf: messages)
             }
         }
-        return candidates.compactMapValues { values in
-            values.sorted { $0.0 > $1.0 }.first?.1
+        return candidates.mapValues { values in
+            let latest = values.max { $0.0 < $1.0 }?.1
+            let purposes = values.compactMap { date, value -> (Date, String, Int)? in
+                let score = purposeScore(value)
+                guard score >= 8 else { return nil }
+                return (date, purposeText(value), score)
+            }
+            let purpose = purposes.sorted { left, right in
+                if left.2 != right.2 { return left.2 > right.2 }
+                return left.0 < right.0
+            }.first
+            return ProjectConversationDigest(latest: latest, purpose: purpose?.1, purposeScore: purpose?.2)
         }
+    }
+
+    private func purposeScore(_ value: String) -> Int {
+        var score = 0
+        for keyword in ["用于", "是一个", "做一个", "开发一个", "打造"] where value.contains(keyword) { score += 10 }
+        for keyword in ["平台", "系统", "网站", "小程序", "应用", "工具", "排行榜"] where value.contains(keyword) { score += 7 }
+        for keyword in ["项目", "服务", "团队", "客户", "用户"] where value.contains(keyword) { score += 3 }
+        for keyword in ["修复", "更新", "调整", "发布", "部署", "报错", "测试", "备份", "优化", "怎么样"] where value.contains(keyword) { score -= 5 }
+        if value.count >= 18 && value.count <= 120 { score += 3 }
+        return score
+    }
+
+    private func purposeText(_ value: String) -> String {
+        var result = value.replacingOccurrences(
+            of: #"^(?:请|麻烦)?(?:帮我|帮我们|给我|替我)?\s*"#,
+            with: "",
+            options: .regularExpression
+        )
+        result = result.trimmingCharacters(in: .whitespacesAndNewlines)
+        return String(result.prefix(100))
     }
 
     private func cleanedSummary(_ raw: String) -> String? {
