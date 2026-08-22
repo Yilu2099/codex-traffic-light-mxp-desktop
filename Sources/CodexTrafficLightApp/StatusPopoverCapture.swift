@@ -17,8 +17,8 @@ enum StatusPopoverCapture {
             )
         )
         model.syncedQuota = TeamQuotaReport(
-            weeklyRemainingPercent: 28,
-            weeklyResetsAt: now.addingTimeInterval(2 * 86_400 + 1 * 3_600),
+            weeklyRemainingPercent: 48,
+            weeklyResetsAt: now.addingTimeInterval(4 * 86_400 + 12 * 3_600),
             updatedAt: now
         )
         let previewState = ProcessInfo.processInfo.environment["CODEX_LIGHT_CAPTURE_STATUS_STATE"]
@@ -27,7 +27,6 @@ enum StatusPopoverCapture {
         timeFormatter.timeZone = TimeZone(identifier: "Asia/Hong_Kong")
         timeFormatter.dateFormat = "HH:mm"
         let recentActive = timeFormatter.string(from: now.addingTimeInterval(-5 * 60))
-        let earlierActive = timeFormatter.string(from: now.addingTimeInterval(-45 * 60))
         let rankingJSON: String
         if previewState == "unjoined" {
             rankingJSON = """
@@ -39,9 +38,11 @@ enum StatusPopoverCapture {
         } else {
             rankingJSON = """
             {"updatedAt":"2026-08-21 13:36","members":[
-              {"id":"zlu","name":"张璐","avatar":"/avatars/58.png","tokens":1210000000,"sessions":12,"lastActive":"\(recentActive)","grindDay":"2026-08-22","dayGrindTime":"09:42","nightGrindTime":"02:04","officialUsage":{"dataThrough":"2026-08-20"},"tokenSource":"today_live","todayLiveUpdatedAt":"2026-08-22T03:49:00Z","weeklyQuota":{"weeklyRemainingPercent":61,"weeklyUsedPercent":39,"weeklyResetsAt":"2026-08-26T03:33:00.000Z","updatedAt":"2026-08-22T03:49:00.000Z"}},
-              {"id":"qiaoyue","name":"乔月","avatar":"/avatars/201.png","tokens":66066000,"sessions":2,"lastActive":"\(earlierActive)","grindDay":"2026-08-22","dayGrindTime":"07:42","nightGrindTime":"03:12","officialUsage":{"dataThrough":"2026-08-20"},"tokenSource":"today_live","todayLiveUpdatedAt":"2026-08-22T02:35:00Z","weeklyQuota":{"weeklyRemainingPercent":73,"weeklyUsedPercent":27,"weeklyResetsAt":"2026-08-28T03:33:00.000Z","updatedAt":"2026-08-22T02:35:00.000Z"}},
-              {"id":"qiubo","name":"仇博","avatar":"/avatars/193.png","tokens":0,"sessions":0,"joined":false}
+              {"id":"zlu","name":"张璐","avatar":"/avatars/58.png","tokens":583000000,"sessions":12,"lastActive":"\(recentActive)","grindDay":"2026-08-22","dayGrindTime":"09:33","nightGrindTime":"02:04","officialUsage":{"dataThrough":"2026-08-20"},"tokenSource":"today_live","todayLiveUpdatedAt":"2026-08-22T03:49:00Z","weeklyQuota":{"weeklyRemainingPercent":48,"weeklyUsedPercent":52,"weeklyResetsAt":"2026-08-27T03:33:00.000Z","updatedAt":"2026-08-22T03:49:00.000Z"}},
+              {"id":"liguoqing","name":"李国庆","avatar":"/avatars/168.png","tokens":151000000,"sessions":9,"lastActive":"21:35","grindDay":"2026-08-22","dayGrindTime":"10:16","nightGrindTime":"02:03","officialUsage":{"dataThrough":"2026-08-20"},"tokenSource":"today_live","todayLiveUpdatedAt":"2026-08-22T03:10:00Z","weeklyQuota":{"weeklyRemainingPercent":100,"weeklyUsedPercent":0,"weeklyResetsAt":"2026-08-29T03:33:00.000Z","updatedAt":"2026-08-22T03:10:00.000Z"}},
+              {"id":"qiaoyue","name":"乔月","avatar":"/avatars/201.png","tokens":125000000,"sessions":7,"lastActive":"16:50","grindDay":"2026-08-22","dayGrindTime":"09:59","nightGrindTime":"03:08","officialUsage":{"dataThrough":"2026-08-20"},"tokenSource":"today_live","todayLiveUpdatedAt":"2026-08-22T02:35:00Z","weeklyQuota":{"weeklyRemainingPercent":62,"weeklyUsedPercent":38,"weeklyResetsAt":"2026-08-28T03:33:00.000Z","updatedAt":"2026-08-22T02:35:00.000Z"}},
+              {"id":"huangning","name":"黄宁","avatar":"/avatars/199.png","tokens":67111000,"sessions":5,"lastActive":"19:53","grindDay":"2026-08-22","dayGrindTime":"10:05","nightGrindTime":"02:11","officialUsage":{"dataThrough":"2026-08-20"},"tokenSource":"today_live","todayLiveUpdatedAt":"2026-08-22T02:10:00Z","weeklyQuota":{"weeklyRemainingPercent":58,"weeklyUsedPercent":42,"weeklyResetsAt":"2026-08-27T03:33:00.000Z","updatedAt":"2026-08-22T02:10:00.000Z"}},
+              {"id":"mameng","name":"马猛","avatar":"/avatars/codex-06.png","tokens":38217000,"sessions":4,"lastActive":"20:42","grindDay":"2026-08-22","dayGrindTime":"11:02","nightGrindTime":"01:49","officialUsage":{"dataThrough":"2026-08-20"},"tokenSource":"today_live","todayLiveUpdatedAt":"2026-08-22T01:45:00Z","weeklyQuota":{"weeklyRemainingPercent":35,"weeklyUsedPercent":65,"weeklyResetsAt":"2026-08-26T03:33:00.000Z","updatedAt":"2026-08-22T01:45:00.000Z"}}
             ]}
             """
         }
@@ -50,7 +51,7 @@ enum StatusPopoverCapture {
             model.syncDetail = "正在读取团队数据…"
         } else {
             model.ranking = try? JSONDecoder().decode(TeamRankingSnapshot.self, from: Data(rankingJSON.utf8))
-            model.syncDetail = "刚刚同步"
+            model.syncDetail = "正在同步本机数据…"
         }
         model.websiteURL = URL(string: "https://c.wanhe.cn")
 
