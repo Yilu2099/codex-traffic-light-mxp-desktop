@@ -151,14 +151,9 @@ struct StatusPopoverView: View {
     private var rankingSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("今日团队活跃")
-                        .font(.system(size: 17, weight: .bold, design: .rounded))
-                        .foregroundStyle(ink)
-                    Text("按 Token 用量排序 · 点击查看成员详情")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(muted)
-                }
+                Text("今日团队活跃")
+                    .font(.system(size: 17, weight: .bold, design: .rounded))
+                    .foregroundStyle(ink)
                 Spacer()
                 Text("实时")
                     .font(.system(size: 10, weight: .bold))
