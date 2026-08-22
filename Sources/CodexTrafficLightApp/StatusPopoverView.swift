@@ -45,7 +45,7 @@ struct StatusPopoverView: View {
                 VStack(spacing: 12) {
                     quotaCard
                     rankingSection
-                    privacyNote
+                    versionNote
                 }
                 .padding(.horizontal, 20)
                 .padding(.top, 12)
@@ -274,10 +274,10 @@ struct StatusPopoverView: View {
         .clipShape(Circle())
     }
 
-    private var privacyNote: some View {
-        Label("仅上传 Token、会话数和项目简称，不上传 prompt、代码或聊天正文", systemImage: "lock.shield")
-            .font(.system(size: 11, weight: .medium))
-            .foregroundStyle(muted)
+    private var versionNote: some View {
+        Text("v\(ClientVersion.current)")
+            .font(.system(size: 10, weight: .medium, design: .monospaced))
+            .foregroundStyle(muted.opacity(0.72))
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 4)
     }
@@ -285,7 +285,7 @@ struct StatusPopoverView: View {
     private var footer: some View {
         HStack(spacing: 10) {
             Button { openWebsite(nil) } label: {
-                Label("打开团队排行榜", systemImage: "safari")
+                Label("打开团队排行榜网站", systemImage: "safari")
                     .font(.system(size: 13, weight: .bold))
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 9)
@@ -293,11 +293,6 @@ struct StatusPopoverView: View {
             .buttonStyle(.borderedProminent)
             .tint(green)
             .disabled(model.websiteURL == nil)
-
-            Text("v\(ClientVersion.current)")
-                .font(.system(size: 9, weight: .medium, design: .monospaced))
-                .foregroundStyle(muted.opacity(0.62))
-
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 9)
