@@ -345,6 +345,18 @@ public struct TeamUsageSyncResult: Codable, Equatable, Sendable {
     public var total: Int
 }
 
+public struct TeamPresencePayload: Codable, Equatable, Sendable {
+    public var collector: String
+    public var collectedAt: String
+    public var device: TeamDeviceIdentity
+    public var lastActiveAt: String?
+}
+
+public struct TeamPresenceResult: Codable, Equatable, Sendable {
+    public var status: String
+    public var receivedAt: String
+}
+
 public struct TeamRankingMember: Codable, Equatable, Sendable {
     public struct OfficialUsageSummary: Codable, Equatable, Sendable {
         public var dataThrough: String?
@@ -359,6 +371,7 @@ public struct TeamRankingMember: Codable, Equatable, Sendable {
     public var tokens: Int
     public var sessions: Int
     public var lastActive: String?
+    public var online: Bool?
     public var grindDay: String?
     public var dayGrindTime: String?
     public var nightGrindTime: String?
@@ -376,6 +389,7 @@ public struct TeamRankingMember: Codable, Equatable, Sendable {
         tokens: Int = 0,
         sessions: Int = 0,
         lastActive: String? = nil,
+        online: Bool? = nil,
         grindDay: String? = nil,
         dayGrindTime: String? = nil,
         nightGrindTime: String? = nil,
@@ -392,6 +406,7 @@ public struct TeamRankingMember: Codable, Equatable, Sendable {
         self.tokens = tokens
         self.sessions = sessions
         self.lastActive = lastActive
+        self.online = online
         self.grindDay = grindDay
         self.dayGrindTime = dayGrindTime
         self.nightGrindTime = nightGrindTime
@@ -743,6 +758,28 @@ public struct TeamUsageSyncService: Sendable {
         return components?.url ?? websiteURL
     }
 
+    public var presenceURL: URL {
+        var components = URLComponents(url: websiteURL, resolvingAgainstBaseURL: false)
+        components?.path = "/api/presence"
+        components?.query = nil
+        return components?.url ?? websiteURL
+    }
+
+    public static func presenceMarkerURL(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> URL {
+        home.appendingPathComponent("Library/Application Support/CodexTrafficLight/last-activity")
+    }
+
+    public func makePresencePayload(lastActiveAt: Date?, now: Date = Date()) -> TeamPresencePayload {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return TeamPresencePayload(
+            collector: "wanhe-codex-mac-presence",
+            collectedAt: formatter.string(from: now),
+            device: TeamDeviceIdentity.current(),
+            lastActiveAt: lastActiveAt.map(formatter.string)
+        )
+    }
+
     public func makePayload(quota: TeamQuotaReport?) throws -> TeamUsagePayload {
         let device = TeamDeviceIdentity.current()
         let officialUsage = try cachedOfficialUsage()
@@ -835,6 +872,25 @@ public struct TeamUsageSyncService: Sendable {
         return result
     }
 
+    public func syncPresence(lastActiveAt: Date?) async throws -> TeamPresenceResult {
+        var request = URLRequest(url: presenceURL)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 10
+        request.setValue("Bearer \(configuration.token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(makePresencePayload(lastActiveAt: lastActiveAt))
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw TeamUsageSyncError.invalidResponse }
+        guard (200..<300).contains(http.statusCode) else {
+            let message = String(data: data, encoding: .utf8) ?? "unknown"
+            throw TeamUsageSyncError.serverRejected(status: http.statusCode, message: message)
+        }
+        guard let result = try? JSONDecoder().decode(TeamPresenceResult.self, from: data) else {
+            throw TeamUsageSyncError.invalidResponse
+        }
+        return result
+    }
+
     public func fetchRanking(range: String = "today") async throws -> TeamRankingSnapshot {
         var request = URLRequest(url: rankingsURL(range: range))
         request.timeoutInterval = 20
@@ -852,6 +908,12 @@ public struct TeamUsageSyncService: Sendable {
 }
 
 public extension Defaults {
+    static let presenceRefreshSeconds: TimeInterval = {
+        if let raw = ProcessInfo.processInfo.environment["CODEX_LIGHT_PRESENCE_SECONDS"],
+           let seconds = TimeInterval(raw), seconds > 0 { return seconds }
+        return 15
+    }()
+
     static let teamSyncRefreshSeconds: TimeInterval = {
         if let raw = ProcessInfo.processInfo.environment["CODEX_LIGHT_TEAM_SYNC_SECONDS"],
            let seconds = TimeInterval(raw), seconds > 0 { return seconds }
