@@ -1,6 +1,6 @@
 # 万合创新局 Codex 状态栏
 
-当前内部版本：`v1.2.27`。版本号在 `VERSION` 与 `Sources/CodexTrafficLightCore/ClientUpdate.swift` 两处维护，发布前必须保持一致；状态栏面板会在排行榜列表下方居中显示当前版本。
+当前内部版本：`v1.2.28`。版本号在 `VERSION` 与 `Sources/CodexTrafficLightCore/ClientUpdate.swift` 两处维护，发布前必须保持一致；状态栏面板会在排行榜列表下方居中显示当前版本。
 
 这是万合创新局的 macOS 状态栏客户端，只保留当前在用的四条链路：
 
