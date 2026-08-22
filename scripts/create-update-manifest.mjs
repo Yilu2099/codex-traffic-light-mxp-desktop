@@ -18,6 +18,10 @@ const message = `wanhe-macos-update-v1\n${version}\n${sha256}\n`
 const signature = sign(null, Buffer.from(message), privateKey).toString('base64')
 const rolloutPercentage = Math.max(0, Math.min(100, Math.round(Number(rolloutRaw) || 0)))
 const mandatory = mandatoryRaw === 'true'
+const targetDeviceIds = String(process.env.WANHE_UPDATE_TARGET_DEVICE_IDS || '')
+  .split(',')
+  .map((value) => value.trim())
+  .filter(Boolean)
 const filename = `wanhe-status-${version}.tar.gz`
 const now = new Date().toISOString()
 const manifest = {
@@ -26,6 +30,7 @@ const manifest = {
   minimumVersion: mandatory ? version : '',
   mandatory,
   rolloutPercentage: mandatory ? 100 : rolloutPercentage,
+  targetDeviceIds,
   downloadPath: `/client/macos/releases/${filename}`,
   sha256,
   signature,

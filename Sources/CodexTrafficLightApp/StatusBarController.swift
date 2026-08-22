@@ -11,27 +11,27 @@ protocol StatusBarControllerDelegate: AnyObject {
 @MainActor
 final class StatusBarController {
     private let healthyGreen = NSColor(
-        srgbRed: 0x2F / 255,
-        green: 0x9E / 255,
-        blue: 0x55 / 255,
+        srgbRed: 0x35 / 255,
+        green: 0xD2 / 255,
+        blue: 0x70 / 255,
         alpha: 1
     )
     private let healthyGreenTop = NSColor(
-        srgbRed: 0x3F / 255,
-        green: 0xB6 / 255,
-        blue: 0x64 / 255,
+        srgbRed: 0x71 / 255,
+        green: 0xF3 / 255,
+        blue: 0xA2 / 255,
         alpha: 1
     )
     private let healthyGreenBottom = NSColor(
         srgbRed: 0x20 / 255,
-        green: 0x7A / 255,
-        blue: 0x3D / 255,
+        green: 0xAD / 255,
+        blue: 0x55 / 255,
         alpha: 1
     )
     private let healthyGreenRim = NSColor(
-        srgbRed: 0x19 / 255,
-        green: 0x5F / 255,
-        blue: 0x31 / 255,
+        srgbRed: 0x08 / 255,
+        green: 0x78 / 255,
+        blue: 0x3B / 255,
         alpha: 1
     )
     private let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -177,21 +177,24 @@ final class StatusBarController {
 
         if breathingTimer == nil {
             if breathingFrames.isEmpty {
-                breathingFrames = (0..<30).map { index in
-                    let wave = (sin(Double(index) * 2 * .pi / 30) + 1) / 2
-                    let eased = wave * wave * (3 - 2 * wave)
+                breathingFrames = (0..<24).map { index in
+                    let progress = CGFloat(index) / 23
+                    let wave = (sin((Double(index) / 24 * 2 * .pi) - (.pi / 2)) + 1) / 2
+                    let intensity = CGFloat(0.54 + (0.46 * wave * wave * (3 - (2 * wave))))
                     return makeQuotaIndicator(
                         color: healthyGreen,
-                        glow: CGFloat(eased),
+                        glow: 0.82,
                         coreTop: healthyGreenTop,
                         coreBottom: healthyGreenBottom,
-                        rim: healthyGreenRim
+                        rim: healthyGreenRim,
+                        haloProgress: progress,
+                        coreIntensity: intensity
                     )
                 }
             }
             breathingFrameIndex = 0
             let timer = Timer(
-                timeInterval: 0.12,
+                timeInterval: 0.05,
                 target: self,
                 selector: #selector(breathingTimerFired),
                 userInfo: nil,
@@ -252,7 +255,9 @@ final class StatusBarController {
         glow: CGFloat,
         coreTop: NSColor? = nil,
         coreBottom: NSColor? = nil,
-        rim: NSColor? = nil
+        rim: NSColor? = nil,
+        haloProgress: CGFloat? = nil,
+        coreIntensity: CGFloat = 1
     ) -> NSImage {
         let size = NSSize(width: 18, height: 18)
         let image = NSImage(size: size)
@@ -262,25 +267,39 @@ final class StatusBarController {
         NSColor.clear.setFill()
         NSRect(origin: .zero, size: size).fill()
 
-        let haloDiameter = 14 + (3 * glow)
+        let haloDiameter: CGFloat
+        let haloAlpha: CGFloat
+        if let haloProgress {
+            let eased = 1 - pow(1 - haloProgress, 2)
+            haloDiameter = 11.4 + (6.4 * eased)
+            haloAlpha = 0.46 * pow(1 - haloProgress, 1.35)
+        } else {
+            haloDiameter = 13.4 + (2.4 * glow)
+            haloAlpha = 0.13 + (0.11 * glow)
+        }
         let haloRect = NSRect(
             x: (size.width - haloDiameter) / 2,
             y: (size.height - haloDiameter) / 2,
             width: haloDiameter,
             height: haloDiameter
         )
-        color.withAlphaComponent(0.16 + (0.16 * glow)).setFill()
+        color.withAlphaComponent(haloAlpha * 0.36).setFill()
         NSBezierPath(ovalIn: haloRect).fill()
 
-        let softGlowRect = NSRect(x: 3, y: 3, width: 12, height: 12)
-        color.withAlphaComponent(0.32 + (0.22 * glow)).setFill()
+        color.withAlphaComponent(haloAlpha).setStroke()
+        let haloRing = NSBezierPath(ovalIn: haloRect.insetBy(dx: 0.65, dy: 0.65))
+        haloRing.lineWidth = 1.15
+        haloRing.stroke()
+
+        let softGlowRect = NSRect(x: 1.8, y: 1.8, width: 14.4, height: 14.4)
+        color.withAlphaComponent((0.20 + (0.24 * coreIntensity)) * glow).setFill()
         NSBezierPath(ovalIn: softGlowRect).fill()
 
-        let rimRect = NSRect(x: 4, y: 4, width: 10, height: 10)
+        let rimRect = NSRect(x: 2.25, y: 2.25, width: 13.5, height: 13.5)
         (rim ?? color).setFill()
         NSBezierPath(ovalIn: rimRect).fill()
 
-        let coreRect = NSRect(x: 4.8, y: 4.8, width: 8.4, height: 8.4)
+        let coreRect = NSRect(x: 3.15, y: 3.15, width: 11.7, height: 11.7)
         if let coreTop, let coreBottom,
            let gradient = NSGradient(starting: coreTop, ending: coreBottom) {
             NSGraphicsContext.saveGraphicsState()
@@ -292,8 +311,11 @@ final class StatusBarController {
             NSBezierPath(ovalIn: coreRect).fill()
         }
 
-        NSColor.white.withAlphaComponent(0.14 + (0.05 * glow)).setFill()
-        NSBezierPath(ovalIn: NSRect(x: 6.6, y: 9.5, width: 2.2, height: 1.5)).fill()
+        (rim ?? color).withAlphaComponent(0.43 * (1 - coreIntensity)).setFill()
+        NSBezierPath(ovalIn: coreRect).fill()
+
+        NSColor.white.withAlphaComponent(0.22 + (0.58 * coreIntensity)).setFill()
+        NSBezierPath(ovalIn: NSRect(x: 5.15, y: 10.0, width: 3.25, height: 2.2)).fill()
 
         image.isTemplate = false
         return image
