@@ -104,6 +104,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
                     return ranking
                 }.value
                 self?.isTeamSyncing = false
+                self?.reconcileSyncedQuota(ranking, configuration: configuration)
                 self?.statusBar.applyTeamRanking(
                     ranking,
                     websiteURL: service.websiteURL,
@@ -133,6 +134,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
                     return ranking
                 }.value
                 self?.isTeamRankingRefreshing = false
+                self?.reconcileSyncedQuota(ranking, configuration: configuration)
                 self?.statusBar.applyTeamRanking(
                     ranking,
                     websiteURL: service.websiteURL,
@@ -142,6 +144,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
                 self?.isTeamRankingRefreshing = false
                 AppDelegate.appendTeamSyncLog("ranking refresh failed: \(error)")
             }
+        }
+    }
+
+    private func reconcileSyncedQuota(
+        _ ranking: TeamRankingSnapshot,
+        configuration: TeamSyncConfiguration
+    ) {
+        guard let synced = ranking.weeklyQuota(for: configuration.userID),
+              let syncedUpdatedAt = synced.updatedAtDate else { return }
+        let local = store.read().quota
+        guard local == nil || syncedUpdatedAt > local!.updatedAt else { return }
+        do {
+            currentSnapshot = try store.updateQuota(
+                weeklyPercent: synced.weeklyRemainingPercent,
+                weeklyResetsAt: synced.weeklyResetsAtDate,
+                source: "team-ranking",
+                now: syncedUpdatedAt
+            )
+            statusBar.apply(snapshot: currentSnapshot)
+        } catch {
+            AppDelegate.appendQuotaLog("team quota reconcile failed: \(error)")
         }
     }
 

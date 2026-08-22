@@ -748,6 +748,8 @@ func testTeamQuotaReportUsesWeeklyPercentAndReset() throws {
     try expectEqual(report.weeklyRemainingPercent, 79, "team quota should keep weekly remaining percent")
     try expectEqual(report.weeklyUsedPercent, 21, "team quota should derive weekly used percent")
     try expect(report.weeklyResetsAt != nil, "team quota should include reset time")
+    try expectEqual(report.weeklyResetsAtDate, reset, "team quota should parse its reset time for client synchronization")
+    try expectEqual(report.updatedAtDate, Date(timeIntervalSince1970: 1_000), "team quota should parse its update time for freshness checks")
 }
 
 func testTeamRankingURLUsesWebsiteOrigin() throws {

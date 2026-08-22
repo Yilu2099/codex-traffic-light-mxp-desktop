@@ -136,12 +136,7 @@ final class StatusBarController {
 
     private func effectiveWeeklyQuota() -> (remainingPercent: Int?, resetsAt: Date?)? {
         if let syncedQuota {
-            let precise = ISO8601DateFormatter()
-            precise.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-            let reset = syncedQuota.weeklyResetsAt.flatMap {
-                precise.date(from: $0) ?? ISO8601DateFormatter().date(from: $0)
-            }
-            return (syncedQuota.weeklyRemainingPercent, reset)
+            return (syncedQuota.weeklyRemainingPercent, syncedQuota.weeklyResetsAtDate)
         }
         return weeklyQuota(from: snapshot)
     }

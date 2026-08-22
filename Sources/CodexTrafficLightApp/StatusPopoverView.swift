@@ -483,17 +483,10 @@ struct StatusPopoverView: View {
 
     private var weeklyQuota: (remainingPercent: Int?, resetsAt: Date?)? {
         if let quota = model.syncedQuota {
-            return (quota.weeklyRemainingPercent, parseISODate(quota.weeklyResetsAt))
+            return (quota.weeklyRemainingPercent, quota.weeklyResetsAtDate)
         }
         guard let quota = model.snapshot?.quota else { return nil }
         return (quota.weeklyRemainingPercent, quota.weeklyResetsAt)
-    }
-
-    private func parseISODate(_ value: String?) -> Date? {
-        guard let value else { return nil }
-        let precise = ISO8601DateFormatter()
-        precise.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return precise.date(from: value) ?? ISO8601DateFormatter().date(from: value)
     }
 
     private var resetRelativeText: String {

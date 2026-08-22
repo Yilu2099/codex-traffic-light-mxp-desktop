@@ -240,10 +240,25 @@ public struct TeamQuotaReport: Codable, Equatable, Sendable {
         )
     }
 
+    public var weeklyResetsAtDate: Date? {
+        Self.isoDate(weeklyResetsAt)
+    }
+
+    public var updatedAtDate: Date? {
+        Self.isoDate(updatedAt)
+    }
+
     private static func isoString(_ date: Date) -> String {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter.string(from: date)
+    }
+
+    private static func isoDate(_ value: String?) -> Date? {
+        guard let value else { return nil }
+        let precise = ISO8601DateFormatter()
+        precise.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return precise.date(from: value) ?? ISO8601DateFormatter().date(from: value)
     }
 }
 
