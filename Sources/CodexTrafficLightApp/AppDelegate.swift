@@ -158,20 +158,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
                 now: now
             )
             let localIsFresh = localObservation.map { now.timeIntervalSince($0.observedAt) <= 15 * 60 } ?? false
+            let existing = backgroundStore.read().providerQuota(for: ProviderQuotaSnapshot.codexProviderID)
+            let localIsNewer = localObservation.map { existing == nil || $0.observedAt > existing!.updatedAt } ?? false
 
-            if let localObservation, localIsFresh {
-                let existing = backgroundStore.read().providerQuota(for: ProviderQuotaSnapshot.codexProviderID)
-                if existing == nil || localObservation.observedAt > existing!.updatedAt {
-                    _ = try? backgroundStore.updateProviderQuota(
-                        providerID: ProviderQuotaSnapshot.codexProviderID,
-                        fiveHourPercent: localObservation.fiveHourRemainingPercent,
-                        weeklyPercent: localObservation.weeklyRemainingPercent,
-                        fiveHourResetsAt: localObservation.fiveHourResetsAt,
-                        weeklyResetsAt: localObservation.weeklyResetsAt,
-                        source: CodexSessionQuotaCollector.source,
-                        now: localObservation.observedAt
-                    )
-                }
+            if let localObservation, localIsNewer {
+                _ = try? backgroundStore.updateProviderQuota(
+                    providerID: ProviderQuotaSnapshot.codexProviderID,
+                    fiveHourPercent: localObservation.fiveHourRemainingPercent,
+                    weeklyPercent: localObservation.weeklyRemainingPercent,
+                    fiveHourResetsAt: localObservation.fiveHourResetsAt,
+                    weeklyResetsAt: localObservation.weeklyResetsAt,
+                    source: CodexSessionQuotaCollector.source,
+                    now: localObservation.observedAt
+                )
+            } else if localIsFresh {
+                // The local event already matches the stored quota; avoid a
+                // slower duplicate app-server query.
             } else {
                 do {
                     let transport = ProcessCodexAppServerTransport(initializeTimeout: 50, rateLimitsTimeout: 20)
