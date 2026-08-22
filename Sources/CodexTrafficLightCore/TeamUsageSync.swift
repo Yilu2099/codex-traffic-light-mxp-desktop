@@ -808,7 +808,10 @@ public struct TeamUsageSyncService: Sendable {
         let todayLiveUsage = TodayCodexUsageCollector().collect(codexHome: configuration.codexHome)
         // Reads only session metadata and token_count totals. Prompt text, code,
         // filenames and raw conversation content are never included in payloads.
-        let calendarUsage = CodexTeamUsageCollector().collect(configuration: configuration, device: device)
+        // The two-minute live sync must never rescan full conversation files.
+        // TodayCodexUsageCollector already tails appended token events and the
+        // server retains earlier calendar buckets for week/month aggregation.
+        let calendarUsage: [TeamUsageSession] = []
         let sessionActivity = CodexSessionFileCounter().collect(
             codexHome: configuration.codexHome,
             days: configuration.collectDays
@@ -838,10 +841,9 @@ public struct TeamUsageSyncService: Sendable {
             interactionSummary: interactionReport.sessions,
             grindHistory: interactionReport.history,
             grindHistoryMode: "interaction_v7",
-            projects: ProjectActivityStore().report(
-                days: configuration.collectDays,
-                codexHome: configuration.codexHome
-            ),
+            // Project names/times come from the privacy-safe audit ledger. Full
+            // conversation summaries are intentionally excluded from live sync.
+            projects: ProjectActivityStore().report(days: configuration.collectDays),
             sessions: calendarUsage
         )
     }

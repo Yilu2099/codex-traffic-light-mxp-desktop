@@ -368,13 +368,8 @@ public struct CodexGrindHistoryCollector: Sendable {
                 let sessionID = sessionID(from: url)
                 var authoredResponseDates: [Date] = []
                 var legacyEventDates: [Date] = []
-                var isSubagentSession = false
-                enumerateLines(in: url) { line in
-                    if line.contains("\"type\":\"session_meta\"")
-                        && line.contains("\"source\":{\"subagent\"") {
-                        isSubagentSession = true
-                        return
-                    }
+                guard !isSubagentSession(url) else { continue }
+                enumerateRecentLines(in: url) { line in
                     guard line.contains("\"user_message\"") || line.contains("\"role\":\"user\"") else { return }
                     guard let event = try? JSONDecoder().decode(EventEnvelope.self, from: Data(line.utf8)),
                           let timestamp = event.timestamp,
@@ -382,7 +377,6 @@ public struct CodexGrindHistoryCollector: Sendable {
                     if event.isAuthoredResponse { authoredResponseDates.append(date) }
                     if event.isLegacyUserEvent { legacyEventDates.append(date) }
                 }
-                guard !isSubagentSession else { continue }
                 // Modern Codex stores authored UI messages as response_item records.
                 // event_msg user_message is only a legacy fallback because modern
                 // files can also contain replay, automation and setup messages there.
@@ -418,19 +412,36 @@ public struct CodexGrindHistoryCollector: Sendable {
         return (grindHistory, sessionSummaries)
     }
 
-    private func enumerateLines(in url: URL, visit: (String) -> Void) {
+    private func enumerateRecentLines(in url: URL, maximumBytes: UInt64 = 4 * 1024 * 1024, visit: (String) -> Void) {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return }
         defer { try? handle.close() }
+        let size = (try? handle.seekToEnd()) ?? 0
+        let start = size > maximumBytes ? size - maximumBytes : 0
+        try? handle.seek(toOffset: start)
         var buffer = Data()
+        var shouldDiscardPartialLine = start > 0
         while let chunk = try? handle.read(upToCount: 64 * 1024), !chunk.isEmpty {
             buffer.append(chunk)
             while let newline = buffer.firstIndex(of: 0x0A) {
                 let line = buffer.subdata(in: buffer.startIndex..<newline)
-                if let text = String(data: line, encoding: .utf8) { visit(text) }
+                if shouldDiscardPartialLine {
+                    shouldDiscardPartialLine = false
+                } else if let text = String(data: line, encoding: .utf8) {
+                    visit(text)
+                }
                 buffer.removeSubrange(buffer.startIndex...newline)
             }
         }
-        if !buffer.isEmpty, let text = String(data: buffer, encoding: .utf8) { visit(text) }
+        if !shouldDiscardPartialLine, !buffer.isEmpty, let text = String(data: buffer, encoding: .utf8) { visit(text) }
+    }
+
+    private func isSubagentSession(_ url: URL) -> Bool {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
+        defer { try? handle.close() }
+        guard let data = try? handle.read(upToCount: 64 * 1024),
+              let text = String(data: data, encoding: .utf8) else { return false }
+        return text.contains("\"type\":\"session_meta\"")
+            && text.contains("\"source\":{\"subagent\"")
     }
 
     private func uniqueTurns(_ values: [Date]) -> [Date] {
