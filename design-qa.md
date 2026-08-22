@@ -1,7 +1,8 @@
-# Design QA — Mac 状态栏开工文案 v1.2.52
+# Design QA — Mac 状态栏与网页版使用说明版本同步 v1.2.53
 
 - source visual truth: installed status popover card layout
-- implementation capture: `/Users/lu/Desktop/开发/创新局/状态栏开工文案-client-v1.2.52-20260823/artifacts/status-popover-v1.2.52.png`
+- visual baseline: `/Users/lu/Desktop/开发/创新局/状态栏开工文案-client-v1.2.52-20260823/artifacts/status-popover-v1.2.52.png`
+- client UI: no visible layout or copy change; this release keeps the Mac client version aligned with the website guide release
 - viewport: native SwiftUI popover at 456 × 640 points, Aqua light appearance, 2x capture
 - implementation pixels: 912 × 1280
 - state: current local team data, four joined members visible
