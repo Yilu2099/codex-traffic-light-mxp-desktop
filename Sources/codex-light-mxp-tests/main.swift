@@ -882,7 +882,7 @@ func testGrindHistoryCollectorReadsOnlyEventTimestamps() throws {
     ].joined(separator: "\n")
         .write(to: continuedConversation, atomically: true, encoding: .utf8)
     let environmentOnlyConversation = sessions.appendingPathComponent("rollout-2026-08-22T07-31-00-01a02710-a3b7-7a12-8f5e-1de50869504a.jsonl")
-    try #"{"timestamp":"2026-08-21T23:31:00.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_image","image_url":"hidden"},{"type":"input_text","text":"<recommended_plugins>system context</recommended_plugins>"},{"type":"input_text","text":"<environment_context>system context</environment_context>"},{"type":"input_text","text":"<app-context>system context</app-context>"}]}}"#
+    try #"{"timestamp":"2026-08-21T23:31:00.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Continue where you left off. The previous model attempt failed or timed out."},{"type":"input_text","text":"自动重放的原始任务内容不应计为真人开工"},{"type":"input_image","image_url":"hidden"}]}}"#
         .write(to: environmentOnlyConversation, atomically: true, encoding: .utf8)
     let laterNewConversation = sessions.appendingPathComponent("rollout-2026-08-22T10-57-13-01a02766-a3b7-7a12-8f5e-1de50869504a.jsonl")
     try [

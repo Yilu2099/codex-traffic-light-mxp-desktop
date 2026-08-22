@@ -264,6 +264,10 @@ public struct CodexGrindHistoryCollector: Sendable {
                 "Continue where you left off. The previous model attempt failed or timed out.",
                 "The following is the Codex agent history",
             ]
+            private static let replayPrefixes = [
+                "Continue where you left off. The previous model attempt failed or timed out.",
+                "The following is the Codex agent history",
+            ]
 
             private static func isUserAuthored(_ value: String) -> Bool {
                 let text = value.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -279,9 +283,21 @@ public struct CodexGrindHistoryCollector: Sendable {
                 }
             }
 
+            var hasAutomatedReplayContent: Bool {
+                content?.contains { item in
+                    let text = (item.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                    return Self.replayPrefixes.contains { text.hasPrefix($0) }
+                } ?? false
+            }
+
             var hasUserAuthoredMessage: Bool {
                 guard let message else { return false }
                 return Self.isUserAuthored(message)
+            }
+
+            var hasAutomatedReplayMessage: Bool {
+                let text = (message ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                return Self.replayPrefixes.contains { text.hasPrefix($0) }
             }
         }
         var timestamp: String?
@@ -293,12 +309,14 @@ public struct CodexGrindHistoryCollector: Sendable {
                 && payload?.type == "message"
                 && payload?.role == "user"
                 && payload?.hasUserAuthoredContent == true
+                && payload?.hasAutomatedReplayContent == false
         }
 
         var isLegacyUserEvent: Bool {
             type == "event_msg"
                 && payload?.type == "user_message"
                 && payload?.hasUserAuthoredMessage == true
+                && payload?.hasAutomatedReplayMessage == false
         }
     }
 
