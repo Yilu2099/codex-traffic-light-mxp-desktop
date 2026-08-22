@@ -120,9 +120,12 @@ public struct CodexSessionQuotaCollector: Sendable {
         freshness: TimeInterval = 15 * 60
     ) -> Bool {
         guard let existing else { return true }
+        let age = now.timeIntervalSince(observation.observedAt)
+        if existing.limitID != primaryLimitID {
+            return age >= -60 && age <= freshness
+        }
         if observation.observedAt > existing.updatedAt { return true }
 
-        let age = now.timeIntervalSince(observation.observedAt)
         guard age >= -60,
               age <= freshness,
               existing.weeklyRemainingPercent >= 99,

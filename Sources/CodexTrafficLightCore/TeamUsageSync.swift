@@ -271,6 +271,22 @@ public struct TeamQuotaReport: Codable, Equatable, Sendable {
     }
 }
 
+public struct TeamQuotaDiagnostic: Codable, Equatable, Sendable {
+    public var status: String
+    public var checkedAt: String
+    public var source: String?
+    public var errorCode: String?
+
+    public init(status: String, checkedAt: Date, source: String? = nil, errorCode: String? = nil) {
+        self.status = status
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        self.checkedAt = formatter.string(from: checkedAt)
+        self.source = source
+        self.errorCode = errorCode
+    }
+}
+
 public struct TeamUsageProfile: Codable, Equatable, Sendable {
     public var userId: String
     public var userName: String
@@ -306,6 +322,7 @@ public struct TeamUsagePayload: Codable, Equatable, Sendable {
     public var profile: TeamUsageProfile
     public var device: TeamDeviceIdentity
     public var quota: TeamQuotaReport?
+    public var quotaDiagnostic: TeamQuotaDiagnostic?
     public var officialUsage: OfficialCodexUsageReport
     public var todayLiveUsage: TodayLiveUsageReport
     public var sessionActivity: [TeamSessionActivity]
@@ -785,7 +802,7 @@ public struct TeamUsageSyncService: Sendable {
         )
     }
 
-    public func makePayload(quota: TeamQuotaReport?) throws -> TeamUsagePayload {
+    public func makePayload(quota: TeamQuotaReport?, quotaDiagnostic: TeamQuotaDiagnostic? = nil) throws -> TeamUsagePayload {
         let device = TeamDeviceIdentity.current()
         let officialUsage = try cachedOfficialUsage()
         let todayLiveUsage = TodayCodexUsageCollector().collect(codexHome: configuration.codexHome)
@@ -814,6 +831,7 @@ public struct TeamUsageSyncService: Sendable {
             ),
             device: device,
             quota: quota,
+            quotaDiagnostic: quotaDiagnostic,
             officialUsage: officialUsage,
             todayLiveUsage: todayLiveUsage,
             sessionActivity: sessionActivity,
@@ -857,8 +875,8 @@ public struct TeamUsageSyncService: Sendable {
         return fractional.date(from: value) ?? ISO8601DateFormatter().date(from: value)
     }
 
-    public func sync(quota: TeamQuotaReport?) async throws -> TeamUsageSyncResult {
-        let payload = try makePayload(quota: quota)
+    public func sync(quota: TeamQuotaReport?, quotaDiagnostic: TeamQuotaDiagnostic? = nil) async throws -> TeamUsageSyncResult {
+        let payload = try makePayload(quota: quota, quotaDiagnostic: quotaDiagnostic)
         var request = URLRequest(url: configuration.endpoint)
         request.httpMethod = "POST"
         request.timeoutInterval = 45

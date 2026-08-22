@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
     private var isTeamRankingRefreshing = false
     private var isPresenceSyncing = false
     private var presenceFailureLogged = false
+    private var latestQuotaDiagnostic: TeamQuotaDiagnostic?
     private let quotaRefreshCoordinator = QuotaRefreshCoordinator()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -135,12 +136,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
         guard let configuration = teamSyncConfiguration, !isTeamSyncing else { return }
         isTeamSyncing = true
         let quota = TeamQuotaReport.from(snapshot: store.read())
+        let quotaDiagnostic = latestQuotaDiagnostic
         let service = TeamUsageSyncService(configuration: configuration)
         statusBar.setTeamSyncDetail("正在同步本机数据…", websiteURL: service.websiteURL)
         Task { [weak self] in
             do {
                 let ranking = try await Task.detached(priority: .utility) {
-                    _ = try await service.sync(quota: quota)
+                    _ = try await service.sync(quota: quota, quotaDiagnostic: quotaDiagnostic)
                     let ranking = try await service.fetchRanking(range: "today")
                     await PersistentAvatarCachePrefetcher.prefetch(
                         ranking: ranking,
@@ -245,6 +247,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
     private func handleQuotaRefreshCompletion(snapshot: StateSnapshot, error: Error?) {
         quotaRefreshCoordinator.endRefresh(success: error == nil)
         let previousQuotaUpdatedAt = TeamQuotaReport.from(snapshot: currentSnapshot)?.updatedAt
+        let verifiedQuota = TeamQuotaReport.from(snapshot: snapshot)
+        let errorCode: String? = {
+            if let quotaError = error as? CodexAppServerQuotaError { return quotaError.summaryKey }
+            if error != nil { return "unknown" }
+            if verifiedQuota == nil { return "no_verified_quota" }
+            return nil
+        }()
+        let diagnosticStatus: String
+        if verifiedQuota == nil {
+            diagnosticStatus = "unavailable"
+        } else if error != nil {
+            diagnosticStatus = "stale"
+        } else {
+            diagnosticStatus = "available"
+        }
+        latestQuotaDiagnostic = TeamQuotaDiagnostic(
+            status: diagnosticStatus,
+            checkedAt: Date(),
+            source: verifiedQuota?.source,
+            errorCode: errorCode
+        )
         currentSnapshot = snapshot
         statusBar.apply(snapshot: currentSnapshot)
         if error == nil,

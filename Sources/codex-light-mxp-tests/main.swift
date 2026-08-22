@@ -475,6 +475,27 @@ func testSessionQuotaCollectorRepairsNewerSparkContamination() throws {
     )
 }
 
+func testSessionQuotaCollectorReplacesFreshUnverifiedCache() throws {
+    let now = Date(timeIntervalSince1970: 1_787_389_000)
+    let observation = CodexSessionQuotaObservation(
+        weeklyRemainingPercent: 37,
+        weeklyResetsAt: Date(timeIntervalSince1970: 1_787_561_781),
+        observedAt: now.addingTimeInterval(-60)
+    )
+    let unverified = QuotaSnapshot(
+        weeklyRemainingPercent: 89,
+        weeklyResetsAt: Date(timeIntervalSince1970: 1_788_011_074),
+        source: "legacy",
+        updatedAt: now
+    )
+
+    try expectEqual(
+        CodexSessionQuotaCollector.shouldApply(observation, over: unverified, now: now),
+        true,
+        "a fresh exact Codex observation should replace any newer cache without a verified limit id"
+    )
+}
+
 func testSessionQuotaCollectorRejectsLegacy300MinuteEvent() throws {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("codex-session-legacy-window-tests-\(UUID().uuidString)", isDirectory: true)
@@ -680,6 +701,40 @@ func testAppServerQuotaErrorsDescribeSpecificTimeouts() throws {
         "App-server quota failed after 3 attempts: initialize timed out after 50s",
         "retry exhausted error should include attempts and final cause"
     )
+}
+
+func testAppServerBinaryDiscoveryFindsBundledChatGPTCodex() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("codex-binary-discovery-tests-\(UUID().uuidString)", isDirectory: true)
+    let home = root.appendingPathComponent("home", isDirectory: true)
+    let applications = root.appendingPathComponent("Applications", isDirectory: true)
+    let bundledCodex = applications.appendingPathComponent("ChatGPT.app/Contents/Resources/codex")
+    try FileManager.default.createDirectory(at: bundledCodex.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try Data("#!/bin/sh\n".utf8).write(to: bundledCodex)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: bundledCodex.path)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let discovered = ProcessCodexAppServerTransport.defaultCodexBinary(
+        home: home,
+        environment: [:],
+        applicationDirectories: [applications]
+    )
+
+    try expectEqual(discovered, bundledCodex.path, "GUI clients should find the Codex binary bundled inside ChatGPT.app")
+}
+
+func testQuotaDiagnosticContainsOnlyStatusCodeAndSource() throws {
+    let diagnostic = TeamQuotaDiagnostic(
+        status: "unavailable",
+        checkedAt: Date(timeIntervalSince1970: 1_787_389_000),
+        source: nil,
+        errorCode: "retryExhausted:launchFailed"
+    )
+    let object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(diagnostic)) as? [String: Any]
+
+    try expectEqual(object?["status"] as? String, "unavailable", "quota diagnostic should include availability status")
+    try expectEqual(object?["errorCode"] as? String, "retryExhausted:launchFailed", "quota diagnostic should include only a stable error code")
+    try expectEqual(Set(object?.keys.map { $0 } ?? []), Set(["status", "checkedAt", "errorCode"]), "quota diagnostic must not include local paths or raw stderr")
 }
 
 final class SequencedAppServerTransport: CodexAppServerTransport {
@@ -1248,6 +1303,7 @@ let tests: [(String, () throws -> Void)] = [
     ("session quota collector uses newest Codex event", testSessionQuotaCollectorUsesNewestCodexRateLimitEvent),
     ("session quota collector ignores Spark limit", testSessionQuotaCollectorIgnoresSparkRateLimitEvent),
     ("session quota collector repairs Spark contamination", testSessionQuotaCollectorRepairsNewerSparkContamination),
+    ("session quota collector replaces fresh unverified cache", testSessionQuotaCollectorReplacesFreshUnverifiedCache),
     ("session quota collector rejects legacy 300-minute event", testSessionQuotaCollectorRejectsLegacy300MinuteEvent),
     ("app-server quota mapper reads codex limit", testAppServerQuotaMapperReadsCodexLimitByExactDurations),
     ("app-server quota mapper falls back top-level", testAppServerQuotaMapperFallsBackToTopLevelRateLimits),
@@ -1262,6 +1318,8 @@ let tests: [(String, () throws -> Void)] = [
     ("app-server quota collector uses transport fixture", testAppServerQuotaCollectorUsesTransportFixture),
     ("app-server quota collector preserves old quota on failure", testAppServerQuotaCollectorPropagatesMissingQuotaWithoutClearingStore),
     ("app-server quota errors describe specific timeouts", testAppServerQuotaErrorsDescribeSpecificTimeouts),
+    ("app-server discovers bundled ChatGPT Codex", testAppServerBinaryDiscoveryFindsBundledChatGPTCodex),
+    ("quota diagnostic is sanitized", testQuotaDiagnosticContainsOnlyStatusCodeAndSource),
     ("app-server quota collector retries and succeeds", testAppServerQuotaCollectorRetriesTwiceAndSucceedsOnThirdAttempt),
     ("app-server quota collector exhausts retries", testAppServerQuotaCollectorFailsAfterThreeAttemptsAndPreservesQuota),
     ("quota refresh coordinator prevents concurrent refreshes", testQuotaRefreshCoordinatorPreventsConcurrentRefreshes),

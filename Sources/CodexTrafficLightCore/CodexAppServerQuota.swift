@@ -266,15 +266,31 @@ public struct ProcessCodexAppServerTransport: CodexAppServerTransport {
         self.rateLimitsTimeout = rateLimitsTimeout
     }
 
-    public static func defaultCodexBinary() -> String {
-        if let configured = ProcessInfo.processInfo.environment["CODEX_TRAFFIC_LIGHT_CODEX_BIN"],
+    public static func defaultCodexBinary(
+        home: URL = FileManager.default.homeDirectoryForCurrentUser,
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        fileManager: FileManager = .default,
+        applicationDirectories: [URL]? = nil
+    ) -> String {
+        if let configured = environment["CODEX_TRAFFIC_LIGHT_CODEX_BIN"],
            !configured.isEmpty {
             return configured
         }
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let localCodex = home.appendingPathComponent(".local/bin/codex").path
-        if FileManager.default.isExecutableFile(atPath: localCodex) {
-            return localCodex
+
+        let appRoots = applicationDirectories ?? [
+            home.appendingPathComponent("Applications", isDirectory: true),
+            URL(fileURLWithPath: "/Applications", isDirectory: true),
+        ]
+        var candidates = [home.appendingPathComponent(".local/bin/codex")]
+        for root in appRoots {
+            candidates.append(root.appendingPathComponent("ChatGPT.app/Contents/Resources/codex"))
+            candidates.append(root.appendingPathComponent("Codex.app/Contents/Resources/codex"))
+        }
+        candidates.append(URL(fileURLWithPath: "/opt/homebrew/bin/codex"))
+        candidates.append(URL(fileURLWithPath: "/usr/local/bin/codex"))
+
+        if let binary = candidates.first(where: { fileManager.isExecutableFile(atPath: $0.path) }) {
+            return binary.path
         }
         return "codex"
     }
