@@ -158,7 +158,7 @@ struct StatusPopoverView: View {
                     Text("今日团队活跃")
                         .font(.system(size: 18, weight: .bold, design: .rounded))
                         .foregroundStyle(ink)
-                    Text("按 Token 用量排名 · 点击查看成员详情")
+                    Text("按 Token 用量排序 · 点击查看成员详情")
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(muted)
                 }
@@ -175,7 +175,7 @@ struct StatusPopoverView: View {
                 let members = rankedMembers
                 if !members.isEmpty {
                     ForEach(Array(members.enumerated()), id: \.element.id) { index, member in
-                        memberRow(member, rank: index + 1)
+                        memberRow(member)
                         if index < members.count - 1 { line.frame(height: 1) }
                     }
                 } else {
@@ -194,64 +194,63 @@ struct StatusPopoverView: View {
         }
     }
 
-    private func memberRow(_ member: TeamRankingMember, rank: Int) -> some View {
+    private func memberRow(_ member: TeamRankingMember) -> some View {
         Button { openWebsite(member.id) } label: {
-            HStack(alignment: .center, spacing: 10) {
-                rankedAvatar(member, rank: rank)
-                VStack(alignment: .leading, spacing: 7) {
-                    HStack(spacing: 7) {
+            HStack(alignment: .center, spacing: 12) {
+                avatar(member)
+                if member.hasEverJoined {
+                    joinedMemberDetails(member)
+                } else {
+                    HStack(spacing: 10) {
                         Text(displayName(member))
-                            .font(.system(size: 17, weight: .bold))
+                            .font(.system(size: 18, weight: .bold))
                             .foregroundStyle(ink)
                             .lineLimit(1)
-                        Circle()
-                            .fill(member.tokens > 0 || member.sessions > 0 ? green : muted.opacity(0.45))
-                            .frame(width: 5, height: 5)
-                        Text(memberActiveText(member))
-                            .font(.system(size: 10.5, weight: .medium))
+                        Text("众神未归位")
+                            .font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(muted)
                             .lineLimit(1)
-                            .minimumScaleFactor(0.8)
-                        Spacer(minLength: 4)
-                        sessionBadge(member)
+                        Spacer()
                     }
-                    memberQuotaProgress(member)
-                    grindActivityBand(member)
                 }
-                .layoutPriority(1)
-                VStack(alignment: .trailing, spacing: 4) {
-                    Text(formatTokens(member.tokens))
-                        .font(.system(size: 14, weight: .bold, design: .rounded))
-                        .foregroundStyle(ink)
-                    Text("Token")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(muted)
-                }
-                .fixedSize(horizontal: true, vertical: false)
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(muted.opacity(0.65))
             }
             .padding(.horizontal, 12)
-            .padding(.vertical, 13)
+            .padding(.vertical, member.hasEverJoined ? 13 : 11)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
 
-    private func rankedAvatar(_ member: TeamRankingMember, rank: Int) -> some View {
-        ZStack(alignment: .topLeading) {
-            avatar(member)
-                .padding(.leading, 5)
-                .padding(.top, 5)
-            Text(String(format: "%02d", rank))
-                .font(.system(size: 10, weight: .heavy, design: .rounded))
-                .foregroundStyle(Color.white)
-                .frame(width: 27, height: 27)
-                .background(rankColor(rank), in: Circle())
-                .overlay(Circle().stroke(card, lineWidth: 2))
+    private func joinedMemberDetails(_ member: TeamRankingMember) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 7) {
+                Text(displayName(member))
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundStyle(ink)
+                    .lineLimit(1)
+                Circle()
+                    .fill(member.tokens > 0 || member.sessions > 0 ? green : muted.opacity(0.45))
+                    .frame(width: 5, height: 5)
+                Text(memberActiveText(member))
+                    .font(.system(size: 10.5, weight: .medium))
+                    .foregroundStyle(muted)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.78)
+                Spacer(minLength: 6)
+                VStack(alignment: .trailing, spacing: 1) {
+                    Text(formatTokens(member.tokens))
+                        .font(.system(size: 13.5, weight: .bold, design: .rounded))
+                        .foregroundStyle(ink)
+                    Text("Token")
+                        .font(.system(size: 8.5, weight: .bold))
+                        .foregroundStyle(muted)
+                }
+                .fixedSize(horizontal: true, vertical: false)
+            }
+            memberQuotaProgress(member)
+            grindActivityBand(member)
         }
-        .frame(width: 63, height: 63)
+        .frame(maxWidth: .infinity)
     }
 
     private func avatar(_ member: TeamRankingMember) -> some View {
@@ -271,7 +270,7 @@ struct StatusPopoverView: View {
                     .foregroundStyle(ink)
             }
         }
-        .frame(width: 58, height: 58)
+        .frame(width: 72, height: 72)
         .clipShape(Circle())
     }
 
@@ -362,21 +361,6 @@ struct StatusPopoverView: View {
         return lastActive
     }
 
-    private func sessionBadge(_ member: TeamRankingMember) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 2) {
-            Text("\(member.sessions)")
-                .font(.system(size: 13, weight: .heavy, design: .rounded))
-            Text("次")
-                .font(.system(size: 9, weight: .bold))
-        }
-        .foregroundStyle(green)
-        .padding(.horizontal, 7)
-        .padding(.vertical, 4.5)
-        .background(green.opacity(0.055), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).stroke(green.opacity(0.72), lineWidth: 1))
-        .fixedSize(horizontal: true, vertical: false)
-    }
-
     private func memberQuotaProgress(_ member: TeamRankingMember) -> some View {
         HStack(spacing: 7) {
             if let quota = member.weeklyQuota {
@@ -387,35 +371,39 @@ struct StatusPopoverView: View {
                 ProgressView(value: Double(quota.weeklyRemainingPercent) / 100)
                     .progressViewStyle(.linear)
                     .tint(green)
-                    .frame(maxWidth: 54)
+                    .frame(width: 54)
                 Text(memberQuotaResetText(quota.weeklyResetsAt))
                     .font(.system(size: 9, weight: .medium))
                     .foregroundStyle(muted)
                     .lineLimit(1)
                     .minimumScaleFactor(0.78)
+                    .fixedSize(horizontal: true, vertical: false)
             } else {
                 Text("周余额待同步 · 刷新待更新")
                     .font(.system(size: 9.5, weight: .semibold))
                     .foregroundStyle(muted)
             }
+            Spacer(minLength: 0)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func grindActivityBand(_ member: TeamRankingMember) -> some View {
         HStack(spacing: 0) {
             grindBandSegment(
                 icon: "sun.max.fill",
-                text: "日搓 \(member.dayGrindTime ?? "--")",
+                text: "开工 \(member.dayGrindTime ?? "--")",
                 foreground: dayInk,
                 background: dayTint
             )
             grindBandSegment(
                 icon: "moon.fill",
-                text: "夜搓 \(member.nightGrindTime ?? "--")",
+                text: "收工 \(finishTimeText(member.nightGrindTime))",
                 foreground: nightInk,
                 background: nightTint
             )
         }
+        .frame(maxWidth: .infinity)
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(line.opacity(0.6), lineWidth: 0.5))
     }
@@ -433,6 +421,11 @@ struct StatusPopoverView: View {
         .frame(maxWidth: .infinity)
         .padding(.vertical, 5.5)
         .background(background)
+    }
+
+    private func finishTimeText(_ value: String?) -> String {
+        guard let value, value.count == 5, let hour = Int(value.prefix(2)) else { return "--" }
+        return hour < 5 ? "次日 \(value)" : value
     }
 
     private func memberQuotaResetText(_ value: String?) -> String {
@@ -502,14 +495,6 @@ struct StatusPopoverView: View {
         let value = member.id.unicodeScalars.reduce(0) { (($0 << 5) - $0 + Int($1.value)) & 0x7fffffff }
         base.append(path: "avatars/codex-\(String(format: "%02d", value % 16 + 1)).png")
         return base
-    }
-
-    private func rankColor(_ rank: Int) -> Color {
-        switch rank {
-        case 1: return green
-        case 2, 3: return Color(red: 0.34, green: 0.38, blue: 0.36)
-        default: return muted
-        }
     }
 
     private func formatTokens(_ value: Int) -> String {

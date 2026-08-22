@@ -20,13 +20,24 @@ enum StatusPopoverCapture {
             ],
             tasks: [:]
         )
-        let rankingJSON = """
-        {"updatedAt":"2026-08-21 13:36","members":[
-          {"id":"zlu","name":"张璐","avatar":"/avatars/58.png","tokens":1210000000,"sessions":12,"lastActive":"11:49","grindDay":"2026-08-22","dayGrindTime":"09:42","nightGrindTime":"02:04","officialUsage":{"dataThrough":"2026-08-20"},"tokenSource":"today_live","todayLiveUpdatedAt":"2026-08-22T03:49:00Z","weeklyQuota":{"weeklyRemainingPercent":61,"weeklyUsedPercent":39,"weeklyResetsAt":"2026-08-26T03:33:00.000Z","updatedAt":"2026-08-22T03:49:00.000Z"}},
-          {"id":"qiaoyue","name":"乔月","avatar":"/avatars/201.png","tokens":66066000,"sessions":2,"lastActive":"10:35","grindDay":"2026-08-22","dayGrindTime":"07:42","nightGrindTime":"03:12","officialUsage":{"dataThrough":"2026-08-20"},"tokenSource":"today_live","todayLiveUpdatedAt":"2026-08-22T02:35:00Z"},
-          {"id":"qiubo","name":"仇博","avatar":"/avatars/193.png","tokens":0,"sessions":0}
-        ]}
-        """
+        let previewState = ProcessInfo.processInfo.environment["CODEX_LIGHT_CAPTURE_STATUS_STATE"]
+        let rankingJSON: String
+        if previewState == "unjoined" {
+            rankingJSON = """
+            {"updatedAt":"2026-08-21 13:36","members":[
+              {"id":"zlu","name":"张璐","avatar":"/avatars/58.png","tokens":1210000000,"sessions":12,"lastActive":"11:49","grindDay":"2026-08-22","dayGrindTime":"09:42","nightGrindTime":"02:04","officialUsage":{"dataThrough":"2026-08-20"},"tokenSource":"today_live","todayLiveUpdatedAt":"2026-08-22T03:49:00Z","weeklyQuota":{"weeklyRemainingPercent":61,"weeklyUsedPercent":39,"weeklyResetsAt":"2026-08-26T03:33:00.000Z","updatedAt":"2026-08-22T03:49:00.000Z"}},
+              {"id":"qiubo","name":"仇博","avatar":"/avatars/193.png","tokens":0,"sessions":0,"joined":false}
+            ]}
+            """
+        } else {
+            rankingJSON = """
+            {"updatedAt":"2026-08-21 13:36","members":[
+              {"id":"zlu","name":"张璐","avatar":"/avatars/58.png","tokens":1210000000,"sessions":12,"lastActive":"11:49","grindDay":"2026-08-22","dayGrindTime":"09:42","nightGrindTime":"02:04","officialUsage":{"dataThrough":"2026-08-20"},"tokenSource":"today_live","todayLiveUpdatedAt":"2026-08-22T03:49:00Z","weeklyQuota":{"weeklyRemainingPercent":61,"weeklyUsedPercent":39,"weeklyResetsAt":"2026-08-26T03:33:00.000Z","updatedAt":"2026-08-22T03:49:00.000Z"}},
+              {"id":"qiaoyue","name":"乔月","avatar":"/avatars/201.png","tokens":66066000,"sessions":2,"lastActive":"10:35","grindDay":"2026-08-22","dayGrindTime":"07:42","nightGrindTime":"03:12","officialUsage":{"dataThrough":"2026-08-20"},"tokenSource":"today_live","todayLiveUpdatedAt":"2026-08-22T02:35:00Z","weeklyQuota":{"weeklyRemainingPercent":73,"weeklyUsedPercent":27,"weeklyResetsAt":"2026-08-28T03:33:00.000Z","updatedAt":"2026-08-22T02:35:00.000Z"}},
+              {"id":"qiubo","name":"仇博","avatar":"/avatars/193.png","tokens":0,"sessions":0,"joined":false}
+            ]}
+            """
+        }
         model.ranking = try? JSONDecoder().decode(TeamRankingSnapshot.self, from: Data(rankingJSON.utf8))
         model.syncDetail = "刚刚同步"
         model.websiteURL = URL(string: "https://c.wanhe.cn")
