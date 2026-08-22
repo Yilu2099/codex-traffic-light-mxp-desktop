@@ -26,7 +26,7 @@ func testCommandContract() throws {
 func testGrindDisplayFormatterUsesConciseLabels() throws {
     try expectEqual(GrindDisplayFormatter.start(nil), "待开工", "missing start should show only the waiting label")
     try expectEqual(GrindDisplayFormatter.start(""), "待开工", "empty start should show only the waiting label")
-    try expectEqual(GrindDisplayFormatter.start("08:15"), "今日开工 08:15", "known start should retain its time")
+    try expectEqual(GrindDisplayFormatter.start("08:15"), "开工 08:15", "known start should retain its time")
     try expectEqual(GrindDisplayFormatter.finish(nil), "收工未记录", "missing finish should use a natural empty state")
     try expectEqual(GrindDisplayFormatter.finish("00:49"), "收工 00:49", "finish should not repeat yesterday")
 }

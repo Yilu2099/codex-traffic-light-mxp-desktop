@@ -3,7 +3,7 @@ import Foundation
 public enum GrindDisplayFormatter {
     public static func start(_ time: String?) -> String {
         guard let time = normalized(time) else { return "待开工" }
-        return "今日开工 \(time)"
+        return "开工 \(time)"
     }
 
     public static func finish(_ time: String?) -> String {
