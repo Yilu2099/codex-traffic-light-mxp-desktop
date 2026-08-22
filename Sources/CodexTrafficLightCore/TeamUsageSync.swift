@@ -369,6 +369,10 @@ public struct TeamRankingMember: Codable, Equatable, Sendable {
 public struct TeamRankingSnapshot: Codable, Equatable, Sendable {
     public var updatedAt: String
     public var members: [TeamRankingMember]
+
+    public func weeklyQuota(for userID: String) -> TeamQuotaReport? {
+        members.first { $0.id.caseInsensitiveCompare(userID) == .orderedSame }?.weeklyQuota
+    }
 }
 
 public struct CodexTeamUsageCollector: Sendable {

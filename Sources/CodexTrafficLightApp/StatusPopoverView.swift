@@ -6,6 +6,7 @@ import CodexTrafficLightCore
 final class StatusPopoverModel: ObservableObject {
     @Published var snapshot: StateSnapshot?
     @Published var ranking: TeamRankingSnapshot?
+    @Published var syncedQuota: TeamQuotaReport?
     @Published var syncDetail: String = "正在读取团队数据…"
     @Published var websiteURL: URL?
 }
@@ -472,8 +473,18 @@ struct StatusPopoverView: View {
     }
 
     private var weeklyQuota: (remainingPercent: Int?, resetsAt: Date?)? {
+        if let quota = model.syncedQuota {
+            return (quota.weeklyRemainingPercent, parseISODate(quota.weeklyResetsAt))
+        }
         guard let quota = model.snapshot?.quota else { return nil }
         return (quota.weeklyRemainingPercent, quota.weeklyResetsAt)
+    }
+
+    private func parseISODate(_ value: String?) -> Date? {
+        guard let value else { return nil }
+        let precise = ISO8601DateFormatter()
+        precise.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return precise.date(from: value) ?? ISO8601DateFormatter().date(from: value)
     }
 
     private var resetRelativeText: String {

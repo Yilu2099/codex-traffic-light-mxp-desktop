@@ -41,6 +41,7 @@ final class StatusBarController {
     private var teamRanking: TeamRankingSnapshot?
     private var teamWebsiteURL: URL?
     private var teamSyncDetail: String?
+    private var syncedQuota: TeamQuotaReport?
     private var weeklyRemainingPercent: Int?
     private var breathingTimer: Timer?
     private var breathingFrames: [NSImage] = []
@@ -68,19 +69,26 @@ final class StatusBarController {
 
     func apply(snapshot: StateSnapshot?) {
         self.snapshot = snapshot
-        weeklyRemainingPercent = weeklyQuota(from: snapshot)?.remainingPercent
-        updateQuotaIndicator()
-        item.button?.title = statusBarText(for: snapshot)
-        item.button?.toolTip = detailLines(for: snapshot).joined(separator: "\n")
         popoverModel.snapshot = snapshot
+        refreshQuotaPresentation()
     }
 
-    func applyTeamRanking(_ ranking: TeamRankingSnapshot?, websiteURL: URL?, syncDetail: String? = nil) {
+    func applyTeamRanking(
+        _ ranking: TeamRankingSnapshot?,
+        websiteURL: URL?,
+        syncDetail: String? = nil,
+        currentUserID: String? = nil
+    ) {
         teamRanking = ranking
         teamWebsiteURL = websiteURL
         teamSyncDetail = syncDetail
         popoverModel.ranking = ranking
         popoverModel.websiteURL = websiteURL
+        if let currentUserID {
+            syncedQuota = ranking?.weeklyQuota(for: currentUserID)
+            popoverModel.syncedQuota = syncedQuota
+            refreshQuotaPresentation()
+        }
         if let syncDetail { popoverModel.syncDetail = syncDetail }
     }
 
@@ -96,15 +104,15 @@ final class StatusBarController {
         breathingTimer = nil
     }
 
-    private func statusBarText(for snapshot: StateSnapshot?) -> String {
-        guard let percent = weeklyQuota(from: snapshot)?.remainingPercent else {
+    private func statusBarText() -> String {
+        guard let percent = effectiveWeeklyQuota()?.remainingPercent else {
             return "周余额 --"
         }
         return "周余额 \(percent)%"
     }
 
-    private func detailLines(for snapshot: StateSnapshot?) -> [String] {
-        let weekly = weeklyQuota(from: snapshot)
+    private func detailLines() -> [String] {
+        let weekly = effectiveWeeklyQuota()
         let percentText = weekly?.remainingPercent.map { "\($0)%" } ?? "--"
         guard let resetsAt = weekly?.resetsAt else {
             return [
@@ -124,6 +132,25 @@ final class StatusBarController {
     private func weeklyQuota(from snapshot: StateSnapshot?) -> (remainingPercent: Int?, resetsAt: Date?)? {
         guard let quota = snapshot?.quota else { return nil }
         return (quota.weeklyRemainingPercent, quota.weeklyResetsAt)
+    }
+
+    private func effectiveWeeklyQuota() -> (remainingPercent: Int?, resetsAt: Date?)? {
+        if let syncedQuota {
+            let precise = ISO8601DateFormatter()
+            precise.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            let reset = syncedQuota.weeklyResetsAt.flatMap {
+                precise.date(from: $0) ?? ISO8601DateFormatter().date(from: $0)
+            }
+            return (syncedQuota.weeklyRemainingPercent, reset)
+        }
+        return weeklyQuota(from: snapshot)
+    }
+
+    private func refreshQuotaPresentation() {
+        weeklyRemainingPercent = effectiveWeeklyQuota()?.remainingPercent
+        updateQuotaIndicator()
+        item.button?.title = statusBarText()
+        item.button?.toolTip = detailLines().joined(separator: "\n")
     }
 
     private func updateQuotaIndicator() {

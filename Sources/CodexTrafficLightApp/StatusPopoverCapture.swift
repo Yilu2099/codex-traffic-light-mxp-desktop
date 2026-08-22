@@ -16,6 +16,11 @@ enum StatusPopoverCapture {
                 updatedAt: now
             )
         )
+        model.syncedQuota = TeamQuotaReport(
+            weeklyRemainingPercent: 28,
+            weeklyResetsAt: now.addingTimeInterval(2 * 86_400 + 1 * 3_600),
+            updatedAt: now
+        )
         let previewState = ProcessInfo.processInfo.environment["CODEX_LIGHT_CAPTURE_STATUS_STATE"]
         let timeFormatter = DateFormatter()
         timeFormatter.locale = Locale(identifier: "en_US_POSIX")

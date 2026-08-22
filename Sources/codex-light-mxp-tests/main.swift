@@ -777,6 +777,8 @@ func testTeamRankingDecodesMemberWeeklyQuota() throws {
     let ranking = try JSONDecoder().decode(TeamRankingSnapshot.self, from: data)
     try expectEqual(ranking.members.first?.weeklyQuota?.weeklyRemainingPercent, 75, "team ranking should expose each member's weekly remaining percent")
     try expectEqual(ranking.members.first?.weeklyQuota?.weeklyResetsAt, "2026-08-27T03:33:23.000Z", "team ranking should expose each member's weekly reset time")
+    try expectEqual(ranking.weeklyQuota(for: "ZLU")?.weeklyRemainingPercent, 75, "status bars should resolve the shared member quota case-insensitively")
+    try expectEqual(ranking.weeklyQuota(for: "missing"), nil, "unknown members should not inherit another person's quota")
 }
 
 func testTeamRankingDistinguishesJoinedMemberFromInvitePlaceholder() throws {

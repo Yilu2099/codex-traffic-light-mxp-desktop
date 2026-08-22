@@ -110,7 +110,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
                     return ranking
                 }.value
                 self?.isTeamSyncing = false
-                self?.statusBar.applyTeamRanking(ranking, websiteURL: service.websiteURL, syncDetail: "刚刚同步")
+                self?.statusBar.applyTeamRanking(
+                    ranking,
+                    websiteURL: service.websiteURL,
+                    syncDetail: "刚刚同步",
+                    currentUserID: configuration.userID
+                )
             } catch {
                 self?.isTeamSyncing = false
                 self?.statusBar.setTeamSyncDetail("团队数据同步失败，稍后重试", websiteURL: service.websiteURL)
@@ -134,7 +139,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
                     return ranking
                 }.value
                 self?.isTeamRankingRefreshing = false
-                self?.statusBar.applyTeamRanking(ranking, websiteURL: service.websiteURL)
+                self?.statusBar.applyTeamRanking(
+                    ranking,
+                    websiteURL: service.websiteURL,
+                    currentUserID: configuration.userID
+                )
             } catch {
                 self?.isTeamRankingRefreshing = false
                 AppDelegate.appendTeamSyncLog("ranking refresh failed: \(error)")
