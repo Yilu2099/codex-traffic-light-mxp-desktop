@@ -1,0 +1,57 @@
+#!/bin/zsh
+set -euo pipefail
+
+SCRIPT_DIR="${0:A:h}"
+MONITOR="$SCRIPT_DIR/codex-light-codex-monitor"
+TEST_DIR="$(mktemp -d)"
+trap 'rm -rf "$TEST_DIR"' EXIT
+
+LOG_DB="$TEST_DIR/logs.sqlite"
+STATE_DB="$TEST_DIR/state.sqlite"
+PRESENCE_FILE="$TEST_DIR/last-activity"
+TASK_ACTIVITY_FILE="$TEST_DIR/last-task-activity"
+NOW="$(date +%s)"
+THREAD_ID='11111111-1111-1111-1111-111111111111'
+
+sqlite3 "$LOG_DB" 'create table logs (ts integer, thread_id text, feedback_log_body text);'
+sqlite3 "$STATE_DB" 'create table threads (id text primary key, cwd text);'
+sqlite3 "$STATE_DB" "insert into threads values ('$THREAD_ID', '/tmp/example-project');"
+
+run_once() {
+  CODEX_LIGHT_LOG_DB="$LOG_DB" \
+  CODEX_LIGHT_STATE_DB="$STATE_DB" \
+  CODEX_LIGHT_STATE_CMD=/usr/bin/true \
+  CODEX_LIGHT_PRESENCE_FILE="$PRESENCE_FILE" \
+  CODEX_LIGHT_TASK_ACTIVITY_FILE="$TASK_ACTIVITY_FILE" \
+  CODEX_LIGHT_MONITOR_ACTIVE_WINDOW_SECONDS=30 \
+  CODEX_LIGHT_MONITOR_ONCE=1 \
+  "$MONITOR"
+}
+
+sqlite3 "$LOG_DB" "insert into logs values ($NOW, '$THREAD_ID', 'session_task.turn run_sampling_request response.output_item.added');"
+run_once
+[[ ! -e "$PRESENCE_FILE" ]] || { echo 'background Codex activity refreshed presence' >&2; exit 1; }
+[[ "$(stat -f '%m' "$TASK_ACTIVITY_FILE")" == "$NOW" ]] || { echo 'background Codex activity did not refresh task state' >&2; exit 1; }
+
+INTERNAL_EVENT_TS=$((NOW + 1))
+sqlite3 "$LOG_DB" "insert into logs values ($INTERNAL_EVENT_TS, '$THREAD_ID', 'session_loop{thread_id=$THREAD_ID}: Submission sub=Submission { op: TurnInput { request: TurnInputRequest { input: UserInput { responsesapi_client_metadata: None session_task.turn');"
+run_once
+[[ ! -e "$PRESENCE_FILE" ]] || { echo 'internal Codex UserInput refreshed presence' >&2; exit 1; }
+[[ "$(stat -f '%m' "$TASK_ACTIVITY_FILE")" == "$INTERNAL_EVENT_TS" ]] || { echo 'internal Codex task did not refresh task state' >&2; exit 1; }
+
+USER_EVENT_TS=$((NOW + 2))
+sqlite3 "$LOG_DB" "insert into logs values ($USER_EVENT_TS, '$THREAD_ID', 'session_loop{thread_id=$THREAD_ID}: Submission sub=Submission { op: TurnInput { request: TurnInputRequest { input: UserInput { responsesapi_client_metadata: Some({workspace_kind: project}) session_task.turn');"
+run_once
+[[ -e "$PRESENCE_FILE" ]] || { echo 'real user input did not refresh presence' >&2; exit 1; }
+MARKER_TS="$(stat -f '%m' "$PRESENCE_FILE")"
+[[ "$MARKER_TS" == "$USER_EVENT_TS" ]] || { echo "presence timestamp $MARKER_TS did not preserve user event $USER_EVENT_TS" >&2; exit 1; }
+[[ "$(stat -f '%m' "$TASK_ACTIVITY_FILE")" == "$USER_EVENT_TS" ]] || { echo 'real user task did not refresh task state' >&2; exit 1; }
+
+CONTEXT_EVENT_TS=$((NOW + 3))
+sqlite3 "$LOG_DB" "insert into logs values ($CONTEXT_EVENT_TS, '$THREAD_ID', 'session_loop{thread_id=$THREAD_ID}:submission_dispatch response.output_item.added assistant tool output quoted }: Submission sub=Submission { op: TurnInput { input: UserInput { responsesapi_client_metadata: Some(project)');"
+run_once
+MARKER_TS="$(stat -f '%m' "$PRESENCE_FILE")"
+[[ "$MARKER_TS" == "$USER_EVENT_TS" ]] || { echo 'quoted user-input text inside background logs refreshed presence' >&2; exit 1; }
+[[ "$(stat -f '%m' "$TASK_ACTIVITY_FILE")" == "$CONTEXT_EVENT_TS" ]] || { echo 'assistant continuation did not refresh task state' >&2; exit 1; }
+
+echo 'monitor presence tests passed'

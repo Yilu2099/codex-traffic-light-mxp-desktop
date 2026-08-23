@@ -981,11 +981,15 @@ func testTeamRankingURLUsesWebsiteOrigin() throws {
     try expectEqual(service.rankingsURL(range: "month").absoluteString, "https://meet.example.com/api/rankings?range=month", "menu should fetch this month's ranking")
     try expectEqual(service.presenceURL.absoluteString, "https://meet.example.com/api/presence", "presence should use a lightweight endpoint on the ranking origin")
     let activeAt = Date(timeIntervalSince1970: 1_700_000_000)
-    let payload = service.makePresencePayload(lastActiveAt: activeAt, now: activeAt.addingTimeInterval(5))
+    let taskActiveAt = activeAt.addingTimeInterval(3)
+    let payload = service.makePresencePayload(lastActiveAt: activeAt, taskActiveAt: taskActiveAt, now: activeAt.addingTimeInterval(5))
     try expectEqual(payload.collector, "wanhe-codex-mac-presence", "presence payload should identify the lightweight collector")
-    try expect(payload.lastActiveAt?.hasPrefix("2023-11-14T22:13:20") == true, "presence payload should contain only the latest activity timestamp")
+    try expect(payload.lastActiveAt?.hasPrefix("2023-11-14T22:13:20") == true, "presence payload should contain the latest human activity timestamp")
+    try expect(payload.taskActiveAt?.hasPrefix("2023-11-14T22:13:23") == true, "presence payload should contain the latest running-task activity timestamp")
     let marker = TeamUsageSyncService.presenceMarkerURL(home: URL(fileURLWithPath: "/tmp/member-home"))
     try expectEqual(marker.path, "/tmp/member-home/Library/Application Support/CodexTrafficLight/last-activity", "presence should read the monitor marker without scanning sessions")
+    let taskMarker = TeamUsageSyncService.taskActivityMarkerURL(home: URL(fileURLWithPath: "/tmp/member-home"))
+    try expectEqual(taskMarker.path, "/tmp/member-home/Library/Application Support/CodexTrafficLight/last-task-activity", "presence should read task activity independently from human activity")
 }
 
 func testTeamRankingDecodesLegacyTodayActivity() throws {

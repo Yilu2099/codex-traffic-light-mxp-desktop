@@ -135,10 +135,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
         isPresenceSyncing = true
         let markerURL = TeamUsageSyncService.presenceMarkerURL()
         let lastActiveAt = (try? markerURL.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+        let taskMarkerURL = TeamUsageSyncService.taskActivityMarkerURL()
+        let taskActiveAt = (try? taskMarkerURL.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
         let service = TeamUsageSyncService(configuration: configuration)
         Task { [weak self] in
             do {
-                _ = try await service.syncPresence(lastActiveAt: lastActiveAt)
+                _ = try await service.syncPresence(lastActiveAt: lastActiveAt, taskActiveAt: taskActiveAt)
                 self?.isPresenceSyncing = false
                 self?.presenceFailureLogged = false
             } catch {

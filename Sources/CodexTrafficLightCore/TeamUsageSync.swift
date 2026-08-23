@@ -372,6 +372,7 @@ public struct TeamPresencePayload: Codable, Equatable, Sendable {
     public var collectedAt: String
     public var device: TeamDeviceIdentity
     public var lastActiveAt: String?
+    public var taskActiveAt: String?
 }
 
 public struct TeamPresenceResult: Codable, Equatable, Sendable {
@@ -791,14 +792,19 @@ public struct TeamUsageSyncService: Sendable {
         home.appendingPathComponent("Library/Application Support/CodexTrafficLight/last-activity")
     }
 
-    public func makePresencePayload(lastActiveAt: Date?, now: Date = Date()) -> TeamPresencePayload {
+    public static func taskActivityMarkerURL(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> URL {
+        home.appendingPathComponent("Library/Application Support/CodexTrafficLight/last-task-activity")
+    }
+
+    public func makePresencePayload(lastActiveAt: Date?, taskActiveAt: Date?, now: Date = Date()) -> TeamPresencePayload {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return TeamPresencePayload(
             collector: "wanhe-codex-mac-presence",
             collectedAt: formatter.string(from: now),
             device: TeamDeviceIdentity.current(),
-            lastActiveAt: lastActiveAt.map(formatter.string)
+            lastActiveAt: lastActiveAt.map(formatter.string),
+            taskActiveAt: taskActiveAt.map(formatter.string)
         )
     }
 
@@ -897,13 +903,13 @@ public struct TeamUsageSyncService: Sendable {
         return result
     }
 
-    public func syncPresence(lastActiveAt: Date?) async throws -> TeamPresenceResult {
+    public func syncPresence(lastActiveAt: Date?, taskActiveAt: Date?) async throws -> TeamPresenceResult {
         var request = URLRequest(url: presenceURL)
         request.httpMethod = "POST"
         request.timeoutInterval = 10
         request.setValue("Bearer \(configuration.token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONEncoder().encode(makePresencePayload(lastActiveAt: lastActiveAt))
+        request.httpBody = try JSONEncoder().encode(makePresencePayload(lastActiveAt: lastActiveAt, taskActiveAt: taskActiveAt))
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw TeamUsageSyncError.invalidResponse }
         guard (200..<300).contains(http.statusCode) else {

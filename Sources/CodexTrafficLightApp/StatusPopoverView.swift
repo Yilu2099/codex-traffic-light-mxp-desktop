@@ -281,7 +281,7 @@ struct StatusPopoverView: View {
     }
 
     private func joinedMemberDetails(_ member: TeamRankingMember) -> some View {
-        let online = member.online ?? (validLastActive(member).map { isOnline($0) } ?? false)
+        let online = member.online == true
         return VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 7) {
                 Text(displayName(member))
@@ -427,30 +427,9 @@ struct StatusPopoverView: View {
             return member.hasEverJoined ? model.selectedRange.emptyUsageText : "还未加入"
         }
         if let lastActive = validLastActive(member) {
-            return (member.online ?? isOnline(lastActive)) ? "在线" : "最后 \(lastActive)"
+            return member.online == true ? "手搓代码中" : "最后 \(lastActive)"
         }
         return officialDate(member)
-    }
-
-    private func isOnline(_ lastActive: String, now: Date = Date()) -> Bool {
-        let parts = lastActive.split(separator: ":", omittingEmptySubsequences: false)
-        guard parts.count == 2,
-              let hour = Int(parts[0]), (0 ... 23).contains(hour),
-              let minute = Int(parts[1]), (0 ... 59).contains(minute)
-        else { return false }
-
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = TimeZone(identifier: "Asia/Hong_Kong") ?? .current
-        var components = calendar.dateComponents([.year, .month, .day], from: now)
-        components.hour = hour
-        components.minute = minute
-        components.second = 0
-        guard var activeAt = calendar.date(from: components) else { return false }
-        if activeAt > now, let previousDay = calendar.date(byAdding: .day, value: -1, to: activeAt) {
-            activeAt = previousDay
-        }
-        let elapsed = now.timeIntervalSince(activeAt)
-        return elapsed >= 0 && elapsed <= 20 * 60
     }
 
     private func validLastActive(_ member: TeamRankingMember) -> String? {

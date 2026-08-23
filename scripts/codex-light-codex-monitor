@@ -2,23 +2,25 @@
 set -euo pipefail
 
 CODEX_HOME_DIR="${CODEX_HOME:-$HOME/.codex}"
-LOG_DB="$CODEX_HOME_DIR/logs_2.sqlite"
-STATE_DB="$CODEX_HOME_DIR/state_5.sqlite"
-STATE_CMD="$HOME/.codex/bin/codex-light-mxp"
-PRESENCE_FILE="$HOME/Library/Application Support/CodexTrafficLight/last-activity"
+LOG_DB="${CODEX_LIGHT_LOG_DB:-$CODEX_HOME_DIR/logs_2.sqlite}"
+STATE_DB="${CODEX_LIGHT_STATE_DB:-$CODEX_HOME_DIR/state_5.sqlite}"
+STATE_CMD="${CODEX_LIGHT_STATE_CMD:-$HOME/.codex/bin/codex-light-mxp}"
+PRESENCE_FILE="${CODEX_LIGHT_PRESENCE_FILE:-$HOME/Library/Application Support/CodexTrafficLight/last-activity}"
+TASK_ACTIVITY_FILE="${CODEX_LIGHT_TASK_ACTIVITY_FILE:-$HOME/Library/Application Support/CodexTrafficLight/last-task-activity}"
 POLL_SECONDS="${CODEX_LIGHT_MONITOR_POLL_SECONDS:-2}"
 ACTIVE_WINDOW_SECONDS="${CODEX_LIGHT_MONITOR_ACTIVE_WINDOW_SECONDS:-6}"
 PROJECT_AUDIT_REFRESH_SECONDS="${CODEX_LIGHT_PROJECT_AUDIT_REFRESH_SECONDS:-60}"
-PRESENCE_TOUCH_SECONDS="${CODEX_LIGHT_PRESENCE_TOUCH_SECONDS:-5}"
+MONITOR_ONCE="${CODEX_LIGHT_MONITOR_ONCE:-0}"
 
 last_project_audit_key=""
 last_project_audit_at=0
-last_presence_touch_at=0
+last_presence_event_ts=0
+last_task_event_ts=0
 
 while true; do
   now="$(date +%s)"
   if [[ -r "$LOG_DB" && -r "$STATE_DB" && -x "$STATE_CMD" ]]; then
-    row="$(
+    activity_row="$(
       sqlite3 -separator $'\t' "$LOG_DB" "
         attach database '$STATE_DB' as state_db;
         select
@@ -41,16 +43,48 @@ while true; do
       " 2>/dev/null || true
     )"
 
-    if [[ -n "$row" ]]; then
-      thread_id="${row%%$'\t'*}"
-      rest="${row#*$'\t'}"
+    presence_event_ts="$(
+      sqlite3 "$LOG_DB" "
+        select coalesce(max(l.ts), 0)
+        from logs l
+        where l.ts >= ($now - $ACTIVE_WINDOW_SECONDS)
+          and l.thread_id is not null
+          and substr(l.feedback_log_body, 1, length('session_loop{thread_id=')) = 'session_loop{thread_id='
+          and substr(
+            l.feedback_log_body,
+            length('session_loop{thread_id=') + 37,
+            length('}: Submission sub=Submission {')
+          ) = '}: Submission sub=Submission {'
+          and l.feedback_log_body like '%op: TurnInput {%'
+          and l.feedback_log_body like '%input: UserInput {%'
+          and l.feedback_log_body like '%responsesapi_client_metadata: Some(%';
+      " 2>/dev/null || true
+    )"
+
+    # Presence is a human-interaction signal. Assistant output, tool calls,
+    # automatic continuations and sub-agent work must not refresh it.
+    if [[ "$presence_event_ts" == <-> ]] && (( presence_event_ts > last_presence_event_ts )); then
+      mkdir -p "${PRESENCE_FILE:h}"
+      event_touch_time="$(date -r "$presence_event_ts" '+%Y%m%d%H%M.%S')"
+      touch -t "$event_touch_time" "$PRESENCE_FILE"
+      last_presence_event_ts="$presence_event_ts"
+    fi
+
+    # Project auditing intentionally follows broader Codex execution activity.
+    # Keep it separate from human presence so background work remains auditable
+    # without making a sleeping member appear active.
+    if [[ -n "$activity_row" ]]; then
+      thread_id="${activity_row%%$'\t'*}"
+      rest="${activity_row#*$'\t'}"
       cwd="${rest%%$'\t'*}"
+      task_event_ts="${rest##*$'\t'}"
       [[ -z "$thread_id" ]] && thread_id="codex-desktop"
       [[ -z "$cwd" || "$cwd" == "$rest" ]] && cwd="$PWD"
-      if (( now - last_presence_touch_at >= PRESENCE_TOUCH_SECONDS )); then
-        mkdir -p "${PRESENCE_FILE:h}"
-        touch "$PRESENCE_FILE"
-        last_presence_touch_at="$now"
+      if [[ "$task_event_ts" == <-> ]] && (( task_event_ts > last_task_event_ts )); then
+        mkdir -p "${TASK_ACTIVITY_FILE:h}"
+        task_touch_time="$(date -r "$task_event_ts" '+%Y%m%d%H%M.%S')"
+        touch -t "$task_touch_time" "$TASK_ACTIVITY_FILE"
+        last_task_event_ts="$task_event_ts"
       fi
       project_audit_key="$thread_id|$cwd"
       if [[ "$project_audit_key" != "$last_project_audit_key" ]] || (( now - last_project_audit_at >= PROJECT_AUDIT_REFRESH_SECONDS )); then
@@ -61,5 +95,6 @@ while true; do
     fi
   fi
 
+  [[ "$MONITOR_ONCE" == "1" ]] && break
   sleep "$POLL_SECONDS"
 done
