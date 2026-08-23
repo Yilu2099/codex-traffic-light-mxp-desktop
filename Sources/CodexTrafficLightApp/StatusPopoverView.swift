@@ -141,7 +141,7 @@ struct StatusPopoverView: View {
         let quota = weeklyQuota
         let remaining = quota?.remainingPercent
         let balance = Double(remaining ?? 0) / 100
-        return HStack(alignment: .bottom, spacing: 12) {
+        return HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
                 Text("个人周余额")
                     .font(.system(size: 11, weight: .bold))
@@ -167,18 +167,18 @@ struct StatusPopoverView: View {
             }
             .frame(maxWidth: .infinity)
 
-            VStack(alignment: .trailing, spacing: 2) {
-                Text("下次刷新")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(muted)
+            VStack(alignment: .trailing, spacing: 4) {
                 Text(resetRelativeText)
-                    .font(.system(size: 13, weight: .bold))
+                    .font(.system(size: 14, weight: .bold, design: .rounded))
                     .foregroundStyle(ink)
+                    .lineLimit(1)
                 Text(resetAbsoluteText)
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(muted)
+                    .lineLimit(1)
             }
             .frame(width: 92, alignment: .trailing)
+            .frame(minHeight: 44, alignment: .trailing)
         }
         .padding(14)
         .background(green.opacity(0.025), in: RoundedRectangle(cornerRadius: 17, style: .continuous))
