@@ -334,6 +334,7 @@ public struct TeamUsagePayload: Codable, Equatable, Sendable {
     public var grindHistory: [TeamGrindHistoryDay]
     public var grindHistoryMode: String
     public var projects: [TeamProjectActivity]
+    public var inputEvents: [TeamInputEvent]
     public var sessions: [TeamUsageSession]
 }
 
@@ -369,6 +370,7 @@ public struct TeamUsageSyncResult: Codable, Equatable, Sendable {
     public var status: String
     public var accepted: Int
     public var total: Int
+    public var inputEventIds: [String]?
 }
 
 public struct TeamPresencePayload: Codable, Equatable, Sendable {
@@ -816,9 +818,10 @@ public struct TeamUsageSyncService: Sendable {
         let device = TeamDeviceIdentity.current()
         let officialUsage = try cachedOfficialUsage()
         let todayLiveUsage = TodayCodexUsageCollector().collect(codexHome: configuration.codexHome)
-        // Reads only session metadata and token_count totals. Prompt text, code,
-        // filenames and raw conversation content are never included in payloads.
-        // The two-minute live sync must never rescan full conversation files.
+        // Token accounting reads only session metadata and token_count totals.
+        // The separately authorized input ledger below tails human input text;
+        // it never includes assistant replies, code, attachments or injected context.
+        // The two-minute live sync must never repeatedly rescan full files.
         // TodayCodexUsageCollector already tails appended token events and the
         // server retains earlier calendar buckets for week/month aggregation.
         let calendarUsage: [TeamUsageSession] = []
@@ -832,6 +835,10 @@ public struct TeamUsageSyncService: Sendable {
         )
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let projectReport = ProjectActivityStore().prepareSync(
+            days: configuration.collectDays,
+            codexHome: configuration.codexHome
+        )
         return TeamUsagePayload(
             collector: "wanhe-codex-mac-menu",
             collectedAt: formatter.string(from: Date()),
@@ -851,12 +858,11 @@ public struct TeamUsageSyncService: Sendable {
             interactionSummary: interactionReport.sessions,
             grindHistory: interactionReport.history,
             grindHistoryMode: "interaction_v7",
-            // Only newly appended local user turns are read. The collector keeps
-            // hashed file cursors and uploads sanitized summaries, never raw text.
-            projects: ProjectActivityStore().report(
-                days: configuration.collectDays,
-                codexHome: configuration.codexHome
-            ),
+            // Only newly appended, human-authored input_text events are read.
+            // Replies, fenced code, attachments, injected context and subagents
+            // are excluded before the authenticated upload is prepared.
+            projects: projectReport.projects,
+            inputEvents: projectReport.inputEvents,
             sessions: calendarUsage
         )
     }
@@ -908,6 +914,7 @@ public struct TeamUsageSyncService: Sendable {
         guard let result = try? JSONDecoder().decode(TeamUsageSyncResult.self, from: data) else {
             throw TeamUsageSyncError.invalidResponse
         }
+        ProjectActivityStore().acknowledgeInputEvents(ids: result.inputEventIds ?? [])
         return result
     }
 

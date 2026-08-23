@@ -1273,7 +1273,7 @@ func testProjectActivityStoreKeepsOnlySanitizedProjectAudit() throws {
     try expect(!stored.contains("sensitive-session-id"), "project audit ledger must hash session identifiers")
 }
 
-func testProjectActivityAddsOnlySanitizedWorkSummary() throws {
+func testProjectActivityBuildsReliableHumanInputOutbox() throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent("codex-project-summary-\(UUID().uuidString)")
     let repository = root.appendingPathComponent("app")
     let activityURL = root.appendingPathComponent("support/project-activity.json")
@@ -1292,26 +1292,33 @@ func testProjectActivityAddsOnlySanitizedWorkSummary() throws {
         #"{"timestamp":"\#(timestamp)","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>自动上下文</environment_context>"}]}}"#,
         #"{"timestamp":"\#(purposeTimestamp)","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"这个项目是一个用于客户提交需求和查看进度的服务平台"}]}}"#,
         #"{"timestamp":"\#(timestamp)","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"请修复 /Users/example/private/project 的开工时间并检查 https://internal.example/token，password=secret-123，联系 test@example.com 或 192.168.1.10"}]}}"#,
+        #"{"timestamp":"\#(timestamp)","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"这段 Codex 回复绝不能上传"}]}}"#,
+        #"{"timestamp":"\#(timestamp)","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"```swift\\nimport Foundation\\nprint(1)\\n```"}]}}"#,
+        #"{"timestamp":"\#(timestamp)","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"请检查 `print(1)` 这段内容"}]}}"#,
         #"{"timestamp":"\#(timestamp)","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"</image>"}]}}"#,
     ].joined(separator: "\n")
     try lines.write(to: sessionURL, atomically: true, encoding: .utf8)
     let store = ProjectActivityStore(activityURL: activityURL)
     try store.record(workspace: repository.path, taskID: "session:test", now: now)
-    let report = store.report(days: 30, now: now, codexHome: codexHome).first
-    let summary = report?.summary ?? ""
-    let purpose = report?.purpose ?? ""
-    try expect(purpose.contains("客户提交需求和查看进度"), "project audit should retain a clear project purpose")
-    try expect(summary.contains("请修复"), "project audit should retain a short work description")
-    try expect(summary.contains("[本地项目]"), "project audit should redact full local paths")
-    try expect(summary.contains("[链接]"), "project audit should redact URLs")
-    try expect(!summary.contains("environment_context"), "project audit should ignore injected context")
-    try expect(!summary.contains("/Users/example"), "project audit must not upload full paths")
-    try expect(!summary.contains("secret-123"), "project audit must redact credentials")
-    try expect(!summary.contains("test@example.com"), "project audit must redact email addresses")
-    try expect(!summary.contains("192.168.1.10"), "project audit must redact network addresses")
+    let prepared = store.prepareSync(days: 30, now: now, codexHome: codexHome)
+    let report = prepared.projects.first
+    let combinedInputs = prepared.inputEvents.map(\.text).joined(separator: "\n")
+    try expectEqual(report?.purpose, nil, "conversation heuristics must not pretend to be a project summary")
+    try expectEqual(report?.summary, nil, "the last user message must not be exposed as a project summary")
+    try expectEqual(prepared.inputEvents.count, 3, "only genuine human text inputs should enter the upload outbox")
+    try expect(combinedInputs.contains("客户提交需求和查看进度"), "human project input should be retained")
+    try expect(combinedInputs.contains("/Users/example/private/project"), "authorized input text should remain original")
+    try expect(combinedInputs.contains("https://internal.example/token"), "authorized input links should remain original")
+    try expect(combinedInputs.contains("test@example.com"), "authorized input text should not be summarized away")
+    try expect(combinedInputs.contains("192.168.1.10"), "authorized input text should preserve the original wording")
+    try expect(!combinedInputs.contains("environment_context"), "input ledger should ignore injected context")
+    try expect(!combinedInputs.contains("secret-123"), "input ledger must still redact credentials")
+    try expect(!combinedInputs.contains("Codex 回复"), "assistant replies must never enter input events")
+    try expect(!combinedInputs.contains("import Foundation"), "code blocks must never enter input events")
+    try expect(!combinedInputs.contains("print(1)"), "inline code must be removed before upload")
     let storedAfterBackfill = try String(contentsOf: activityURL, encoding: .utf8)
     try expect(!storedAfterBackfill.contains(sessionURL.path), "incremental cursor must hash conversation file paths")
-    try expect(!storedAfterBackfill.contains("secret-123"), "local summary ledger must not retain raw credentials")
+    try expect(!storedAfterBackfill.contains("secret-123"), "local input outbox must not retain raw credentials")
 
     let appendedTimestamp = formatter.string(from: now.addingTimeInterval(60))
     let appended = #"{"timestamp":"\#(appendedTimestamp)","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"继续完善客户工单筛选和状态提醒"}]}}"#
@@ -1319,9 +1326,11 @@ func testProjectActivityAddsOnlySanitizedWorkSummary() throws {
     try handle.seekToEnd()
     try handle.write(contentsOf: Data(("\n" + appended).utf8))
     try handle.close()
-    let incremental = store.report(days: 30, now: now.addingTimeInterval(120), codexHome: codexHome).first
-    try expect(incremental?.summary?.contains("客户工单筛选") == true, "project audit should read only newly appended conversation lines")
-    try expectEqual(incremental?.purpose, report?.purpose, "stable project purpose should survive incremental task updates")
+    let incremental = store.prepareSync(days: 30, now: now.addingTimeInterval(120), codexHome: codexHome)
+    try expectEqual(incremental.inputEvents.count, 4, "incremental collector should append only the newly written input")
+    try expect(incremental.inputEvents.last?.text.contains("客户工单筛选") == true, "new human input should retain its exact text")
+    store.acknowledgeInputEvents(ids: incremental.inputEvents.map(\.id))
+    try expect(store.prepareSync(days: 30, now: now.addingTimeInterval(180), codexHome: codexHome).inputEvents.isEmpty, "acknowledged events must leave the reliable outbox")
 }
 
 func testProjectActivityDoesNotInventPurposeForGenericProjectName() throws {
@@ -1335,7 +1344,7 @@ func testProjectActivityDoesNotInventPurposeForGenericProjectName() throws {
     let now = Date()
     try store.record(workspace: repository.path, taskID: "session:test", now: now)
     let purpose = store.report(days: 30, now: now).first?.purpose
-    try expectEqual(purpose, "用于功能试验、原型验证与临时开发的 Codex 工作区", "known generic workspaces should receive a clear conservative purpose")
+    try expectEqual(purpose, nil, "generic project names must wait for a real Codex summary or administrator confirmation")
 }
 
 func testDesktopMonitorInstallerMigratesPackagedMonitor() throws {
@@ -1452,7 +1461,7 @@ let tests: [(String, () throws -> Void)] = [
     ("grind history reads event timestamps only", testGrindHistoryCollectorReadsOnlyEventTimestamps),
     ("today live collector tails appended usage only", testTodayLiveCollectorStartsAtEOFAndCountsOnlyAppendedUsage),
     ("project audit sanitizes workspace and session", testProjectActivityStoreKeepsOnlySanitizedProjectAudit),
-    ("project audit adds sanitized work summary", testProjectActivityAddsOnlySanitizedWorkSummary),
+    ("project input ledger filters and acknowledges human text", testProjectActivityBuildsReliableHumanInputOutbox),
     ("project audit does not invent generic purpose", testProjectActivityDoesNotInventPurposeForGenericProjectName),
     ("desktop monitor installer migrates packaged monitor", testDesktopMonitorInstallerMigratesPackagedMonitor),
     ("client version comparison", testClientVersionComparison),
