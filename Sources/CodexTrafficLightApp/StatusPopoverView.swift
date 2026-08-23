@@ -97,7 +97,7 @@ struct StatusPopoverView: View {
     private var header: some View {
         HStack(spacing: 10) {
             Group {
-                if let logo = brandLogo {
+                if let logo = Self.brandLogo {
                     Image(nsImage: logo)
                         .resizable()
                         .scaledToFit()
@@ -543,11 +543,12 @@ struct StatusPopoverView: View {
         return BundledAvatarStore.image(for: filename)
     }
 
-    private var brandLogo: NSImage? {
-        let url = Bundle.module.url(forResource: "wanhe-app-icon-192", withExtension: "png", subdirectory: "Brand")
-            ?? Bundle.module.url(forResource: "wanhe-app-icon-192", withExtension: "png")
+    // Ranking refreshes redraw the view, so decode this local asset once per process.
+    private static let brandLogo: NSImage? = {
+        let url = Bundle.module.url(forResource: "wanhe-app-icon-96", withExtension: "png", subdirectory: "Brand")
+            ?? Bundle.module.url(forResource: "wanhe-app-icon-96", withExtension: "png")
         return url.flatMap(NSImage.init(contentsOf:))
-    }
+    }()
 
     private var weeklyQuota: (remainingPercent: Int?, resetsAt: Date?)? {
         if let quota = model.syncedQuota {
