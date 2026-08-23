@@ -858,20 +858,21 @@ public struct TeamUsageSyncService: Sendable {
         )
     }
 
-    private func cachedOfficialUsage(maxAge: TimeInterval = 2 * 60 * 60) throws -> OfficialCodexUsageReport {
+    private func cachedOfficialUsage(now: Date = Date()) throws -> OfficialCodexUsageReport {
         let cacheURL = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".wanhe-codex-token/official-usage.json")
         let cached: OfficialCodexUsageReport? = {
             guard let data = try? Data(contentsOf: cacheURL) else { return nil }
             return try? JSONDecoder().decode(OfficialCodexUsageReport.self, from: data)
         }()
+        let maxAge = OfficialUsageRefreshPolicy.cacheAge(for: cached, now: now)
         if let cached,
            let updatedAt = Self.isoDate(cached.updatedAt),
-           Date().timeIntervalSince(updatedAt) < maxAge {
+           now.timeIntervalSince(updatedAt) < maxAge {
             return cached
         }
         do {
-            let fresh = try OfficialCodexUsageCollector().fetch()
+            let fresh = try OfficialCodexUsageCollector().fetch(now: now)
             try? FileManager.default.createDirectory(at: cacheURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             if let data = try? JSONEncoder().encode(fresh) { try? data.write(to: cacheURL, options: [.atomic]) }
             return fresh

@@ -21,6 +21,11 @@ public enum OfficialCodexUsageError: Error, CustomStringConvertible {
 public struct OfficialDailyUsageBucket: Codable, Equatable, Sendable {
     public var startDate: String
     public var tokens: Int
+
+    public init(startDate: String, tokens: Int) {
+        self.startDate = startDate
+        self.tokens = tokens
+    }
 }
 
 public struct OfficialCodexUsageReport: Codable, Equatable, Sendable {
@@ -29,8 +34,47 @@ public struct OfficialCodexUsageReport: Codable, Equatable, Sendable {
     public var dailyUsageBuckets: [OfficialDailyUsageBucket]
     public var updatedAt: String
 
+    public init(lifetimeTokens: Int, peakDailyTokens: Int, dailyUsageBuckets: [OfficialDailyUsageBucket], updatedAt: String) {
+        self.lifetimeTokens = lifetimeTokens
+        self.peakDailyTokens = peakDailyTokens
+        self.dailyUsageBuckets = dailyUsageBuckets
+        self.updatedAt = updatedAt
+    }
+
     public var dataThrough: String? {
         dailyUsageBuckets.map(\.startDate).max()
+    }
+}
+
+public enum OfficialUsageRefreshPolicy {
+    public static let normalCacheAge: TimeInterval = 2 * 60 * 60
+    public static let convergenceCacheAge: TimeInterval = 5 * 60
+    public static let delayedCacheAge: TimeInterval = 30 * 60
+
+    public static func expectedSettledDay(now: Date = Date()) -> String {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let start = calendar.startOfDay(for: now)
+        let previous = calendar.date(byAdding: .day, value: -1, to: start)!
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = calendar.timeZone
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: previous)
+    }
+
+    public static func cacheAge(for cached: OfficialCodexUsageReport?, now: Date = Date()) -> TimeInterval {
+        guard let cached, (cached.dataThrough ?? "") < expectedSettledDay(now: now) else {
+            return normalCacheAge
+        }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let components = calendar.dateComponents([.hour, .minute], from: now)
+        let minutes = (components.hour ?? 0) * 60 + (components.minute ?? 0)
+        if minutes < 5 { return normalCacheAge }
+        if minutes < 120 { return convergenceCacheAge }
+        return delayedCacheAge
     }
 }
 

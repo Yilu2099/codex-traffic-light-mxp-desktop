@@ -1347,6 +1347,28 @@ func testDesktopMonitorInstallerMigratesPackagedMonitor() throws {
     try expect(!unchanged, "unchanged monitor installation should not restart or rewrite")
 }
 
+func testOfficialUsageRefreshPolicyTracksUTCSettlement() throws {
+    let formatter = ISO8601DateFormatter()
+    let now = formatter.date(from: "2026-08-23T00:05:00Z")!
+    let delayed = OfficialCodexUsageReport(
+        lifetimeTokens: 1,
+        peakDailyTokens: 1,
+        dailyUsageBuckets: [OfficialDailyUsageBucket(startDate: "2026-08-21", tokens: 1)],
+        updatedAt: "2026-08-23T00:00:00Z"
+    )
+    let settled = OfficialCodexUsageReport(
+        lifetimeTokens: 1,
+        peakDailyTokens: 1,
+        dailyUsageBuckets: [OfficialDailyUsageBucket(startDate: "2026-08-22", tokens: 1)],
+        updatedAt: "2026-08-23T00:00:00Z"
+    )
+    try expectEqual(OfficialUsageRefreshPolicy.expectedSettledDay(now: now), "2026-08-22", "expected official day should be the completed UTC day")
+    try expectEqual(OfficialUsageRefreshPolicy.cacheAge(for: delayed, now: now), 5 * 60, "delayed bucket should refresh every five minutes after Hong Kong 08:05")
+    try expectEqual(OfficialUsageRefreshPolicy.cacheAge(for: settled, now: now), 2 * 60 * 60, "settled bucket should return to normal cache age")
+    let later = formatter.date(from: "2026-08-23T02:00:00Z")!
+    try expectEqual(OfficialUsageRefreshPolicy.cacheAge(for: delayed, now: later), 30 * 60, "delayed bucket should reduce polling after Hong Kong 10:00")
+}
+
 let tests: [(String, () throws -> Void)] = [
     ("brand tagline stays aligned", {
         try expectEqual(BrandCopy.tagline, "用 Codex 手搓世界，人人都是造物主", "client tagline should match the approved brand copy")
@@ -1409,6 +1431,7 @@ let tests: [(String, () throws -> Void)] = [
     ("team ranking distinguishes joined members", testTeamRankingDistinguishesJoinedMemberFromInvitePlaceholder),
     ("avatar disk cache persists by URL", testAvatarDiskCachePersistsByRemoteURL),
     ("official Codex usage parses daily buckets", testOfficialCodexUsageParsesDailyBuckets),
+    ("official usage refresh tracks UTC settlement", testOfficialUsageRefreshPolicyTracksUTCSettlement),
     ("session counter uses local filename and metadata only", testSessionCounterUsesLocalFilenameAndMetadataWithoutReadingContents),
     ("grind history reads event timestamps only", testGrindHistoryCollectorReadsOnlyEventTimestamps),
     ("today live collector tails appended usage only", testTodayLiveCollectorStartsAtEOFAndCountsOnlyAppendedUsage),
