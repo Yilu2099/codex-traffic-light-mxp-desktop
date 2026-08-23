@@ -17,10 +17,20 @@ private struct ProjectActivityRecord: Codable {
     var sessions: [String: TimeInterval]
     var purpose: String? = nil
     var purposeScore: Int? = nil
+    var latestSummary: String? = nil
+    var latestSummaryAt: TimeInterval? = nil
 }
 
 private struct ProjectActivityLedger: Codable {
     var projects: [String: ProjectActivityRecord] = [:]
+    var conversationCursors: [String: ProjectConversationCursor]? = nil
+}
+
+private struct ProjectConversationCursor: Codable, Equatable {
+    var projectID: String?
+    var offset: UInt64
+    var isSubagent: Bool
+    var updatedAt: TimeInterval
 }
 
 public final class ProjectActivityStore {
@@ -50,28 +60,46 @@ public final class ProjectActivityStore {
 
     public func report(days: Int = 30, now: Date = Date(), codexHome: URL? = nil) -> [TeamProjectActivity] {
         let cutoff = now.addingTimeInterval(-Double(max(1, days)) * 86_400).timeIntervalSince1970
-        let conversationDigests = codexHome.map {
-            ProjectConversationSummaryCollector().collect(codexHome: $0, days: days, now: now)
-        } ?? [:]
         var ledger = read()
-        var purposeChanged = false
+        var conversationCursors = ledger.conversationCursors ?? [:]
+        let previousConversationCursors = conversationCursors
+        let conversationDigests: [String: ProjectConversationDigest]
+        if let codexHome {
+            conversationDigests = ProjectConversationSummaryCollector().collect(
+                codexHome: codexHome,
+                days: days,
+                now: now,
+                cursors: &conversationCursors
+            )
+        } else {
+            conversationDigests = [:]
+        }
+        ledger.conversationCursors = conversationCursors
+        var ledgerChanged = previousConversationCursors != conversationCursors
         for key in Array(ledger.projects.keys) {
             guard var record = ledger.projects[key] else { continue }
             if Self.isGenericPurpose(record.purpose) {
                 record.purpose = nil
                 record.purposeScore = nil
-                purposeChanged = true
+                ledgerChanged = true
             }
-            let suggestion = Self.purposeSuggestion(name: record.name, digest: conversationDigests[record.id])
+            let digest = conversationDigests[record.id]
+            if let latest = digest?.latest,
+               digest?.latestAt ?? 0 >= (record.latestSummaryAt ?? 0) {
+                record.latestSummary = latest
+                record.latestSummaryAt = digest?.latestAt
+                ledgerChanged = true
+            }
+            let suggestion = Self.purposeSuggestion(name: record.name, digest: digest)
             if let text = suggestion.text,
                record.purpose == nil || suggestion.score > (record.purposeScore ?? -1) {
                 record.purpose = text
                 record.purposeScore = suggestion.score
-                purposeChanged = true
+                ledgerChanged = true
             }
             ledger.projects[key] = record
         }
-        if purposeChanged { try? write(ledger) }
+        if ledgerChanged { try? write(ledger) }
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return ledger.projects.values.compactMap { record in
@@ -84,7 +112,7 @@ public final class ProjectActivityStore {
                 firstActiveAt: formatter.string(from: Date(timeIntervalSince1970: first)),
                 lastActiveAt: formatter.string(from: Date(timeIntervalSince1970: last)),
                 purpose: record.purpose,
-                summary: conversationDigests[record.id]?.latest
+                summary: record.latestSummary
             )
         }
         .sorted { left, right in
@@ -111,6 +139,12 @@ public final class ProjectActivityStore {
         }
         if let candidate = digest?.purpose, let score = digest?.purposeScore {
             return (candidate, score)
+        }
+        if normalized == "playground" {
+            return ("用于功能试验、原型验证与临时开发的 Codex 工作区", 1)
+        }
+        if normalized == "app" || normalized == "application" {
+            return ("应用功能开发、验证与持续维护项目", 1)
         }
         return (nil, 0)
     }
@@ -159,13 +193,14 @@ public final class ProjectActivityStore {
         try encoder.encode(ledger).write(to: activityURL, options: [.atomic])
     }
 
-    private static func digest(_ value: String) -> String {
+    fileprivate static func digest(_ value: String) -> String {
         SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 }
 
 private struct ProjectConversationDigest {
     var latest: String?
+    var latestAt: TimeInterval?
     var purpose: String?
     var purposeScore: Int?
 }
@@ -178,7 +213,12 @@ private struct ProjectConversationSummaryCollector {
         "<image name=", "Continue where you left off.", "The following is the Codex agent history",
     ]
 
-    func collect(codexHome: URL, days: Int, now: Date) -> [String: ProjectConversationDigest] {
+    func collect(
+        codexHome: URL,
+        days: Int,
+        now: Date,
+        cursors: inout [String: ProjectConversationCursor]
+    ) -> [String: ProjectConversationDigest] {
         let cutoff = now.addingTimeInterval(-Double(max(1, days) + 1) * 86_400)
         var candidates: [String: [(Date, String)]] = [:]
         for folder in ["sessions", "archived_sessions"] {
@@ -189,12 +229,33 @@ private struct ProjectConversationSummaryCollector {
                 options: [.skipsHiddenFiles]
             ) else { continue }
             for case let url as URL in enumerator where url.pathExtension == "jsonl" {
-                let modifiedAt = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
-                guard modifiedAt >= cutoff, let data = try? Data(contentsOf: url),
+                let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
+                let modifiedAt = values?.contentModificationDate ?? .distantPast
+                let fileSize = UInt64(max(0, values?.fileSize ?? 0))
+                let cursorKey = ProjectActivityStore.digest(url.standardizedFileURL.path)
+                var cursor = cursors[cursorKey] ?? ProjectConversationCursor(
+                    projectID: nil,
+                    offset: 0,
+                    isSubagent: false,
+                    updatedAt: modifiedAt.timeIntervalSince1970
+                )
+                guard modifiedAt >= cutoff || cursors[cursorKey] != nil else { continue }
+                if fileSize < cursor.offset { cursor.offset = 0 }
+                guard fileSize > cursor.offset,
+                      let handle = try? FileHandle(forReadingFrom: url) else { continue }
+                do {
+                    try handle.seek(toOffset: cursor.offset)
+                } catch {
+                    try? handle.close()
+                    continue
+                }
+                let tail = try? handle.readToEnd()
+                try? handle.close()
+                guard let data = tail, !data.isEmpty,
                       let source = String(data: data, encoding: .utf8) else { continue }
-                var projectID: String?
+                var projectID = cursor.projectID
                 var messages: [(Date, String)] = []
-                var isSubagent = false
+                var isSubagent = cursor.isSubagent
                 for line in source.split(whereSeparator: \.isNewline) {
                     guard let json = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
                           let payload = json["payload"] as? [String: Any] else { continue }
@@ -217,12 +278,19 @@ private struct ProjectConversationSummaryCollector {
                         }
                     }
                 }
+                cursor.projectID = projectID
+                cursor.isSubagent = isSubagent
+                cursor.offset = fileSize
+                cursor.updatedAt = modifiedAt.timeIntervalSince1970
+                cursors[cursorKey] = cursor
                 guard !isSubagent, let projectID else { continue }
                 candidates[projectID, default: []].append(contentsOf: messages)
             }
         }
+        let cursorCutoff = now.addingTimeInterval(-45 * 86_400).timeIntervalSince1970
+        cursors = cursors.filter { $0.value.updatedAt >= cursorCutoff }
         return candidates.mapValues { values in
-            let latest = values.max { $0.0 < $1.0 }?.1
+            let latest = values.max { $0.0 < $1.0 }
             let purposes = values.compactMap { date, value -> (Date, String, Int)? in
                 let score = purposeScore(value)
                 guard score >= 8 else { return nil }
@@ -232,7 +300,12 @@ private struct ProjectConversationSummaryCollector {
                 if left.2 != right.2 { return left.2 > right.2 }
                 return left.0 < right.0
             }.first
-            return ProjectConversationDigest(latest: latest, purpose: purpose?.1, purposeScore: purpose?.2)
+            return ProjectConversationDigest(
+                latest: latest?.1,
+                latestAt: latest?.0.timeIntervalSince1970,
+                purpose: purpose?.1,
+                purposeScore: purpose?.2
+            )
         }
     }
 
@@ -263,6 +336,10 @@ private struct ProjectConversationSummaryCollector {
         value = value.replacingOccurrences(of: #"```[\s\S]*?```"#, with: "[代码操作]", options: .regularExpression)
         value = value.replacingOccurrences(of: #"https?://\S+"#, with: "[链接]", options: .regularExpression)
         value = value.replacingOccurrences(of: #"(?:/[\w.\-\p{Han} ]+){2,}"#, with: "[本地项目]", options: .regularExpression)
+        value = value.replacingOccurrences(of: #"[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}"#, with: "[邮箱]", options: [.regularExpression, .caseInsensitive])
+        value = value.replacingOccurrences(of: #"\b(?:\d{1,3}\.){3}\d{1,3}\b"#, with: "[网络地址]", options: .regularExpression)
+        value = value.replacingOccurrences(of: #"(?i)(?:api[_-]?key|access[_-]?token|secret|password|passwd)\s*[:=]\s*\S+"#, with: "[凭据已隐藏]", options: .regularExpression)
+        value = value.replacingOccurrences(of: #"\b\d{7,15}\b"#, with: "[号码]", options: .regularExpression)
         value = value.replacingOccurrences(of: #"\b[a-fA-F0-9]{24,}\b"#, with: "[标识已隐藏]", options: .regularExpression)
         value = value.replacingOccurrences(of: #"[\r\n\t]+"#, with: " ", options: .regularExpression)
         value = value.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)

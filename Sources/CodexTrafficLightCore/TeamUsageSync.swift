@@ -851,9 +851,12 @@ public struct TeamUsageSyncService: Sendable {
             interactionSummary: interactionReport.sessions,
             grindHistory: interactionReport.history,
             grindHistoryMode: "interaction_v7",
-            // Project names/times come from the privacy-safe audit ledger. Full
-            // conversation summaries are intentionally excluded from live sync.
-            projects: ProjectActivityStore().report(days: configuration.collectDays),
+            // Only newly appended local user turns are read. The collector keeps
+            // hashed file cursors and uploads sanitized summaries, never raw text.
+            projects: ProjectActivityStore().report(
+                days: configuration.collectDays,
+                codexHome: configuration.codexHome
+            ),
             sessions: calendarUsage
         )
     }

@@ -1291,7 +1291,7 @@ func testProjectActivityAddsOnlySanitizedWorkSummary() throws {
         #"{"timestamp":"\#(timestamp)","type":"session_meta","payload":{"cwd":"\#(repository.path)","source":"vscode"}}"#,
         #"{"timestamp":"\#(timestamp)","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>自动上下文</environment_context>"}]}}"#,
         #"{"timestamp":"\#(purposeTimestamp)","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"这个项目是一个用于客户提交需求和查看进度的服务平台"}]}}"#,
-        #"{"timestamp":"\#(timestamp)","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"请修复 /Users/example/private/project 的开工时间并检查 https://internal.example/token"}]}}"#,
+        #"{"timestamp":"\#(timestamp)","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"请修复 /Users/example/private/project 的开工时间并检查 https://internal.example/token，password=secret-123，联系 test@example.com 或 192.168.1.10"}]}}"#,
         #"{"timestamp":"\#(timestamp)","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"</image>"}]}}"#,
     ].joined(separator: "\n")
     try lines.write(to: sessionURL, atomically: true, encoding: .utf8)
@@ -1306,6 +1306,22 @@ func testProjectActivityAddsOnlySanitizedWorkSummary() throws {
     try expect(summary.contains("[链接]"), "project audit should redact URLs")
     try expect(!summary.contains("environment_context"), "project audit should ignore injected context")
     try expect(!summary.contains("/Users/example"), "project audit must not upload full paths")
+    try expect(!summary.contains("secret-123"), "project audit must redact credentials")
+    try expect(!summary.contains("test@example.com"), "project audit must redact email addresses")
+    try expect(!summary.contains("192.168.1.10"), "project audit must redact network addresses")
+    let storedAfterBackfill = try String(contentsOf: activityURL, encoding: .utf8)
+    try expect(!storedAfterBackfill.contains(sessionURL.path), "incremental cursor must hash conversation file paths")
+    try expect(!storedAfterBackfill.contains("secret-123"), "local summary ledger must not retain raw credentials")
+
+    let appendedTimestamp = formatter.string(from: now.addingTimeInterval(60))
+    let appended = #"{"timestamp":"\#(appendedTimestamp)","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"继续完善客户工单筛选和状态提醒"}]}}"#
+    let handle = try FileHandle(forWritingTo: sessionURL)
+    try handle.seekToEnd()
+    try handle.write(contentsOf: Data(("\n" + appended).utf8))
+    try handle.close()
+    let incremental = store.report(days: 30, now: now.addingTimeInterval(120), codexHome: codexHome).first
+    try expect(incremental?.summary?.contains("客户工单筛选") == true, "project audit should read only newly appended conversation lines")
+    try expectEqual(incremental?.purpose, report?.purpose, "stable project purpose should survive incremental task updates")
 }
 
 func testProjectActivityDoesNotInventPurposeForGenericProjectName() throws {
@@ -1319,7 +1335,7 @@ func testProjectActivityDoesNotInventPurposeForGenericProjectName() throws {
     let now = Date()
     try store.record(workspace: repository.path, taskID: "session:test", now: now)
     let purpose = store.report(days: 30, now: now).first?.purpose
-    try expect(purpose == nil, "generic project names must stay without a purpose until real evidence exists")
+    try expectEqual(purpose, "用于功能试验、原型验证与临时开发的 Codex 工作区", "known generic workspaces should receive a clear conservative purpose")
 }
 
 func testDesktopMonitorInstallerMigratesPackagedMonitor() throws {
