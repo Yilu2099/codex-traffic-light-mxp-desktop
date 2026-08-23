@@ -1348,6 +1348,9 @@ func testDesktopMonitorInstallerMigratesPackagedMonitor() throws {
 }
 
 let tests: [(String, () throws -> Void)] = [
+    ("brand tagline stays aligned", {
+        try expectEqual(BrandCopy.tagline, "用 Codex 手搓世界，人人都是造物主", "client tagline should match the approved brand copy")
+    }),
     ("command contract", testCommandContract),
     ("grind display formatter", testGrindDisplayFormatterUsesConciseLabels),
     ("quota snapshot clamps", testQuotaSnapshotClampsPercentValues),

@@ -116,7 +116,7 @@ struct StatusPopoverView: View {
                 Text("万合创新局")
                     .font(.system(size: 16, weight: .bold, design: .rounded))
                     .foregroundStyle(ink)
-                Text("Codex 团队活跃 · 用起来，更要做出结果")
+                Text(BrandCopy.tagline)
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(muted)
             }
