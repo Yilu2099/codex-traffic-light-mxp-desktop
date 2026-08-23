@@ -44,6 +44,7 @@ final class StatusPopoverModel: ObservableObject {
 }
 
 struct StatusPopoverView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var model: StatusPopoverModel
     let openWebsite: (String?) -> Void
     let selectRange: (StatusRankingRange) -> Void
@@ -315,9 +316,9 @@ struct StatusPopoverView: View {
     }
 
     private func onlineStatusDot(isOnline: Bool, hasActivity: Bool) -> some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !isOnline)) { context in
+        TimelineView(.animation(minimumInterval: 1.0 / 12.0, paused: !isOnline || reduceMotion)) { context in
             let duration = 1.8
-            let phase = context.date.timeIntervalSinceReferenceDate
+            let phase = reduceMotion ? 0 : context.date.timeIntervalSinceReferenceDate
                 .truncatingRemainder(dividingBy: duration) / duration
             ZStack {
                 if isOnline {

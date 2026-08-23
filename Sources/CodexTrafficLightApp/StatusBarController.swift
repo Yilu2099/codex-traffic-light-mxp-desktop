@@ -10,6 +10,8 @@ protocol StatusBarControllerDelegate: AnyObject {
 
 @MainActor
 final class StatusBarController {
+    private static let breathingFrameCount = 12
+    private static let breathingFrameInterval: TimeInterval = 0.25
     private let healthyGreen = NSColor(
         srgbRed: 0x35 / 255,
         green: 0xD2 / 255,
@@ -175,10 +177,23 @@ final class StatusBarController {
             return
         }
 
+        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            stopAnimation()
+            item.button?.image = makeQuotaIndicator(
+                color: healthyGreen,
+                glow: 0.82,
+                coreTop: healthyGreenTop,
+                coreBottom: healthyGreenBottom,
+                rim: healthyGreenRim,
+                haloProgress: 0.35
+            )
+            return
+        }
+
         if breathingTimer == nil {
             if breathingFrames.isEmpty {
-                breathingFrames = (0..<24).map { index in
-                    let progress = CGFloat(index) / 23
+                breathingFrames = (0..<Self.breathingFrameCount).map { index in
+                    let progress = CGFloat(index) / CGFloat(Self.breathingFrameCount - 1)
                     return makeQuotaIndicator(
                         color: healthyGreen,
                         glow: 0.82,
@@ -191,7 +206,7 @@ final class StatusBarController {
             }
             breathingFrameIndex = 0
             let timer = Timer(
-                timeInterval: 0.05,
+                timeInterval: Self.breathingFrameInterval,
                 target: self,
                 selector: #selector(breathingTimerFired),
                 userInfo: nil,
