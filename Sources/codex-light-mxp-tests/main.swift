@@ -1275,7 +1275,7 @@ func testProjectActivityStoreKeepsOnlySanitizedProjectAudit() throws {
 
 func testProjectActivityAddsOnlySanitizedWorkSummary() throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent("codex-project-summary-\(UUID().uuidString)")
-    let repository = root.appendingPathComponent("创新局")
+    let repository = root.appendingPathComponent("app")
     let activityURL = root.appendingPathComponent("support/project-activity.json")
     let codexHome = root.appendingPathComponent("codex")
     let sessionURL = codexHome.appendingPathComponent("sessions/2026/08/22/rollout-test.jsonl")
@@ -1286,21 +1286,40 @@ func testProjectActivityAddsOnlySanitizedWorkSummary() throws {
     let formatter = ISO8601DateFormatter()
     formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
     let timestamp = formatter.string(from: now)
+    let purposeTimestamp = formatter.string(from: now.addingTimeInterval(-60))
     let lines = [
         #"{"timestamp":"\#(timestamp)","type":"session_meta","payload":{"cwd":"\#(repository.path)","source":"vscode"}}"#,
         #"{"timestamp":"\#(timestamp)","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>自动上下文</environment_context>"}]}}"#,
+        #"{"timestamp":"\#(purposeTimestamp)","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"这个项目是一个用于客户提交需求和查看进度的服务平台"}]}}"#,
         #"{"timestamp":"\#(timestamp)","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"请修复 /Users/example/private/project 的开工时间并检查 https://internal.example/token"}]}}"#,
         #"{"timestamp":"\#(timestamp)","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"</image>"}]}}"#,
     ].joined(separator: "\n")
     try lines.write(to: sessionURL, atomically: true, encoding: .utf8)
     let store = ProjectActivityStore(activityURL: activityURL)
     try store.record(workspace: repository.path, taskID: "session:test", now: now)
-    let summary = store.report(days: 30, now: now, codexHome: codexHome).first?.summary ?? ""
+    let report = store.report(days: 30, now: now, codexHome: codexHome).first
+    let summary = report?.summary ?? ""
+    let purpose = report?.purpose ?? ""
+    try expect(purpose.contains("客户提交需求和查看进度"), "project audit should retain a clear project purpose")
     try expect(summary.contains("请修复"), "project audit should retain a short work description")
     try expect(summary.contains("[本地项目]"), "project audit should redact full local paths")
     try expect(summary.contains("[链接]"), "project audit should redact URLs")
     try expect(!summary.contains("environment_context"), "project audit should ignore injected context")
     try expect(!summary.contains("/Users/example"), "project audit must not upload full paths")
+}
+
+func testProjectActivityDoesNotInventPurposeForGenericProjectName() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("codex-generic-project-\(UUID().uuidString)")
+    let repository = root.appendingPathComponent("Playground")
+    let activityURL = root.appendingPathComponent("support/project-activity.json")
+    try FileManager.default.createDirectory(at: repository.appendingPathComponent(".git"), withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let store = ProjectActivityStore(activityURL: activityURL)
+    let now = Date()
+    try store.record(workspace: repository.path, taskID: "session:test", now: now)
+    let purpose = store.report(days: 30, now: now).first?.purpose
+    try expect(purpose == nil, "generic project names must stay without a purpose until real evidence exists")
 }
 
 func testDesktopMonitorInstallerMigratesPackagedMonitor() throws {
@@ -1392,6 +1411,7 @@ let tests: [(String, () throws -> Void)] = [
     ("today live collector tails appended usage only", testTodayLiveCollectorStartsAtEOFAndCountsOnlyAppendedUsage),
     ("project audit sanitizes workspace and session", testProjectActivityStoreKeepsOnlySanitizedProjectAudit),
     ("project audit adds sanitized work summary", testProjectActivityAddsOnlySanitizedWorkSummary),
+    ("project audit does not invent generic purpose", testProjectActivityDoesNotInventPurposeForGenericProjectName),
     ("desktop monitor installer migrates packaged monitor", testDesktopMonitorInstallerMigratesPackagedMonitor),
     ("client version comparison", testClientVersionComparison),
     ("client update signature verification", testClientUpdateVerifierAcceptsReleaseSignature),
