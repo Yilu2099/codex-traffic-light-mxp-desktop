@@ -1214,6 +1214,29 @@ func testTodayLiveCollectorStartsAtEOFAndCountsOnlyAppendedUsage() throws {
     try expect(!persisted.contains("private text"), "collector state must never persist conversation text")
 }
 
+func testGrindHistoryIncrementalCollectorStartsAtEOF() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let sessions = root.appendingPathComponent("codex/sessions/2026/08/23")
+    let stateURL = root.appendingPathComponent("state/grind-live.json")
+    try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let file = sessions.appendingPathComponent("rollout-2026-08-23T10-00-00-11111111-1111-1111-1111-111111111111.jsonl")
+    try #"{"timestamp":"2026-08-23T02:00:00.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"历史输入"}]}}"#.write(to: file, atomically: true, encoding: .utf8)
+    let now = ISO8601DateFormatter().date(from: "2026-08-23T08:00:00Z")!
+    let collector = CodexGrindHistoryCollector()
+    let baseline = collector.collectIncremental(codexHome: root.appendingPathComponent("codex"), now: now, stateURL: stateURL)
+    try expect(baseline.sessions.isEmpty, "incremental interaction collector must baseline historical files at EOF")
+    let appended = #"{"timestamp":"2026-08-23T08:01:00.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"更新后的输入"}]}}"#
+    let handle = try FileHandle(forWritingTo: file)
+    try handle.seekToEnd()
+    try handle.write(contentsOf: Data(("\n" + appended).utf8))
+    try handle.close()
+    let updated = collector.collectIncremental(codexHome: root.appendingPathComponent("codex"), now: now.addingTimeInterval(60), stateURL: stateURL)
+    try expectEqual(updated.sessions.first?.dayTurnCount, 1, "incremental interaction collector should count only appended turns")
+    let unchanged = collector.collectIncremental(codexHome: root.appendingPathComponent("codex"), now: now.addingTimeInterval(120), stateURL: stateURL)
+    try expect(unchanged.sessions.isEmpty, "incremental interaction collector must not rescan unchanged files")
+}
+
 func testClientVersionComparison() throws {
     try expectEqual(ClientVersion.compare("1.2.0", "1.1.9"), .orderedDescending, "newer client version should sort after the installed version")
     try expectEqual(ClientVersion.compare("1.0.0", "1.0.0"), .orderedSame, "equal client versions should compare equally")
@@ -1493,6 +1516,7 @@ let tests: [(String, () throws -> Void)] = [
     ("session counter uses local filename and metadata only", testSessionCounterUsesLocalFilenameAndMetadataWithoutReadingContents),
     ("grind history reads event timestamps only", testGrindHistoryCollectorReadsOnlyEventTimestamps),
     ("today live collector tails appended usage only", testTodayLiveCollectorStartsAtEOFAndCountsOnlyAppendedUsage),
+    ("grind history collector tails appended interactions only", testGrindHistoryIncrementalCollectorStartsAtEOF),
     ("project audit sanitizes workspace and session", testProjectActivityStoreKeepsOnlySanitizedProjectAudit),
     ("project input ledger filters and acknowledges human text", testProjectActivityBuildsReliableHumanInputOutbox),
     ("project audit does not invent generic purpose", testProjectActivityDoesNotInventPurposeForGenericProjectName),

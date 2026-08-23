@@ -829,7 +829,7 @@ public struct TeamUsageSyncService: Sendable {
             codexHome: configuration.codexHome,
             days: configuration.collectDays
         )
-        let interactionReport = CodexGrindHistoryCollector().collectDetailed(
+        let interactionReport = CodexGrindHistoryCollector().collectIncremental(
             codexHome: configuration.codexHome,
             days: min(30, configuration.collectDays)
         )

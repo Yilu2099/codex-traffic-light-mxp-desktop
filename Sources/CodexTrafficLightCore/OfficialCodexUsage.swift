@@ -284,6 +284,11 @@ public struct CodexSessionFileCounter: Sendable {
 }
 
 public struct CodexGrindHistoryCollector: Sendable {
+    private struct IncrementalState: Codable {
+        var initialized: Bool
+        var updatedAt: String
+        var fileOffsets: [String: Int64]
+    }
     private struct InteractionDates {
         var day: [Date] = []
         var night: [Date] = []
@@ -454,6 +459,132 @@ public struct CodexGrindHistoryCollector: Sendable {
             )
         }
         return (grindHistory, sessionSummaries)
+    }
+
+    /// Tails only bytes appended after the collector starts. The server merges these
+    /// compact timestamp summaries with earlier reports, so the menu-bar app never
+    /// needs to rescan historical conversation files during its regular sync.
+    public func collectIncremental(
+        codexHome: URL,
+        days: Int = 30,
+        now: Date = Date(),
+        stateURL: URL = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".wanhe-codex-token/grind-live.json")
+    ) -> (history: [TeamGrindHistoryDay], sessions: [TeamSessionInteractionSummary]) {
+        let cutoff = now.addingTimeInterval(-Double(max(1, days) + 1) * 86_400)
+        var files: [(url: URL, modifiedAt: Date, size: Int64)] = []
+        for folder in ["sessions", "archived_sessions"] {
+            let root = codexHome.appendingPathComponent(folder)
+            guard let enumerator = FileManager.default.enumerator(
+                at: root,
+                includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey],
+                options: [.skipsHiddenFiles]
+            ) else { continue }
+            for case let url as URL in enumerator where url.pathExtension == "jsonl" {
+                let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
+                let modifiedAt = values?.contentModificationDate ?? .distantPast
+                guard modifiedAt >= cutoff else { continue }
+                files.append((url, modifiedAt, Int64(max(0, values?.fileSize ?? 0))))
+            }
+        }
+        files.sort { $0.modifiedAt > $1.modifiedAt }
+        var state = (try? Data(contentsOf: stateURL)).flatMap { try? JSONDecoder().decode(IncrementalState.self, from: $0) }
+            ?? IncrementalState(initialized: false, updatedAt: isoString(now), fileOffsets: [:])
+        if !state.initialized {
+            for file in files { state.fileOffsets[file.url.path] = file.size }
+            state.initialized = true
+            state.updatedAt = isoString(now)
+            saveIncrementalState(state, to: stateURL)
+            return ([], [])
+        }
+
+        let previousUpdate = Self.isoDate(state.updatedAt) ?? now
+        var interactionDates: [String: InteractionDates] = [:]
+        var history: [String: (day: Date?, night: Date?)] = [:]
+        var processed = 0
+        for file in files where processed < 16 {
+            let knownOffset = state.fileOffsets[file.url.path]
+            let start = knownOffset.map { min(max(0, $0), file.size) }
+                ?? (file.modifiedAt >= previousUpdate && !file.url.path.contains("/archived_sessions/") ? 0 : file.size)
+            guard start < file.size else {
+                state.fileOffsets[file.url.path] = file.size
+                continue
+            }
+            if isSubagentSession(file.url) {
+                state.fileOffsets[file.url.path] = file.size
+                continue
+            }
+            guard let handle = try? FileHandle(forReadingFrom: file.url) else { continue }
+            try? handle.seek(toOffset: UInt64(start))
+            let data = (try? handle.read(upToCount: 256 * 1_024)) ?? Data()
+            try? handle.close()
+            guard !data.isEmpty else { continue }
+            let reachedEOF = start + Int64(data.count) >= file.size
+            let complete: Data
+            if reachedEOF {
+                complete = data
+            } else if let newline = data.lastIndex(of: 0x0A) {
+                complete = Data(data.prefix(through: newline))
+            } else {
+                state.fileOffsets[file.url.path] = start + Int64(data.count)
+                processed += 1
+                continue
+            }
+            var modern: [Date] = []
+            var legacy: [Date] = []
+            for line in complete.split(separator: 0x0A) {
+                guard let event = try? JSONDecoder().decode(EventEnvelope.self, from: Data(line)),
+                      let timestamp = event.timestamp,
+                      let date = Self.isoDate(timestamp), date >= cutoff else { continue }
+                if event.isAuthoredResponse { modern.append(date) }
+                if event.isLegacyUserEvent { legacy.append(date) }
+            }
+            let session = sessionID(from: file.url)
+            for date in modern.isEmpty ? legacy : modern {
+                let components = Calendar(identifier: .gregorian).dateComponents(in: timezone, from: date)
+                guard let hour = components.hour else { continue }
+                let day = grindDay(for: date, hour: hour)
+                var item = history[day] ?? (nil, nil)
+                if hour >= 5, item.day == nil || date < item.day! { item.day = date }
+                if hour >= 23 || hour < 5, item.night == nil || date > item.night! { item.night = date }
+                history[day] = item
+                let key = "\(session)|\(day)"
+                var values = interactionDates[key] ?? InteractionDates()
+                if hour >= 5 { values.day.append(date) }
+                if hour >= 23 || hour < 5 { values.night.append(date) }
+                interactionDates[key] = values
+            }
+            state.fileOffsets[file.url.path] = start + Int64(complete.count)
+            processed += 1
+        }
+        let activePaths = Set(files.map { $0.url.path })
+        state.fileOffsets = state.fileOffsets.filter { activePaths.contains($0.key) }
+        state.updatedAt = isoString(now)
+        saveIncrementalState(state, to: stateURL)
+        let sessions = interactionDates.compactMap { key, values -> TeamSessionInteractionSummary? in
+            let parts = key.split(separator: "|", maxSplits: 1).map(String.init)
+            guard parts.count == 2 else { return nil }
+            let dayDates = uniqueTurns(values.day)
+            let nightDates = uniqueTurns(values.night)
+            return TeamSessionInteractionSummary(
+                sessionId: parts[0], day: parts[1],
+                firstDayUserAt: dayDates.first.map(isoString),
+                lastDayUserAt: dayDates.last.map(isoString), dayTurnCount: dayDates.count,
+                lastNightUserAt: nightDates.last.map(isoString), nightTurnCount: nightDates.count
+            )
+        }
+        let grind = history.keys.sorted().map { day in
+            let item = history[day] ?? (nil, nil)
+            return TeamGrindHistoryDay(
+                grindDay: day, dayGrindTime: item.day.map(timeString), nightGrindTime: item.night.map(timeString)
+            )
+        }
+        return (grind, sessions)
+    }
+
+    private func saveIncrementalState(_ state: IncrementalState, to url: URL) {
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if let data = try? JSONEncoder().encode(state) { try? data.write(to: url, options: [.atomic]) }
     }
 
     private func enumerateRecentLines(in url: URL, maximumBytes: UInt64 = 4 * 1024 * 1024, visit: (String) -> Void) {
