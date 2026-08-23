@@ -110,7 +110,8 @@ public enum CodexAppServerQuotaMapper {
         guard let weeklyWindow else { return nil }
         return QuotaValues(
             weeklyRemainingPercent: remainingPercent(fromUsedPercent: weeklyWindow.usedPercent),
-            weeklyResetsAt: weeklyWindow.resetsAt
+            weeklyResetsAt: weeklyWindow.resetsAt,
+            planType: snapshot.planType
         )
     }
 
@@ -239,6 +240,7 @@ public struct CodexAppServerQuotaCollector {
             weeklyResetsAt: quota.weeklyResetsAt,
             source: Self.source,
             limitID: CodexSessionQuotaCollector.primaryLimitID,
+            planType: quota.planType,
             now: now
         )
     }
@@ -444,6 +446,7 @@ private struct AppServerRateLimitsResponse: Decodable {
 
 private struct AppServerRateLimitSnapshot: Decodable {
     var limitId: String?
+    var planType: String?
     var primary: AppServerRateLimitWindow?
     var secondary: AppServerRateLimitWindow?
 }

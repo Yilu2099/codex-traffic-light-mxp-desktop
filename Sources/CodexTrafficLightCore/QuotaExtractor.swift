@@ -3,13 +3,16 @@ import Foundation
 public struct QuotaValues: Equatable, Sendable {
     public var weeklyRemainingPercent: Int?
     public var weeklyResetsAt: Date?
+    public var planType: String?
 
     public init(
         weeklyRemainingPercent: Int?,
-        weeklyResetsAt: Date? = nil
+        weeklyResetsAt: Date? = nil,
+        planType: String? = nil
     ) {
         self.weeklyRemainingPercent = weeklyRemainingPercent.map { min(100, max(0, $0)) }
         self.weeklyResetsAt = weeklyResetsAt
+        self.planType = MembershipPlanType.normalized(planType)
     }
 
     public var summary: String {
@@ -21,6 +24,7 @@ public enum QuotaExtractor {
     private static let weeklyKeys = ["weekly_remaining_percent", "weeklyRemainingPercent"]
     private static let weeklyResetKeys = ["weekly_resets_at", "weeklyResetsAt", "weekly_reset_at", "weeklyResetAt"]
     private static let preferredContainerKeys = ["quota", "rate_limits", "rateLimits"]
+    private static let planTypeKeys = ["plan_type", "planType"]
 
     public static func extract(from data: Data) -> QuotaValues? {
         guard !data.isEmpty,
@@ -71,8 +75,16 @@ public enum QuotaExtractor {
         }
         return QuotaValues(
             weeklyRemainingPercent: weekly,
-            weeklyResetsAt: firstDate(in: dictionary, keys: weeklyResetKeys)
+            weeklyResetsAt: firstDate(in: dictionary, keys: weeklyResetKeys),
+            planType: firstString(in: dictionary, keys: planTypeKeys)
         )
+    }
+
+    private static func firstString(in dictionary: [String: Any], keys: [String]) -> String? {
+        for key in keys {
+            if let value = dictionary[key] as? String { return value }
+        }
+        return nil
     }
 
     private static func firstPercent(in dictionary: [String: Any], keys: [String]) -> Int? {
@@ -128,5 +140,15 @@ public enum QuotaExtractor {
             return ISO8601DateFormatter().date(from: trimmed)
         }
         return nil
+    }
+}
+
+public enum MembershipPlanType {
+    private static let supported = Set(["plus", "prolite", "pro"])
+
+    public static func normalized(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return supported.contains(normalized) ? normalized : nil
     }
 }

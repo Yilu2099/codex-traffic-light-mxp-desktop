@@ -93,7 +93,8 @@ do {
             snapshot = try store.updateQuota(
                 weeklyPercent: weekly,
                 weeklyResetsAt: quota.weeklyResetsAt,
-                source: "cli"
+                source: "cli",
+                planType: quota.planType
             )
         } else if let weekly = options.weeklyPercent {
             snapshot = try store.updateQuota(weeklyPercent: weekly, source: "cli")

@@ -40,6 +40,7 @@ public enum HookBridge {
                     weeklyPercent: weekly,
                     weeklyResetsAt: quota.weeklyResetsAt,
                     source: "codex-hook",
+                    planType: quota.planType,
                     now: now
                 )
             }

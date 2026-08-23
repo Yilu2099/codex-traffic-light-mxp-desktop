@@ -5,6 +5,7 @@ public struct QuotaSnapshot: Codable, Equatable {
     public var weeklyResetsAt: Date?
     public var source: String
     public var limitID: String?
+    public var planType: String?
     public var updatedAt: Date
 
     enum CodingKeys: String, CodingKey {
@@ -12,6 +13,7 @@ public struct QuotaSnapshot: Codable, Equatable {
         case weeklyResetsAt = "weekly_resets_at"
         case source
         case limitID = "limit_id"
+        case planType = "plan_type"
         case updatedAt = "updated_at"
     }
 
@@ -20,12 +22,14 @@ public struct QuotaSnapshot: Codable, Equatable {
         weeklyResetsAt: Date? = nil,
         source: String,
         limitID: String? = nil,
+        planType: String? = nil,
         updatedAt: Date
     ) {
         self.weeklyRemainingPercent = min(100, max(0, weeklyRemainingPercent))
         self.weeklyResetsAt = weeklyResetsAt
         self.source = source
         self.limitID = limitID
+        self.planType = MembershipPlanType.normalized(planType)
         self.updatedAt = updatedAt
     }
 }

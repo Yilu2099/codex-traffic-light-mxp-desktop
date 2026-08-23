@@ -48,6 +48,7 @@ public final class StateStore {
         weeklyResetsAt: Date? = nil,
         source: String,
         limitID: String? = nil,
+        planType: String? = nil,
         now: Date = Date()
     ) throws -> StateSnapshot {
         var snapshot = read()
@@ -56,6 +57,7 @@ public final class StateStore {
             weeklyResetsAt: weeklyResetsAt,
             source: source,
             limitID: limitID,
+            planType: MembershipPlanType.normalized(planType) ?? snapshot.quota?.planType,
             updatedAt: now
         )
         if let previous = snapshot.quota,

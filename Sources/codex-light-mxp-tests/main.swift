@@ -156,6 +156,14 @@ func testQuotaExtractorReadsZeroPercentAndResetDates() throws {
     try expectEqual(quota?.weeklyResetsAt, Date(timeIntervalSince1970: 1_781_275_400), "extractor should read weekly reset date")
 }
 
+func testQuotaExtractorReadsSupportedMembershipPlanOnly() throws {
+    let supported = #"{"weekly_remaining_percent":42,"planType":"prolite"}"#.data(using: .utf8)!
+    let unsupported = #"{"weekly_remaining_percent":42,"planType":"unknown"}"#.data(using: .utf8)!
+
+    try expectEqual(QuotaExtractor.extract(from: supported)?.planType, "prolite", "extractor should preserve an official supported membership plan")
+    try expectEqual(QuotaExtractor.extract(from: unsupported)?.planType, nil, "extractor should drop unrecognized membership values")
+}
+
 func testStateSnapshotDecodesOldJSONWithoutQuota() throws {
     let data = """
     {
@@ -266,6 +274,28 @@ func testStateStoreAcceptsOfficialCodexReset() throws {
     try expectEqual(reset.quota?.weeklyRemainingPercent, 100, "an exact Codex source should accept an official reset")
     try expectEqual(reset.quota?.weeklyResetsAt, now.addingTimeInterval(7 * 86_400), "official reset should keep the latest reset window")
     try expectEqual(store.readQuotaAnomalies().count, 0, "official Codex resets should not be recorded as anomalies")
+}
+
+func testStateStoreKeepsMembershipPlanAcrossSparseQuotaUpdates() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("codex-membership-plan-tests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = StateStore(stateURL: root.appendingPathComponent("state.json"))
+    _ = try store.updateQuota(
+        weeklyPercent: 40,
+        source: CodexAppServerQuotaCollector.source,
+        limitID: CodexSessionQuotaCollector.primaryLimitID,
+        planType: "prolite",
+        now: Date(timeIntervalSince1970: 1_000)
+    )
+    let sparse = try store.updateQuota(
+        weeklyPercent: 39,
+        source: CodexSessionQuotaCollector.source,
+        limitID: CodexSessionQuotaCollector.primaryLimitID,
+        now: Date(timeIntervalSince1970: 1_001)
+    )
+
+    try expectEqual(sparse.quota?.planType, "prolite", "a sparse rolling quota update should not erase a known official membership plan")
 }
 
 func testHookLogLineIncludesEventAndTask() throws {
@@ -649,6 +679,7 @@ func testAppServerJSONRPCLineCodecDecodesMessagesAndFindsTargetResponse() throws
 
     try expectEqual(messages.count, 2, "line codec should decode each newline-delimited JSON message")
     try expectEqual(quota.weeklyRemainingPercent, Optional(95), "line codec should select target response result")
+    try expectEqual(quota.planType, Optional("plus"), "line codec should keep the official membership plan")
 }
 
 struct FakeAppServerTransport: CodexAppServerTransport {
@@ -947,7 +978,8 @@ func testTeamQuotaReportUsesWeeklyPercentAndReset() throws {
         weeklyResetsAt: reset,
         updatedAt: Date(timeIntervalSince1970: 1_000),
         source: CodexSessionQuotaCollector.source,
-        limitID: CodexSessionQuotaCollector.primaryLimitID
+        limitID: CodexSessionQuotaCollector.primaryLimitID,
+        planType: "pro"
     )
     try expectEqual(report.weeklyRemainingPercent, 79, "team quota should keep weekly remaining percent")
     try expectEqual(report.weeklyUsedPercent, 21, "team quota should derive weekly used percent")
@@ -956,6 +988,7 @@ func testTeamQuotaReportUsesWeeklyPercentAndReset() throws {
     try expectEqual(report.updatedAtDate, Date(timeIntervalSince1970: 1_000), "team quota should parse its update time for freshness checks")
     try expectEqual(report.source, CodexSessionQuotaCollector.source, "team quota should preserve its source for server-side echo protection")
     try expectEqual(report.limitID, CodexSessionQuotaCollector.primaryLimitID, "team quota should explicitly identify the primary Codex limit")
+    try expectEqual(report.planType, "pro", "team quota should upload the official membership plan")
 
     let unverified = StateSnapshot(
         updatedAt: Date(timeIntervalSince1970: 1_000),
@@ -1306,11 +1339,13 @@ let tests: [(String, () throws -> Void)] = [
     ("quota extractor rejects Spark limit", testQuotaExtractorRejectsSparkLimit),
     ("quota extractor requires weekly data", testQuotaExtractorRequiresBothWindows),
     ("quota extractor reads zero percent and reset dates", testQuotaExtractorReadsZeroPercentAndResetDates),
+    ("quota extractor reads supported membership plan", testQuotaExtractorReadsSupportedMembershipPlanOnly),
     ("old JSON decodes without quota", testStateSnapshotDecodesOldJSONWithoutQuota),
     ("legacy provider quota migrates", testStateSnapshotMigratesLegacyCodexProviderQuota),
     ("state JSON contains only current quota", testStateFileContainsOnlyCurrentQuotaKeys),
     ("state store rejects impossible full quota", testStateStoreRejectsImpossibleFullQuotaBeforeKnownReset),
     ("state store accepts official Codex reset", testStateStoreAcceptsOfficialCodexReset),
+    ("state store preserves membership plan", testStateStoreKeepsMembershipPlanAcrossSparseQuotaUpdates),
     ("hook log line", testHookLogLineIncludesEventAndTask),
     ("hook log line includes quota summary", testHookLogLineIncludesQuotaSummary),
     ("hook bridge updates quota and project audit", testHookBridgeUpdatesQuotaAndProjectAudit),
