@@ -1301,11 +1301,18 @@ func testProjectActivityBuildsReliableHumanInputOutbox() throws {
     let store = ProjectActivityStore(activityURL: activityURL)
     try store.record(workspace: repository.path, taskID: "session:test", now: now)
     let prepared = store.prepareSync(days: 30, now: now, codexHome: codexHome)
-    let report = prepared.projects.first
-    let combinedInputs = prepared.inputEvents.map(\.text).joined(separator: "\n")
+    try expect(prepared.inputEvents.isEmpty, "first run must baseline at EOF without historical prompt backfill")
+    let historicalRows = lines.split(separator: "\n").dropFirst().joined(separator: "\n")
+    let baselineHandle = try FileHandle(forWritingTo: sessionURL)
+    try baselineHandle.seekToEnd()
+    try baselineHandle.write(contentsOf: Data(("\n" + historicalRows).utf8))
+    try baselineHandle.close()
+    let captured = store.prepareSync(days: 30, now: now.addingTimeInterval(1), codexHome: codexHome)
+    let report = captured.projects.first
+    let combinedInputs = captured.inputEvents.map(\.text).joined(separator: "\n")
     try expectEqual(report?.purpose, nil, "conversation heuristics must not pretend to be a project summary")
     try expectEqual(report?.summary, nil, "the last user message must not be exposed as a project summary")
-    try expectEqual(prepared.inputEvents.count, 3, "only genuine human text inputs should enter the upload outbox")
+    try expectEqual(captured.inputEvents.count, 3, "only genuine new human text inputs should enter the upload outbox")
     try expect(combinedInputs.contains("客户提交需求和查看进度"), "human project input should be retained")
     try expect(combinedInputs.contains("/Users/example/private/project"), "authorized input text should remain original")
     try expect(combinedInputs.contains("https://internal.example/token"), "authorized input links should remain original")
@@ -1345,6 +1352,32 @@ func testProjectActivityDoesNotInventPurposeForGenericProjectName() throws {
     try store.record(workspace: repository.path, taskID: "session:test", now: now)
     let purpose = store.report(days: 30, now: now).first?.purpose
     try expectEqual(purpose, nil, "generic project names must wait for a real Codex summary or administrator confirmation")
+}
+
+func testProjectActivityBaselineIsMetadataOnlyAndBounded() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("codex-light-baseline-\(UUID().uuidString)")
+    let codexHome = root.appendingPathComponent("codex")
+    let sessions = codexHome.appendingPathComponent("sessions/2026/08/23")
+    let activityURL = root.appendingPathComponent("support/project-activity.json")
+    try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let historical = #"{"timestamp":"2026-08-23T12:00:00Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"历史文字不应补采"}]}}"#
+    for index in 0..<600 {
+        try historical.write(
+            to: sessions.appendingPathComponent("rollout-\(index).jsonl"),
+            atomically: true,
+            encoding: .utf8
+        )
+    }
+    let store = ProjectActivityStore(activityURL: activityURL)
+    let startedAt = Date()
+    let report = store.prepareSync(days: 30, now: Date(), codexHome: codexHome)
+    let elapsed = Date().timeIntervalSince(startedAt)
+    try expect(report.inputEvents.isEmpty, "metadata baseline must never upload historical prompts")
+    try expect(elapsed < 1.0, "600-file metadata baseline should stay below one second")
+    let stored = try String(contentsOf: activityURL, encoding: .utf8)
+    try expect(stored.contains("\"inputEventCollectionVersion\" : 2"), "metadata baseline should persist the v2 cursor format")
+    try expect(!stored.contains("历史文字不应补采"), "metadata baseline must not read prompt text into its ledger")
 }
 
 func testDesktopMonitorInstallerMigratesPackagedMonitor() throws {
@@ -1463,6 +1496,7 @@ let tests: [(String, () throws -> Void)] = [
     ("project audit sanitizes workspace and session", testProjectActivityStoreKeepsOnlySanitizedProjectAudit),
     ("project input ledger filters and acknowledges human text", testProjectActivityBuildsReliableHumanInputOutbox),
     ("project audit does not invent generic purpose", testProjectActivityDoesNotInventPurposeForGenericProjectName),
+    ("project input baseline is metadata-only and bounded", testProjectActivityBaselineIsMetadataOnlyAndBounded),
     ("desktop monitor installer migrates packaged monitor", testDesktopMonitorInstallerMigratesPackagedMonitor),
     ("client version comparison", testClientVersionComparison),
     ("client update signature verification", testClientUpdateVerifierAcceptsReleaseSignature),
