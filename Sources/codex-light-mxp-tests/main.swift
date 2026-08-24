@@ -1208,10 +1208,45 @@ func testTodayLiveCollectorStartsAtEOFAndCountsOnlyAppendedUsage() throws {
 
     let updated = collector.collect(codexHome: root.appendingPathComponent("codex"), now: now.addingTimeInterval(60))
     try expectEqual(updated.tokens, 50, "collector should count the newly appended turn only")
+    try expectEqual(updated.utcDay, nil, "a mid-day baseline must not pretend it observed the whole settlement day")
+    try expectEqual(updated.utcTokens, nil, "UTC continuation stays unavailable until the first observed rollover")
     let unchanged = collector.collect(codexHome: root.appendingPathComponent("codex"), now: now.addingTimeInterval(120))
     try expectEqual(unchanged.tokens, 50, "collector should not count an appended event twice")
     let persisted = try String(contentsOf: stateURL, encoding: .utf8)
     try expect(!persisted.contains("private text"), "collector state must never persist conversation text")
+}
+
+func testTodayLiveCollectorSplitsLocalAndUTCDayAtSettlementBoundary() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let sessions = root.appendingPathComponent("codex/sessions/2026/08/25")
+    let stateURL = root.appendingPathComponent("state/today-live.json")
+    try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let file = sessions.appendingPathComponent("rollout-2026-08-25T07-58-00-22222222-2222-2222-2222-222222222222.jsonl")
+    try "{\"type\":\"session_meta\",\"payload\":{}}\n".write(to: file, atomically: true, encoding: .utf8)
+    let formatter = ISO8601DateFormatter()
+    let baselineTime = formatter.date(from: "2026-08-24T23:58:00Z")!
+    try FileManager.default.setAttributes([.modificationDate: baselineTime], ofItemAtPath: file.path)
+    let collector = TodayCodexUsageCollector(stateURL: stateURL)
+    _ = collector.collect(codexHome: root.appendingPathComponent("codex"), now: baselineTime)
+
+    let lines = [
+        "{\"type\":\"event_msg\",\"timestamp\":\"2026-08-24T23:59:00.000Z\",\"payload\":{\"type\":\"token_count\",\"info\":{\"last_token_usage\":{\"total_tokens\":40},\"total_token_usage\":{\"total_tokens\":100}}}}",
+        "{\"type\":\"event_msg\",\"timestamp\":\"2026-08-25T00:01:00.000Z\",\"payload\":{\"type\":\"token_count\",\"info\":{\"last_token_usage\":{\"total_tokens\":60},\"total_token_usage\":{\"total_tokens\":160}}}}",
+    ].joined(separator: "\n") + "\n"
+    let handle = try FileHandle(forWritingTo: file)
+    try handle.seekToEnd()
+    try handle.write(contentsOf: Data(lines.utf8))
+    try handle.close()
+    let collectedAt = formatter.date(from: "2026-08-25T00:02:00Z")!
+    try FileManager.default.setAttributes([.modificationDate: collectedAt], ofItemAtPath: file.path)
+
+    let report = collector.collect(codexHome: root.appendingPathComponent("codex"), now: collectedAt)
+    try expectEqual(report.day, "2026-08-25", "local calendar day should remain unchanged across the settlement boundary")
+    try expectEqual(report.tokens, 100, "local-day total should include usage on both sides of the boundary")
+    try expectEqual(report.utcDay, "2026-08-25", "UTC settlement day should roll over independently")
+    try expectEqual(report.utcTokens, 60, "UTC continuation should include only usage after its own rollover")
 }
 
 func testGrindHistoryIncrementalCollectorStartsAtEOF() throws {
@@ -1571,6 +1606,7 @@ let tests: [(String, () throws -> Void)] = [
     ("session counter uses local filename and metadata only", testSessionCounterUsesLocalFilenameAndMetadataWithoutReadingContents),
     ("grind history reads event timestamps only", testGrindHistoryCollectorReadsOnlyEventTimestamps),
     ("today live collector tails appended usage only", testTodayLiveCollectorStartsAtEOFAndCountsOnlyAppendedUsage),
+    ("today live collector splits local and UTC days", testTodayLiveCollectorSplitsLocalAndUTCDayAtSettlementBoundary),
     ("grind history collector tails appended interactions only", testGrindHistoryIncrementalCollectorStartsAtEOF),
     ("project audit sanitizes workspace and session", testProjectActivityStoreKeepsOnlySanitizedProjectAudit),
     ("project input ledger filters and acknowledges human text", testProjectActivityBuildsReliableHumanInputOutbox),

@@ -3,12 +3,26 @@ import Foundation
 public struct TodayLiveUsageReport: Codable, Equatable, Sendable {
     public var day: String
     public var tokens: Int
+    /// Tokens appended since the current UTC day began. The server uses this
+    /// continuation to join official settled buckets without changing the
+    /// user-facing local calendar day.
+    public var utcDay: String?
+    public var utcTokens: Int?
     public var updatedAt: String
     public var source: String
 
-    public init(day: String, tokens: Int, updatedAt: String, source: String = "local_live_increment") {
+    public init(
+        day: String,
+        tokens: Int,
+        utcDay: String? = nil,
+        utcTokens: Int? = nil,
+        updatedAt: String,
+        source: String = "local_live_increment"
+    ) {
         self.day = day
         self.tokens = max(0, tokens)
+        self.utcDay = utcDay
+        self.utcTokens = utcTokens.map { max(0, $0) }
         self.updatedAt = updatedAt
         self.source = source
     }
@@ -21,6 +35,9 @@ public struct TodayCodexUsageCollector: Sendable {
         var initialized: Bool
         var day: String
         var tokens: Int
+        var utcDay: String?
+        var utcTokens: Int?
+        var utcBaselineComplete: Bool?
         var updatedAt: String
         var fileOffsets: [String: Int64]
         var sessionCumulativeTokens: [String: Int]
@@ -40,11 +57,15 @@ public struct TodayCodexUsageCollector: Sendable {
 
     public func collect(codexHome: URL, now: Date = Date()) -> TodayLiveUsageReport {
         let day = dayString(now)
+        let utcDay = utcDayString(now)
         let files = recentJSONLFiles(codexHome: codexHome, now: now)
         var state = loadState() ?? State(
             initialized: false,
             day: day,
             tokens: 0,
+            utcDay: utcDay,
+            utcTokens: 0,
+            utcBaselineComplete: false,
             updatedAt: isoString(now),
             fileOffsets: [:],
             sessionCumulativeTokens: [:]
@@ -53,6 +74,11 @@ public struct TodayCodexUsageCollector: Sendable {
         if state.day != day {
             state.day = day
             state.tokens = 0
+        }
+        if state.utcDay != utcDay {
+            state.utcDay = utcDay
+            state.utcTokens = 0
+            state.utcBaselineComplete = true
         }
 
         if !state.initialized {
@@ -81,10 +107,12 @@ public struct TodayCodexUsageCollector: Sendable {
                 let result = appendedUsage(
                     file: file,
                     from: startOffset,
-                    expectedDay: day,
+                    expectedLocalDay: day,
+                    expectedUTCDay: utcDay,
                     previousCumulative: state.sessionCumulativeTokens[sessionID(file)]
                 )
-                state.tokens += result.tokens
+                state.tokens += result.localTokens
+                state.utcTokens = (state.utcTokens ?? 0) + result.utcTokens
                 state.fileOffsets[file.path] = result.nextOffset
                 if let cumulative = result.cumulative {
                     state.sessionCumulativeTokens[sessionID(file)] = cumulative
@@ -96,18 +124,28 @@ public struct TodayCodexUsageCollector: Sendable {
         state.fileOffsets = state.fileOffsets.filter { activePaths.contains($0.key) }
         state.updatedAt = isoString(now)
         saveState(state)
-        return TodayLiveUsageReport(day: day, tokens: state.tokens, updatedAt: state.updatedAt)
+        return TodayLiveUsageReport(
+            day: day,
+            tokens: state.tokens,
+            utcDay: state.utcBaselineComplete == true ? utcDay : nil,
+            utcTokens: state.utcBaselineComplete == true ? (state.utcTokens ?? 0) : nil,
+            updatedAt: state.updatedAt
+        )
     }
 
     private func recentJSONLFiles(codexHome: URL, now: Date) -> [URL] {
         let startOfDay = Calendar(identifier: .gregorian).dateComponents(in: timeZone, from: now)
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = timeZone
-        let cutoff = calendar.date(from: DateComponents(
+        let localCutoff = calendar.date(from: DateComponents(
             year: startOfDay.year,
             month: startOfDay.month,
             day: startOfDay.day
         )) ?? now.addingTimeInterval(-86_400)
+        var utcCalendar = Calendar(identifier: .gregorian)
+        utcCalendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let utcCutoff = utcCalendar.startOfDay(for: now)
+        let cutoff = min(localCutoff, utcCutoff)
         var result: [URL] = []
         for folder in ["sessions", "archived_sessions"] {
             let root = codexHome.appendingPathComponent(folder)
@@ -127,21 +165,23 @@ public struct TodayCodexUsageCollector: Sendable {
     private func appendedUsage(
         file: URL,
         from offset: Int64,
-        expectedDay: String,
+        expectedLocalDay: String,
+        expectedUTCDay: String,
         previousCumulative: Int?
-    ) -> (tokens: Int, nextOffset: Int64, cumulative: Int?) {
+    ) -> (localTokens: Int, utcTokens: Int, nextOffset: Int64, cumulative: Int?) {
         guard let handle = try? FileHandle(forReadingFrom: file) else {
-            return (0, offset, previousCumulative)
+            return (0, 0, offset, previousCumulative)
         }
         defer { try? handle.close() }
         do {
             try handle.seek(toOffset: UInt64(offset))
             let data = try handle.readToEnd() ?? Data()
             guard let lastNewline = data.lastIndex(of: 0x0A) else {
-                return (0, offset, previousCumulative)
+                return (0, 0, offset, previousCumulative)
             }
             let complete = data.prefix(through: lastNewline)
-            var added = 0
+            var localAdded = 0
+            var utcAdded = 0
             var cumulative = previousCumulative
             for rawLine in complete.split(separator: 0x0A) {
                 let line = Data(rawLine)
@@ -151,20 +191,23 @@ public struct TodayCodexUsageCollector: Sendable {
                       payload["type"] as? String == "token_count",
                       let info = payload["info"] as? [String: Any],
                       let totalUsage = info["total_token_usage"] as? [String: Any] else { continue }
-                if let timestamp = date(event["timestamp"]), dayString(timestamp) != expectedDay { continue }
+                guard let timestamp = date(event["timestamp"]) else { continue }
                 let current = integer(totalUsage["total_tokens"])
                 guard current > 0 else { continue }
+                let delta: Int
                 if let cumulative {
-                    if current >= cumulative { added += current - cumulative }
-                    else { added += integer((info["last_token_usage"] as? [String: Any])?["total_tokens"]) }
+                    if current >= cumulative { delta = current - cumulative }
+                    else { delta = integer((info["last_token_usage"] as? [String: Any])?["total_tokens"]) }
                 } else {
-                    added += integer((info["last_token_usage"] as? [String: Any])?["total_tokens"])
+                    delta = integer((info["last_token_usage"] as? [String: Any])?["total_tokens"])
                 }
                 cumulative = current
+                if dayString(timestamp) == expectedLocalDay { localAdded += delta }
+                if utcDayString(timestamp) == expectedUTCDay { utcAdded += delta }
             }
-            return (max(0, added), offset + Int64(complete.count), cumulative)
+            return (max(0, localAdded), max(0, utcAdded), offset + Int64(complete.count), cumulative)
         } catch {
-            return (0, offset, previousCumulative)
+            return (0, 0, offset, previousCumulative)
         }
     }
 
@@ -218,6 +261,15 @@ public struct TodayCodexUsageCollector: Sendable {
         formatter.calendar = Calendar(identifier: .gregorian)
         formatter.locale = Locale(identifier: "en_CA")
         formatter.timeZone = timeZone
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: date)
+    }
+
+    private func utcDayString(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_CA")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
         formatter.dateFormat = "yyyy-MM-dd"
         return formatter.string(from: date)
     }
