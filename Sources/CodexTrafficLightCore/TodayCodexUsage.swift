@@ -75,7 +75,13 @@ public struct TodayCodexUsageCollector: Sendable {
             state.day = day
             state.tokens = 0
         }
-        if state.utcDay != utcDay {
+        if state.utcDay == nil {
+            // A pre-1.2.75 state has no trustworthy UTC-day baseline. Start
+            // tracking now, but do not report it as complete until rollover.
+            state.utcDay = utcDay
+            state.utcTokens = 0
+            state.utcBaselineComplete = false
+        } else if state.utcDay != utcDay {
             state.utcDay = utcDay
             state.utcTokens = 0
             state.utcBaselineComplete = true

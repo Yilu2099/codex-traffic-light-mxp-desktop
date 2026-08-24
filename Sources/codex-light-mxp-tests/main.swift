@@ -1249,6 +1249,26 @@ func testTodayLiveCollectorSplitsLocalAndUTCDayAtSettlementBoundary() throws {
     try expectEqual(report.utcTokens, 60, "UTC continuation should include only usage after its own rollover")
 }
 
+func testTodayLiveCollectorDoesNotTrustLegacyMidDayStateAsUTCBaseline() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let stateURL = root.appendingPathComponent("state/today-live.json")
+    try FileManager.default.createDirectory(at: stateURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let legacyState = """
+    {"initialized":true,"day":"2026-08-25","tokens":75,"updatedAt":"2026-08-25T02:59:00.000Z","fileOffsets":{},"sessionCumulativeTokens":{}}
+    """
+    try legacyState.write(to: stateURL, atomically: true, encoding: .utf8)
+    let now = ISO8601DateFormatter().date(from: "2026-08-25T03:00:00Z")!
+
+    let report = TodayCodexUsageCollector(stateURL: stateURL).collect(
+        codexHome: root.appendingPathComponent("codex"),
+        now: now
+    )
+    try expectEqual(report.tokens, 75, "legacy local-day usage should survive migration")
+    try expectEqual(report.utcDay, nil, "legacy state must not invent a complete UTC-day baseline")
+    try expectEqual(report.utcTokens, nil, "legacy state must wait for a real rollover before reporting UTC usage")
+}
+
 func testGrindHistoryIncrementalCollectorStartsAtEOF() throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     let sessions = root.appendingPathComponent("codex/sessions/2026/08/23")
@@ -1607,6 +1627,7 @@ let tests: [(String, () throws -> Void)] = [
     ("grind history reads event timestamps only", testGrindHistoryCollectorReadsOnlyEventTimestamps),
     ("today live collector tails appended usage only", testTodayLiveCollectorStartsAtEOFAndCountsOnlyAppendedUsage),
     ("today live collector splits local and UTC days", testTodayLiveCollectorSplitsLocalAndUTCDayAtSettlementBoundary),
+    ("today live collector protects legacy UTC baseline", testTodayLiveCollectorDoesNotTrustLegacyMidDayStateAsUTCBaseline),
     ("grind history collector tails appended interactions only", testGrindHistoryIncrementalCollectorStartsAtEOF),
     ("project audit sanitizes workspace and session", testProjectActivityStoreKeepsOnlySanitizedProjectAudit),
     ("project input ledger filters and acknowledges human text", testProjectActivityBuildsReliableHumanInputOutbox),
