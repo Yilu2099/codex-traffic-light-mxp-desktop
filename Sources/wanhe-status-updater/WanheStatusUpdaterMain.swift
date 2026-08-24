@@ -31,6 +31,7 @@ struct ProcessResult {
     var output: String
 }
 
+
 @main
 struct WanheStatusUpdater {
     static let appLabel = "com.codex.traffic-light-mxp"
@@ -51,7 +52,22 @@ struct WanheStatusUpdater {
                 appendLog("checked: current=\(ClientVersion.current) latest=\(manifest.latestVersion) available=false")
                 return
             }
-            try await install(manifest, configuration: configuration)
+            let ledger = UpdateLedger()
+            if let version = manifest.version, let wait = ledger.waitBefore(retrying: version) {
+                if wait.isInfinite {
+                    appendLog("skip: \(version) exhausted every retry; publish a new version to resume")
+                } else {
+                    appendLog("skip: \(version) failed recently, retrying in \(Int(wait.rounded()))s")
+                }
+                return
+            }
+            do {
+                try await install(manifest, configuration: configuration)
+                ledger.clear()
+            } catch {
+                if let version = manifest.version { ledger.recordFailure(version: version) }
+                throw error
+            }
         } catch {
             appendLog("failed: \(error)")
             await report(configuration, version: ClientVersion.current, status: "failed", error: String(describing: error))
@@ -129,7 +145,30 @@ struct WanheStatusUpdater {
         }
 
         appendLog("installed: \(ClientVersion.current) -> \(version) mandatory=\(manifest.mandatory)")
+        prune(appRoot: appRoot, releases: releases, keeping: [version, previousTarget.map(rollbackVersion)].compactMap { $0 })
         await report(configuration, version: version, status: "installed", error: nil)
+    }
+
+    /// `current` -> "releases/1.2.71" ; we only need the version component to keep one rollback target.
+    static func rollbackVersion(_ symlinkTarget: String) -> String {
+        (symlinkTarget as NSString).lastPathComponent
+    }
+
+    // Every install used to leave its predecessor on disk forever, plus one `failed-<version>-<ts>`
+    // directory per retry. After dozens of releases that is gigabytes of dead weight on each Mac.
+    static func prune(appRoot: URL, releases: URL, keeping: [String]) {
+        let fileManager = FileManager.default
+        let keep = Set(keeping)
+        for name in (try? fileManager.contentsOfDirectory(atPath: releases.path)) ?? [] where !keep.contains(name) {
+            let victim = releases.appendingPathComponent(name, isDirectory: true)
+            if (try? fileManager.removeItem(at: victim)) == nil {
+                appendLog("prune: could not remove releases/\(name)")
+            }
+        }
+        for name in (try? fileManager.contentsOfDirectory(atPath: appRoot.path)) ?? []
+        where name.hasPrefix("failed-") {
+            try? fileManager.removeItem(at: appRoot.appendingPathComponent(name, isDirectory: true))
+        }
     }
 
     static func validatePayload(_ payload: URL, version: String) throws {

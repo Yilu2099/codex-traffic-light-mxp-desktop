@@ -1263,6 +1263,43 @@ func testClientUpdateManifestDefaultsToFiveMinutes() throws {
     try expectEqual(manifest.checkAfterSeconds, 300, "client update checks should default to five minutes")
 }
 
+func testUpdateLedgerBacksOffFailingVersion() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("codex-update-ledger-tests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let ledger = UpdateLedger(url: root.appendingPathComponent("update-attempts.json"))
+    let start = Date(timeIntervalSince1970: 1_780_000_000)
+
+    try expect(ledger.waitBefore(retrying: "1.2.80", now: start) == nil, "a version with no history should be attempted immediately")
+
+    ledger.recordFailure(version: "1.2.80", now: start)
+    try expectEqual(ledger.waitBefore(retrying: "1.2.80", now: start.addingTimeInterval(60)) ?? 0, 240, "the first failure should hold the retry for five minutes")
+    try expect(ledger.waitBefore(retrying: "1.2.80", now: start.addingTimeInterval(300)) == nil, "the retry should open once the backoff elapses")
+    try expect(ledger.waitBefore(retrying: "1.2.81", now: start) == nil, "a different version must not inherit the backoff")
+
+    // The second failure moves to the 15 minute step instead of repeating the five minute one.
+    let second = start.addingTimeInterval(300)
+    ledger.recordFailure(version: "1.2.80", now: second)
+    try expectEqual(ledger.load()?.failureCount ?? 0, 2, "consecutive failures of one version accumulate")
+    try expect(ledger.waitBefore(retrying: "1.2.80", now: second.addingTimeInterval(600)) != nil, "the second failure should still be waiting after ten minutes")
+    try expect(ledger.waitBefore(retrying: "1.2.80", now: second.addingTimeInterval(900)) == nil, "the second failure should reopen after fifteen minutes")
+
+    // A newly published version starts its own count rather than stacking onto the old one.
+    ledger.recordFailure(version: "1.2.90", now: second)
+    try expectEqual(ledger.load()?.failureCount ?? 0, 1, "a new version starts its own backoff")
+
+    ledger.clear()
+    var exhausted = start
+    for _ in 0..<(UpdateLedger.backoffSeconds.count + 1) {
+        ledger.recordFailure(version: "1.2.99", now: exhausted)
+        exhausted = exhausted.addingTimeInterval(86_400)
+    }
+    try expect(ledger.waitBefore(retrying: "1.2.99", now: exhausted)?.isInfinite == true, "a version that burned through every step should stop retrying")
+
+    ledger.clear()
+    try expect(ledger.waitBefore(retrying: "1.2.99", now: exhausted) == nil, "a successful install clears the ledger")
+}
+
 func testClientUpdateConfigurationUsesTeamServerOrigin() throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     let configURL = root.appendingPathComponent("config.env")
@@ -1525,7 +1562,8 @@ let tests: [(String, () throws -> Void)] = [
     ("client version comparison", testClientVersionComparison),
     ("client update signature verification", testClientUpdateVerifierAcceptsReleaseSignature),
     ("client update defaults to five minutes", testClientUpdateManifestDefaultsToFiveMinutes),
-    ("client update configuration", testClientUpdateConfigurationUsesTeamServerOrigin)
+    ("client update configuration", testClientUpdateConfigurationUsesTeamServerOrigin),
+    ("update ledger backs off a failing version", testUpdateLedgerBacksOffFailingVersion)
 ]
 
 var failures = 0

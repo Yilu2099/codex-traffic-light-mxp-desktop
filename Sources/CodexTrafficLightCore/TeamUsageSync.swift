@@ -123,7 +123,15 @@ public struct TeamDeviceIdentity: Codable, Equatable, Sendable {
         self.legacyIDs = legacyIDs
     }
 
-    public static func current() -> TeamDeviceIdentity {
+    // Model identifier, product name and IOPlatformUUID cannot change while the process is
+    // alive, but current() sits on the 15-second presence path and used to re-run
+    // system_profiler + ioreg every time — roughly 13,000 subprocess spawns per Mac per day,
+    // burned even while offline, because it runs before the network call. Probe once instead.
+    private static let cached = probe()
+
+    public static func current() -> TeamDeviceIdentity { cached }
+
+    private static func probe() -> TeamDeviceIdentity {
         let hardware = systemProfilerHardware()
         let modelIdentifier = hardware.modelIdentifier.isEmpty ? sysctlString("hw.model") : hardware.modelIdentifier
         let productName = hardware.productName.isEmpty ? friendlyProductName(for: modelIdentifier) : hardware.productName
