@@ -963,8 +963,8 @@ func testTeamUsageCollectorBuildsDailySessionDelta() throws {
         configuration: configuration,
         device: device
     )
-    try expectEqual(sessions.count, 2, "collector should split one session at Hong Kong midnight")
-    try expectEqual(sessions.map(\.day), ["2026-08-21", "2026-08-22"], "collector should use Hong Kong calendar days")
+    try expectEqual(sessions.count, 2, "collector should split one session at Beijing midnight")
+    try expectEqual(sessions.map(\.day), ["2026-08-21", "2026-08-22"], "collector should use Beijing calendar days")
     try expectEqual(sessions.map(\.utcDay), ["2026-08-21", "2026-08-21"], "collector should retain the matching official UTC bucket")
     try expectEqual(sessions.map(\.totalTokens), [180, 40], "collector should add cumulative deltas without double counting")
     try expectEqual(sessions.first?.model, "gpt-5.6-sol", "collector should preserve the session model")
@@ -1481,10 +1481,10 @@ func testOfficialUsageRefreshPolicyTracksUTCSettlement() throws {
         updatedAt: "2026-08-23T00:00:00Z"
     )
     try expectEqual(OfficialUsageRefreshPolicy.expectedSettledDay(now: now), "2026-08-22", "expected official day should be the completed UTC day")
-    try expectEqual(OfficialUsageRefreshPolicy.cacheAge(for: delayed, now: now), 5 * 60, "delayed bucket should refresh every five minutes after Hong Kong 08:05")
+    try expectEqual(OfficialUsageRefreshPolicy.cacheAge(for: delayed, now: now), 5 * 60, "delayed bucket should refresh every five minutes after Beijing 08:05")
     try expectEqual(OfficialUsageRefreshPolicy.cacheAge(for: settled, now: now), 2 * 60 * 60, "settled bucket should return to normal cache age")
     let later = formatter.date(from: "2026-08-23T02:00:00Z")!
-    try expectEqual(OfficialUsageRefreshPolicy.cacheAge(for: delayed, now: later), 30 * 60, "delayed bucket should reduce polling after Hong Kong 10:00")
+    try expectEqual(OfficialUsageRefreshPolicy.cacheAge(for: delayed, now: later), 30 * 60, "delayed bucket should reduce polling after Beijing 10:00")
 }
 
 let tests: [(String, () throws -> Void)] = [

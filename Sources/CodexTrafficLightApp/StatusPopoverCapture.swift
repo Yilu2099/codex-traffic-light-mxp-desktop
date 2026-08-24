@@ -36,7 +36,7 @@ enum StatusPopoverCapture {
         }
         let timeFormatter = DateFormatter()
         timeFormatter.locale = Locale(identifier: "en_US_POSIX")
-        timeFormatter.timeZone = TimeZone(identifier: "Asia/Hong_Kong")
+        timeFormatter.timeZone = TimeZone(identifier: "Asia/Shanghai")
         timeFormatter.dateFormat = "HH:mm"
         let recentActive = timeFormatter.string(from: now.addingTimeInterval(-5 * 60))
         let rankingJSON: String

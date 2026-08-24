@@ -758,7 +758,7 @@ public struct CodexTeamUsageCollector: Sendable {
         let formatter = DateFormatter()
         formatter.calendar = Calendar(identifier: .gregorian)
         formatter.locale = Locale(identifier: "en_CA")
-        formatter.timeZone = TimeZone(identifier: "Asia/Hong_Kong")
+        formatter.timeZone = TimeZone(identifier: "Asia/Shanghai")
         formatter.dateFormat = "yyyy-MM-dd"
         return formatter.string(from: date)
     }
