@@ -157,18 +157,13 @@ struct WanheStatusUpdater {
     // Every install used to leave its predecessor on disk forever, plus one `failed-<version>-<ts>`
     // directory per retry. After dozens of releases that is gigabytes of dead weight on each Mac.
     static func prune(appRoot: URL, releases: URL, keeping: [String]) {
-        let fileManager = FileManager.default
-        let keep = Set(keeping)
-        for name in (try? fileManager.contentsOfDirectory(atPath: releases.path)) ?? [] where !keep.contains(name) {
-            let victim = releases.appendingPathComponent(name, isDirectory: true)
-            if (try? fileManager.removeItem(at: victim)) == nil {
-                appendLog("prune: could not remove releases/\(name)")
-            }
-        }
-        for name in (try? fileManager.contentsOfDirectory(atPath: appRoot.path)) ?? []
-        where name.hasPrefix("failed-") {
-            try? fileManager.removeItem(at: appRoot.appendingPathComponent(name, isDirectory: true))
-        }
+        let previous = keeping.first { $0 != ClientVersion.current }
+        let result = ClientReleaseRetention.prune(
+            appRoot: appRoot,
+            currentVersion: ClientVersion.current,
+            previousVersion: previous
+        )
+        for name in result.failures { appendLog("prune: could not remove \(name)") }
     }
 
     static func validatePayload(_ payload: URL, version: String) throws {

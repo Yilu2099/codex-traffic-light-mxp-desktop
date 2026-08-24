@@ -1300,6 +1300,24 @@ func testUpdateLedgerBacksOffFailingVersion() throws {
     try expect(ledger.waitBefore(retrying: "1.2.99", now: exhausted) == nil, "a successful install clears the ledger")
 }
 
+func testClientReleaseRetentionCleansOnFirstNewAppLaunch() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("codex-release-retention-tests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let releases = root.appendingPathComponent("releases", isDirectory: true)
+    try FileManager.default.createDirectory(at: releases, withIntermediateDirectories: true)
+    for name in ["1.2.70", "1.2.72", "1.2.73", "1.2.74", "1.2.99", "notes"] {
+        try FileManager.default.createDirectory(at: releases.appendingPathComponent(name), withIntermediateDirectories: true)
+    }
+    try FileManager.default.createDirectory(at: root.appendingPathComponent("failed-1.2.74-123"), withIntermediateDirectories: true)
+
+    let result = ClientReleaseRetention.prune(appRoot: root, currentVersion: "1.2.74")
+    let remaining = try FileManager.default.contentsOfDirectory(atPath: releases.path).sorted()
+    try expectEqual(remaining, ["1.2.73", "1.2.74", "notes"], "startup cleanup should keep current, previous and unknown directories")
+    try expect(result.failures.isEmpty, "startup cleanup should remove test directories without failures")
+    try expectEqual(result.removed.count, 4, "startup cleanup should remove three stale releases and one failed directory")
+}
+
 func testClientUpdateConfigurationUsesTeamServerOrigin() throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     let configURL = root.appendingPathComponent("config.env")
@@ -1563,7 +1581,8 @@ let tests: [(String, () throws -> Void)] = [
     ("client update signature verification", testClientUpdateVerifierAcceptsReleaseSignature),
     ("client update defaults to five minutes", testClientUpdateManifestDefaultsToFiveMinutes),
     ("client update configuration", testClientUpdateConfigurationUsesTeamServerOrigin),
-    ("update ledger backs off a failing version", testUpdateLedgerBacksOffFailingVersion)
+    ("update ledger backs off a failing version", testUpdateLedgerBacksOffFailingVersion),
+    ("client release retention cleans on launch", testClientReleaseRetentionCleansOnFirstNewAppLaunch)
 ]
 
 var failures = 0

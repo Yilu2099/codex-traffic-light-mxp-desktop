@@ -2,7 +2,7 @@ import CryptoKit
 import Foundation
 
 public enum ClientVersion {
-    public static let current = "1.2.73"
+    public static let current = "1.2.74"
     public static let signingPublicKeyBase64 = "kx2EJhi8RR4A+CTuoSs4Fx5f59+oicxN5z9wMPra3nc="
 
     public static func compare(_ left: String, _ right: String) -> ComparisonResult {
@@ -187,5 +187,66 @@ public struct UpdateLedger {
 
     public func clear() {
         try? FileManager.default.removeItem(at: url)
+    }
+}
+
+public struct ClientReleasePruneResult: Equatable, Sendable {
+    public var removed: [String]
+    public var failures: [String]
+
+    public init(removed: [String], failures: [String]) {
+        self.removed = removed
+        self.failures = failures
+    }
+}
+
+/// Cleanup must also run from the newly installed app. The updater that performs the first
+/// upgrade may itself be old and therefore cannot execute cleanup code shipped in the package.
+public enum ClientReleaseRetention {
+    public static var defaultAppRoot: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".wanhe-codex-token/app", isDirectory: true)
+    }
+
+    public static func prune(
+        appRoot: URL = defaultAppRoot,
+        currentVersion: String = ClientVersion.current,
+        previousVersion: String? = nil
+    ) -> ClientReleasePruneResult {
+        let fileManager = FileManager.default
+        let releases = appRoot.appendingPathComponent("releases", isDirectory: true)
+        let names = (try? fileManager.contentsOfDirectory(atPath: releases.path)) ?? []
+        let versionNames = names.filter(isVersionDirectory)
+        let automaticPrevious = versionNames
+            .filter { ClientVersion.compare($0, currentVersion) == .orderedAscending }
+            .sorted { ClientVersion.compare($0, $1) == .orderedDescending }
+            .first
+        let keep = Set([currentVersion, previousVersion ?? automaticPrevious].compactMap { $0 })
+        var removed: [String] = []
+        var failures: [String] = []
+
+        for name in versionNames where !keep.contains(name) {
+            do {
+                try fileManager.removeItem(at: releases.appendingPathComponent(name, isDirectory: true))
+                removed.append("releases/\(name)")
+            } catch {
+                failures.append("releases/\(name)")
+            }
+        }
+        for name in (try? fileManager.contentsOfDirectory(atPath: appRoot.path)) ?? []
+        where name.hasPrefix("failed-") {
+            do {
+                try fileManager.removeItem(at: appRoot.appendingPathComponent(name, isDirectory: true))
+                removed.append(name)
+            } catch {
+                failures.append(name)
+            }
+        }
+        return ClientReleasePruneResult(removed: removed.sorted(), failures: failures.sorted())
+    }
+
+    private static func isVersionDirectory(_ name: String) -> Bool {
+        let parts = name.split(separator: ".", omittingEmptySubsequences: false)
+        return parts.count >= 3 && parts.allSatisfy { Int($0) != nil }
     }
 }

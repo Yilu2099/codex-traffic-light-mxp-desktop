@@ -36,6 +36,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
         statusBar.delegate = self
         currentSnapshot = store.read()
         statusBar.apply(snapshot: currentSnapshot)
+        DispatchQueue.global(qos: .utility).async {
+            let result = ClientReleaseRetention.prune()
+            if !result.removed.isEmpty {
+                AppDelegate.appendTeamSyncLog("release cleanup removed \(result.removed.count) old paths")
+            }
+            for name in result.failures {
+                AppDelegate.appendTeamSyncLog("release cleanup failed: \(name)")
+            }
+        }
 
         Timer.scheduledTimer(
             timeInterval: 1.5,
