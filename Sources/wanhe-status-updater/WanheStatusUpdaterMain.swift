@@ -271,18 +271,9 @@ struct WanheStatusUpdater {
     }
 
     static func appendLog(_ line: String) {
-        let fileManager = FileManager.default
-        let url = fileManager.homeDirectoryForCurrentUser
+        let url = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".wanhe-codex-token/logs/updater.log")
-        try? fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         let timestamp = ISO8601DateFormatter().string(from: Date())
-        let data = Data("\(timestamp) \(line)\n".utf8)
-        if fileManager.fileExists(atPath: url.path), let handle = try? FileHandle(forWritingTo: url) {
-            defer { try? handle.close() }
-            _ = try? handle.seekToEnd()
-            try? handle.write(contentsOf: data)
-        } else {
-            try? data.write(to: url, options: .atomic)
-        }
+        BoundedLog.append("\(timestamp) \(line)\n", to: url)
     }
 }

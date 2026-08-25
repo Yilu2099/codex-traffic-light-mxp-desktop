@@ -1,5 +1,6 @@
 import Foundation
 import CodexTrafficLightCore
+import Dispatch
 
 struct TestFailure: Error, CustomStringConvertible {
     let description: String
@@ -1214,6 +1215,7 @@ func testTodayLiveCollectorStartsAtEOFAndCountsOnlyAppendedUsage() throws {
     try expectEqual(unchanged.tokens, 50, "collector should not count an appended event twice")
     let persisted = try String(contentsOf: stateURL, encoding: .utf8)
     try expect(!persisted.contains("private text"), "collector state must never persist conversation text")
+    try expect(persisted.contains("11111111-1111-1111-1111-111111111111"), "active cumulative session state must survive pruning")
 }
 
 func testTodayLiveCollectorSplitsLocalAndUTCDayAtSettlementBoundary() throws {
@@ -1255,7 +1257,7 @@ func testTodayLiveCollectorDoesNotTrustLegacyMidDayStateAsUTCBaseline() throws {
     try FileManager.default.createDirectory(at: stateURL.deletingLastPathComponent(), withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: root) }
     let legacyState = """
-    {"initialized":true,"day":"2026-08-25","tokens":75,"updatedAt":"2026-08-25T02:59:00.000Z","fileOffsets":{},"sessionCumulativeTokens":{}}
+    {"initialized":true,"day":"2026-08-25","tokens":75,"updatedAt":"2026-08-25T02:59:00.000Z","fileOffsets":{},"sessionCumulativeTokens":{"stale-session":123}}
     """
     try legacyState.write(to: stateURL, atomically: true, encoding: .utf8)
     let now = ISO8601DateFormatter().date(from: "2026-08-25T03:00:00Z")!
@@ -1267,6 +1269,7 @@ func testTodayLiveCollectorDoesNotTrustLegacyMidDayStateAsUTCBaseline() throws {
     try expectEqual(report.tokens, 75, "legacy local-day usage should survive migration")
     try expectEqual(report.utcDay, nil, "legacy state must not invent a complete UTC-day baseline")
     try expectEqual(report.utcTokens, nil, "legacy state must wait for a real rollover before reporting UTC usage")
+    try expect(!(try String(contentsOf: stateURL, encoding: .utf8)).contains("stale-session"), "inactive cumulative sessions should be pruned from collector state")
 }
 
 func testGrindHistoryIncrementalCollectorStartsAtEOF() throws {
@@ -1356,21 +1359,102 @@ func testUpdateLedgerBacksOffFailingVersion() throws {
 }
 
 func testClientReleaseRetentionCleansOnFirstNewAppLaunch() throws {
-    let root = FileManager.default.temporaryDirectory
+    let tokenRoot = FileManager.default.temporaryDirectory
         .appendingPathComponent("codex-release-retention-tests-\(UUID().uuidString)", isDirectory: true)
-    defer { try? FileManager.default.removeItem(at: root) }
+    let root = tokenRoot.appendingPathComponent("app", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: tokenRoot) }
     let releases = root.appendingPathComponent("releases", isDirectory: true)
     try FileManager.default.createDirectory(at: releases, withIntermediateDirectories: true)
-    for name in ["1.2.70", "1.2.72", "1.2.73", "1.2.74", "1.2.99", "notes"] {
+    for name in ["1.2.70", "1.2.72", "1.2.73", "1.2.74", "1.2.98", "1.2.99", "notes"] {
         try FileManager.default.createDirectory(at: releases.appendingPathComponent(name), withIntermediateDirectories: true)
     }
-    try FileManager.default.createDirectory(at: root.appendingPathComponent("failed-1.2.74-123"), withIntermediateDirectories: true)
+    for name in [
+        "failed-1.2.74-123", "staging-abcd", ".install-1.2.74.abcd",
+        "replaced-1.2.0-20260822", "pre-auto-update-backup-20260821",
+    ] {
+        try FileManager.default.createDirectory(at: root.appendingPathComponent(name), withIntermediateDirectories: true)
+    }
+    try FileManager.default.createDirectory(at: root.appendingPathComponent("staging-active"), withIntermediateDirectories: true)
+    try FileManager.default.createSymbolicLink(
+        atPath: root.appendingPathComponent("current").path,
+        withDestinationPath: "releases/1.2.74"
+    )
+    let staleDate = Date().addingTimeInterval(-90_000)
+    for url in [
+        root.appendingPathComponent("staging-abcd"),
+        root.appendingPathComponent(".install-1.2.74.abcd"),
+        releases.appendingPathComponent("1.2.98"),
+    ] {
+        try FileManager.default.setAttributes(
+            [.modificationDate: staleDate],
+            ofItemAtPath: url.path
+        )
+    }
+    try Data("legacy".utf8).write(to: tokenRoot.appendingPathComponent("usage-cache.json"))
 
     let result = ClientReleaseRetention.prune(appRoot: root, currentVersion: "1.2.74")
     let remaining = try FileManager.default.contentsOfDirectory(atPath: releases.path).sorted()
-    try expectEqual(remaining, ["1.2.73", "1.2.74", "notes"], "startup cleanup should keep current, previous and unknown directories")
+    try expectEqual(remaining, ["1.2.73", "1.2.74", "1.2.99", "notes"], "startup cleanup should protect a fresh newer release during the updater handoff")
+    try expect(FileManager.default.fileExists(atPath: root.appendingPathComponent("staging-active").path), "an active staging directory must not be removed")
     try expect(result.failures.isEmpty, "startup cleanup should remove test directories without failures")
-    try expectEqual(result.removed.count, 4, "startup cleanup should remove three stale releases and one failed directory")
+    try expectEqual(result.removed.count, 9, "startup cleanup should remove stale releases, installer leftovers and legacy cache")
+    try expect(!FileManager.default.fileExists(atPath: tokenRoot.appendingPathComponent("usage-cache.json").path), "legacy usage cache should be removed")
+}
+
+func testClientReleaseRetentionPreservesOnlyRecoveryCopy() throws {
+    let tokenRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent("codex-release-recovery-tests-\(UUID().uuidString)", isDirectory: true)
+    let root = tokenRoot.appendingPathComponent("app", isDirectory: true)
+    let releases = root.appendingPathComponent("releases", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: tokenRoot) }
+    try FileManager.default.createDirectory(at: releases.appendingPathComponent("1.2.77"), withIntermediateDirectories: true)
+    try FileManager.default.createSymbolicLink(
+        atPath: root.appendingPathComponent("current").path,
+        withDestinationPath: "releases/1.2.77"
+    )
+    for name in ["replaced-1.2.77-reinstall", "pre-auto-update-backup-first-install"] {
+        try FileManager.default.createDirectory(at: root.appendingPathComponent(name), withIntermediateDirectories: true)
+    }
+
+    let result = ClientReleaseRetention.prune(appRoot: root, currentVersion: "1.2.77")
+    try expect(result.failures.isEmpty, "a single-release cleanup should not fail")
+    try expect(FileManager.default.fileExists(atPath: root.appendingPathComponent("replaced-1.2.77-reinstall").path), "the only reinstall recovery copy must remain")
+    try expect(FileManager.default.fileExists(atPath: root.appendingPathComponent("pre-auto-update-backup-first-install").path), "the only legacy install backup must remain")
+}
+
+func testBoundedLogRotatesBeforeExceedingLimit() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("bounded-log-\(UUID().uuidString)")
+    let log = root.appendingPathComponent("test.log")
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    BoundedLog.append("first\n", to: log, maximumBytes: 10)
+    BoundedLog.append("second\n", to: log, maximumBytes: 10)
+
+    try expectEqual(try String(contentsOf: log, encoding: .utf8), "second\n", "active log should contain the newest segment")
+    try expectEqual(try String(contentsOf: log.appendingPathExtension("previous"), encoding: .utf8), "first\n", "one rotated segment should remain available")
+}
+
+func testBoundedLogCapsOversizedAndSerializesConcurrentWrites() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("bounded-log-concurrent-\(UUID().uuidString)")
+    let oversizedLog = root.appendingPathComponent("oversized.log")
+    let concurrentLog = root.appendingPathComponent("concurrent.log")
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    BoundedLog.append(Data(repeating: 65, count: 32), to: oversizedLog, maximumBytes: 10)
+    try expectEqual((try Data(contentsOf: oversizedLog)).count, 10, "a single oversized entry must be truncated to the hard limit")
+
+    let group = DispatchGroup()
+    for index in 0..<100 {
+        group.enter()
+        DispatchQueue.global().async {
+            BoundedLog.append("line-\(index)\n", to: concurrentLog, maximumBytes: 100_000)
+            group.leave()
+        }
+    }
+    group.wait()
+    let lines = try String(contentsOf: concurrentLog, encoding: .utf8).split(separator: "\n")
+    try expectEqual(lines.count, 100, "file locking must preserve every concurrent append")
+    try expectEqual(Set(lines).count, 100, "concurrent appends must not overwrite one another")
 }
 
 func testClientUpdateConfigurationUsesTeamServerOrigin() throws {
@@ -1485,6 +1569,20 @@ func testProjectActivityDoesNotInventPurposeForGenericProjectName() throws {
     try store.record(workspace: repository.path, taskID: "session:test", now: now)
     let purpose = store.report(days: 30, now: now).first?.purpose
     try expectEqual(purpose, nil, "generic project names must wait for a real Codex summary or administrator confirmation")
+}
+
+func testProjectActivityUsesNeutralPropertyPurpose() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("codex-property-project-\(UUID().uuidString)")
+    let repository = root.appendingPathComponent("香港房产")
+    let activityURL = root.appendingPathComponent("support/project-activity.json")
+    try FileManager.default.createDirectory(at: repository.appendingPathComponent(".git"), withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let store = ProjectActivityStore(activityURL: activityURL)
+    let now = Date()
+    try store.record(workspace: repository.path, taskID: "session:test", now: now)
+    let purpose = store.report(days: 30, now: now).first?.purpose
+    try expectEqual(purpose, "楼盘查询、估价与找房服务的产品研发项目", "project purpose should stay neutral for the whole team")
 }
 
 func testProjectActivityBaselineIsMetadataOnlyAndBounded() throws {
@@ -1632,6 +1730,7 @@ let tests: [(String, () throws -> Void)] = [
     ("project audit sanitizes workspace and session", testProjectActivityStoreKeepsOnlySanitizedProjectAudit),
     ("project input ledger filters and acknowledges human text", testProjectActivityBuildsReliableHumanInputOutbox),
     ("project audit does not invent generic purpose", testProjectActivityDoesNotInventPurposeForGenericProjectName),
+    ("project audit uses neutral property purpose", testProjectActivityUsesNeutralPropertyPurpose),
     ("project input baseline is metadata-only and bounded", testProjectActivityBaselineIsMetadataOnlyAndBounded),
     ("desktop monitor installer migrates packaged monitor", testDesktopMonitorInstallerMigratesPackagedMonitor),
     ("client version comparison", testClientVersionComparison),
@@ -1639,7 +1738,10 @@ let tests: [(String, () throws -> Void)] = [
     ("client update defaults to five minutes", testClientUpdateManifestDefaultsToFiveMinutes),
     ("client update configuration", testClientUpdateConfigurationUsesTeamServerOrigin),
     ("update ledger backs off a failing version", testUpdateLedgerBacksOffFailingVersion),
-    ("client release retention cleans on launch", testClientReleaseRetentionCleansOnFirstNewAppLaunch)
+    ("client release retention cleans on launch", testClientReleaseRetentionCleansOnFirstNewAppLaunch),
+    ("client release retention preserves recovery", testClientReleaseRetentionPreservesOnlyRecoveryCopy),
+    ("bounded logs rotate", testBoundedLogRotatesBeforeExceedingLimit),
+    ("bounded logs cap and serialize", testBoundedLogCapsOversizedAndSerializesConcurrentWrites)
 ]
 
 var failures = 0

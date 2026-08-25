@@ -2,7 +2,7 @@ import CryptoKit
 import Foundation
 
 public enum ClientVersion {
-    public static let current = "1.2.76"
+    public static let current = "1.2.77"
     public static let signingPublicKeyBase64 = "kx2EJhi8RR4A+CTuoSs4Fx5f59+oicxN5z9wMPra3nc="
 
     public static func compare(_ left: String, _ right: String) -> ComparisonResult {
@@ -217,29 +217,64 @@ public enum ClientReleaseRetention {
         let releases = appRoot.appendingPathComponent("releases", isDirectory: true)
         let names = (try? fileManager.contentsOfDirectory(atPath: releases.path)) ?? []
         let versionNames = names.filter(isVersionDirectory)
+        let currentTargetVersion: String? = {
+            guard let destination = try? fileManager.destinationOfSymbolicLink(
+                atPath: appRoot.appendingPathComponent("current").path
+            ) else { return nil }
+            let resolved = URL(fileURLWithPath: destination, relativeTo: appRoot).standardizedFileURL
+            guard resolved.deletingLastPathComponent().standardizedFileURL == releases.standardizedFileURL,
+                  isVersionDirectory(resolved.lastPathComponent) else { return nil }
+            return resolved.lastPathComponent
+        }()
         let automaticPrevious = versionNames
             .filter { ClientVersion.compare($0, currentVersion) == .orderedAscending }
             .sorted { ClientVersion.compare($0, $1) == .orderedDescending }
             .first
-        let keep = Set([currentVersion, previousVersion ?? automaticPrevious].compactMap { $0 })
+        let keep = Set([currentVersion, previousVersion ?? automaticPrevious, currentTargetVersion].compactMap { $0 })
+        let currentReleaseIsValid = currentTargetVersion == currentVersion
+            && fileManager.fileExists(atPath: releases.appendingPathComponent(currentVersion).path)
+        let hasRollbackRelease = keep.contains { version in
+            version != currentVersion && fileManager.fileExists(atPath: releases.appendingPathComponent(version).path)
+        }
+        let canDiscardInstallerBackups = currentReleaseIsValid && hasRollbackRelease
         var removed: [String] = []
         var failures: [String] = []
 
-        for name in versionNames where !keep.contains(name) {
+        func remove(_ name: String, at url: URL) {
             do {
-                try fileManager.removeItem(at: releases.appendingPathComponent(name, isDirectory: true))
-                removed.append("releases/\(name)")
-            } catch {
-                failures.append("releases/\(name)")
-            }
-        }
-        for name in (try? fileManager.contentsOfDirectory(atPath: appRoot.path)) ?? []
-        where name.hasPrefix("failed-") {
-            do {
-                try fileManager.removeItem(at: appRoot.appendingPathComponent(name, isDirectory: true))
+                try fileManager.removeItem(at: url)
                 removed.append(name)
             } catch {
                 failures.append(name)
+            }
+        }
+
+        for name in versionNames where !keep.contains(name) {
+            let url = releases.appendingPathComponent(name, isDirectory: true)
+            let isNewerThanRunningApp = ClientVersion.compare(name, currentVersion) == .orderedDescending
+            if isNewerThanRunningApp && !isOlderThanOneDay(url, fileManager: fileManager) { continue }
+            remove("releases/\(name)", at: url)
+        }
+        let appNames = (try? fileManager.contentsOfDirectory(atPath: appRoot.path)) ?? []
+        for name in appNames where name.hasPrefix("failed-") {
+            remove(name, at: appRoot.appendingPathComponent(name, isDirectory: true))
+        }
+        for name in appNames where name.hasPrefix("staging-") || name.hasPrefix(".install-") {
+            let url = appRoot.appendingPathComponent(name, isDirectory: true)
+            if isOlderThanOneDay(url, fileManager: fileManager) { remove(name, at: url) }
+        }
+        if canDiscardInstallerBackups {
+            for name in appNames where name.hasPrefix("replaced-") || name.hasPrefix("pre-auto-update-backup-") {
+                remove(name, at: appRoot.appendingPathComponent(name, isDirectory: true))
+            }
+        }
+        let legacyUsageCache = appRoot.deletingLastPathComponent().appendingPathComponent("usage-cache.json")
+        if fileManager.fileExists(atPath: legacyUsageCache.path) {
+            do {
+                try fileManager.removeItem(at: legacyUsageCache)
+                removed.append("usage-cache.json")
+            } catch {
+                failures.append("usage-cache.json")
             }
         }
         return ClientReleasePruneResult(removed: removed.sorted(), failures: failures.sorted())
@@ -248,5 +283,11 @@ public enum ClientReleaseRetention {
     private static func isVersionDirectory(_ name: String) -> Bool {
         let parts = name.split(separator: ".", omittingEmptySubsequences: false)
         return parts.count >= 3 && parts.allSatisfy { Int($0) != nil }
+    }
+
+    private static func isOlderThanOneDay(_ url: URL, fileManager: FileManager) -> Bool {
+        guard let attributes = try? fileManager.attributesOfItem(atPath: url.path),
+              let modifiedAt = attributes[.modificationDate] as? Date else { return false }
+        return modifiedAt <= Date().addingTimeInterval(-86_400)
     }
 }

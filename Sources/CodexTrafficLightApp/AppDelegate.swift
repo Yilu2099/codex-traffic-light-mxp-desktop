@@ -330,30 +330,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
         let url = StateStore.defaultSupportDirectory().appendingPathComponent("quota-mxp.log")
         try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         let timestamp = ISO8601DateFormatter().string(from: Date())
-        let data = "\(timestamp) \(line)\n".data(using: .utf8)!
-        if FileManager.default.fileExists(atPath: url.path),
-           let handle = try? FileHandle(forWritingTo: url) {
-            defer { try? handle.close() }
-            _ = try? handle.seekToEnd()
-            try? handle.write(contentsOf: data)
-        } else {
-            try? data.write(to: url, options: [.atomic])
-        }
+        BoundedLog.append("\(timestamp) \(line)\n", to: url)
     }
 
     private nonisolated static func appendTeamSyncLog(_ line: String) {
         let url = StateStore.defaultSupportDirectory().appendingPathComponent("team-sync.log")
         try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         let timestamp = ISO8601DateFormatter().string(from: Date())
-        let data = "\(timestamp) \(line)\n".data(using: .utf8)!
-        if FileManager.default.fileExists(atPath: url.path),
-           let handle = try? FileHandle(forWritingTo: url) {
-            defer { try? handle.close() }
-            _ = try? handle.seekToEnd()
-            try? handle.write(contentsOf: data)
-        } else {
-            try? data.write(to: url, options: [.atomic])
-        }
+        BoundedLog.append("\(timestamp) \(line)\n", to: url)
     }
 
     private nonisolated static func ensureUpdaterSchedule() {

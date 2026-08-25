@@ -200,7 +200,7 @@ public final class ProjectActivityStore {
             return ("面向股票研究、选股与买卖点辅助的智能工具", 1_000)
         }
         if normalized.contains("香港房产") || normalized.contains("入港通") || normalized.contains("港盘通") {
-            return ("香港楼盘查询、估价与找房服务的产品研发项目", 1_000)
+            return ("楼盘查询、估价与找房服务的产品研发项目", 1_000)
         }
         return (nil, 0)
     }

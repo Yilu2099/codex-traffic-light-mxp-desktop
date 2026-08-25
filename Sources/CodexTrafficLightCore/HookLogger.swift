@@ -53,22 +53,7 @@ public enum HookLogger {
     }
 
     public static func append(_ entry: HookLogEntry, to url: URL = defaultLogURL()) {
-        do {
-            try FileManager.default.createDirectory(
-                at: url.deletingLastPathComponent(),
-                withIntermediateDirectories: true
-            )
-            let data = Data(format(entry).utf8)
-            if !FileManager.default.fileExists(atPath: url.path) {
-                FileManager.default.createFile(atPath: url.path, contents: nil)
-            }
-            let handle = try FileHandle(forWritingTo: url)
-            try handle.seekToEnd()
-            try handle.write(contentsOf: data)
-            try handle.close()
-        } catch {
-            return
-        }
+        BoundedLog.append(format(entry), to: url)
     }
 
     private static func formattedTimestamp(_ date: Date) -> String {

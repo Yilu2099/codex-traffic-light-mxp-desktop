@@ -127,7 +127,9 @@ public struct TodayCodexUsageCollector: Sendable {
         }
 
         let activePaths = Set(files.map(\.path))
+        let activeSessionIDs = Set(files.map(sessionID))
         state.fileOffsets = state.fileOffsets.filter { activePaths.contains($0.key) }
+        state.sessionCumulativeTokens = state.sessionCumulativeTokens.filter { activeSessionIDs.contains($0.key) }
         state.updatedAt = isoString(now)
         saveState(state)
         return TodayLiveUsageReport(
