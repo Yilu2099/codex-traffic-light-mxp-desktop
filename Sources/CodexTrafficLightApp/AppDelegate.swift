@@ -249,11 +249,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
             let backgroundStore = StateStore(stateURL: stateURL)
             var lastError: Error?
             let now = Date()
-            let localObservation = CodexSessionQuotaCollector().collect(
+            let localObservation = CodexSessionQuotaCollector(
+                stateURL: CodexSessionQuotaCollector.defaultStateURL()
+            ).collect(
                 codexHome: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex"),
                 now: now
             )
-            let localIsFresh = localObservation.map { now.timeIntervalSince($0.observedAt) <= 15 * 60 } ?? false
+            let localIsFresh = localObservation.map {
+                CodexSessionQuotaCollector.isFresh($0, now: now)
+            } ?? false
             let existing = backgroundStore.read().quota
             let shouldApplyLocal = localObservation.map {
                 CodexSessionQuotaCollector.shouldApply($0, over: existing, now: now)

@@ -56,10 +56,25 @@ public struct TodayCodexUsageCollector: Sendable {
     }
 
     public func collect(codexHome: URL, now: Date = Date()) -> TodayLiveUsageReport {
+        collect(
+            codexHome: codexHome,
+            sessionFileIndex: CodexSessionFileIndex(codexHome: codexHome),
+            now: now
+        )
+    }
+
+    /// Uses a caller-owned metadata snapshot so a team sync does not enumerate
+    /// the same Codex directory once per collector.
+    public func collect(
+        codexHome: URL,
+        sessionFileIndex: CodexSessionFileIndex,
+        now: Date = Date()
+    ) -> TodayLiveUsageReport {
         let day = dayString(now)
         let utcDay = utcDayString(now)
-        let files = recentJSONLFiles(codexHome: codexHome, now: now)
-        var state = loadState() ?? State(
+        let files = recentJSONLFiles(sessionFileIndex: sessionFileIndex, now: now)
+        let loadedState = loadState()
+        var state = loadedState ?? State(
             initialized: false,
             day: day,
             tokens: 0,
@@ -70,10 +85,12 @@ public struct TodayCodexUsageCollector: Sendable {
             fileOffsets: [:],
             sessionCumulativeTokens: [:]
         )
+        var stateChanged = loadedState == nil
 
         if state.day != day {
             state.day = day
             state.tokens = 0
+            stateChanged = true
         }
         if state.utcDay == nil {
             // A pre-1.2.75 state has no trustworthy UTC-day baseline. Start
@@ -81,37 +98,56 @@ public struct TodayCodexUsageCollector: Sendable {
             state.utcDay = utcDay
             state.utcTokens = 0
             state.utcBaselineComplete = false
+            stateChanged = true
         } else if state.utcDay != utcDay {
             state.utcDay = utcDay
             state.utcTokens = 0
             state.utcBaselineComplete = true
+            stateChanged = true
         }
 
         if !state.initialized {
             for file in files {
-                state.fileOffsets[file.path] = fileSize(file)
+                state.fileOffsets[file.stableKey] = file.size
             }
             state.initialized = true
+            stateChanged = true
         } else {
             let previousUpdate = isoDate(state.updatedAt) ?? now
             for file in files {
-                let size = fileSize(file)
-                let knownOffset = state.fileOffsets[file.path]
-                let modifiedAt = (try? file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                let key = file.stableKey
+                let size = file.size
+                let legacyOffset = state.fileOffsets[file.path]
+                let knownOffset = state.fileOffsets[key] ?? legacyOffset
+                if state.fileOffsets[key] == nil, let legacyOffset {
+                    state.fileOffsets[key] = legacyOffset
+                    state.fileOffsets.removeValue(forKey: file.path)
+                    stateChanged = true
+                }
                 let startOffset: Int64
                 if let knownOffset {
                     startOffset = min(max(0, knownOffset), size)
-                } else if modifiedAt >= previousUpdate && !file.path.contains("/archived_sessions/") {
+                } else if file.isArchived,
+                          state.sessionCumulativeTokens[sessionID(file)] == nil {
+                    // A short session can be created and archived entirely
+                    // between two polls. No cumulative state means it has not
+                    // been observed before, so read it from the beginning.
+                    startOffset = 0
+                } else if file.modifiedAt >= previousUpdate && !file.isArchived {
                     startOffset = 0
                 } else {
+                    // Existing cumulative state identifies a pre-stable-key
+                    // move. Baseline its unknown archived path at EOF instead
+                    // of risking historical token double-counting.
                     startOffset = size
                 }
                 guard startOffset < size else {
-                    state.fileOffsets[file.path] = size
+                    if knownOffset != size { stateChanged = true }
+                    state.fileOffsets[key] = size
                     continue
                 }
                 let result = appendedUsage(
-                    file: file,
+                    file: file.url,
                     from: startOffset,
                     expectedLocalDay: day,
                     expectedUTCDay: utcDay,
@@ -119,29 +155,41 @@ public struct TodayCodexUsageCollector: Sendable {
                 )
                 state.tokens += result.localTokens
                 state.utcTokens = (state.utcTokens ?? 0) + result.utcTokens
-                state.fileOffsets[file.path] = result.nextOffset
+                state.fileOffsets[key] = result.nextOffset
+                stateChanged = true
                 if let cumulative = result.cumulative {
                     state.sessionCumulativeTokens[sessionID(file)] = cumulative
                 }
             }
         }
 
-        let activePaths = Set(files.map(\.path))
+        let activeKeys = Set(files.map(\.stableKey))
         let activeSessionIDs = Set(files.map(sessionID))
-        state.fileOffsets = state.fileOffsets.filter { activePaths.contains($0.key) }
+        let previousOffsetCount = state.fileOffsets.count
+        let previousSessionCount = state.sessionCumulativeTokens.count
+        state.fileOffsets = state.fileOffsets.filter { activeKeys.contains($0.key) }
         state.sessionCumulativeTokens = state.sessionCumulativeTokens.filter { activeSessionIDs.contains($0.key) }
-        state.updatedAt = isoString(now)
-        saveState(state)
+        if state.fileOffsets.count != previousOffsetCount || state.sessionCumulativeTokens.count != previousSessionCount {
+            stateChanged = true
+        }
+        let collectedAt = isoString(now)
+        if stateChanged {
+            state.updatedAt = collectedAt
+            saveState(state)
+        }
         return TodayLiveUsageReport(
             day: day,
             tokens: state.tokens,
             utcDay: state.utcBaselineComplete == true ? utcDay : nil,
             utcTokens: state.utcBaselineComplete == true ? (state.utcTokens ?? 0) : nil,
-            updatedAt: state.updatedAt
+            updatedAt: collectedAt
         )
     }
 
-    private func recentJSONLFiles(codexHome: URL, now: Date) -> [URL] {
+    private func recentJSONLFiles(
+        sessionFileIndex: CodexSessionFileIndex,
+        now: Date
+    ) -> [CodexSessionFileIndex.Entry] {
         let startOfDay = Calendar(identifier: .gregorian).dateComponents(in: timeZone, from: now)
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = timeZone
@@ -154,20 +202,7 @@ public struct TodayCodexUsageCollector: Sendable {
         utcCalendar.timeZone = TimeZone(secondsFromGMT: 0)!
         let utcCutoff = utcCalendar.startOfDay(for: now)
         let cutoff = min(localCutoff, utcCutoff)
-        var result: [URL] = []
-        for folder in ["sessions", "archived_sessions"] {
-            let root = codexHome.appendingPathComponent(folder)
-            guard let enumerator = FileManager.default.enumerator(
-                at: root,
-                includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey],
-                options: [.skipsHiddenFiles]
-            ) else { continue }
-            for case let file as URL in enumerator where file.pathExtension == "jsonl" {
-                let modified = try? file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
-                if (modified ?? .distantPast) >= cutoff { result.append(file) }
-            }
-        }
-        return result.sorted { $0.path < $1.path }
+        return sessionFileIndex.uniqueFiles(modifiedSince: cutoff)
     }
 
     private func appendedUsage(
@@ -230,14 +265,14 @@ public struct TodayCodexUsageCollector: Sendable {
         try? data.write(to: stateURL, options: [.atomic])
     }
 
-    private func fileSize(_ url: URL) -> Int64 {
-        Int64((try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
-    }
-
     private func sessionID(_ url: URL) -> String {
         let name = url.deletingPathExtension().lastPathComponent
         let pattern = #"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"#
         return name.range(of: pattern, options: .regularExpression).map { String(name[$0]) } ?? name
+    }
+
+    private func sessionID(_ file: CodexSessionFileIndex.Entry) -> String {
+        sessionID(file.url)
     }
 
     private func integer(_ value: Any?) -> Int {

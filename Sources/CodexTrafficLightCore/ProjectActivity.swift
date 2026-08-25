@@ -80,24 +80,30 @@ public final class ProjectActivityStore {
         prepareSync(days: days, now: now, codexHome: codexHome).projects
     }
 
-    public func prepareSync(days: Int = 30, now: Date = Date(), codexHome: URL? = nil) -> ProjectActivitySyncReport {
+    public func prepareSync(
+        days: Int = 30,
+        now: Date = Date(),
+        codexHome: URL? = nil,
+        sessionFileIndex: CodexSessionFileIndex? = nil
+    ) -> ProjectActivitySyncReport {
         let cutoff = now.addingTimeInterval(-Double(max(1, days)) * 86_400).timeIntervalSince1970
         var ledger = read()
         var conversationCursors = ledger.inputEventCollectionVersion == 2 ? (ledger.conversationCursors ?? [:]) : [:]
         let previousConversationCursors = conversationCursors
         let collection: ProjectConversationCollection
         if let codexHome {
+            let fileIndex = sessionFileIndex ?? CodexSessionFileIndex(codexHome: codexHome)
             if ledger.inputEventCollectionVersion != 2 {
                 // The first run establishes an EOF baseline only. Historical prompts are
                 // deliberately not parsed or uploaded, keeping upgrades lightweight.
                 ProjectConversationCollector().establishBaseline(
-                    codexHome: codexHome, now: now, cursors: &conversationCursors
+                    sessionFileIndex: fileIndex, now: now, cursors: &conversationCursors
                 )
                 collection = ProjectConversationCollection(events: [])
                 ledger.pendingInputEvents = []
             } else {
                 collection = ProjectConversationCollector().collect(
-                    codexHome: codexHome,
+                    sessionFileIndex: fileIndex,
                     days: days,
                     now: now,
                     cursors: &conversationCursors
@@ -292,36 +298,25 @@ private struct ProjectConversationCollector {
     ]
 
     func establishBaseline(
-        codexHome: URL,
+        sessionFileIndex: CodexSessionFileIndex,
         now: Date,
         cursors: inout [String: ProjectConversationCursor]
     ) {
-        for folder in ["sessions", "archived_sessions"] {
-            let root = codexHome.appendingPathComponent(folder)
-            guard let enumerator = FileManager.default.enumerator(
-                at: root,
-                includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey],
-                options: [.skipsHiddenFiles]
-            ) else { continue }
-            for case let url as URL in enumerator where url.pathExtension == "jsonl" {
-                let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
-                let modifiedAt = values?.contentModificationDate ?? now
-                let fileSize = UInt64(max(0, values?.fileSize ?? 0))
-                let cursorKey = ProjectActivityStore.digest(url.standardizedFileURL.path)
-                cursors[cursorKey] = ProjectConversationCursor(
-                    projectID: nil,
-                    projectName: nil,
-                    sessionID: nil,
-                    offset: fileSize,
-                    isSubagent: false,
-                    updatedAt: modifiedAt.timeIntervalSince1970
-                )
-            }
+        for file in sessionFileIndex.uniqueFiles() {
+            let cursorKey = ProjectActivityStore.digest(file.stableKey)
+            cursors[cursorKey] = ProjectConversationCursor(
+                projectID: nil,
+                projectName: nil,
+                sessionID: nil,
+                offset: UInt64(file.size),
+                isSubagent: false,
+                updatedAt: (file.modifiedAt == .distantPast ? now : file.modifiedAt).timeIntervalSince1970
+            )
         }
     }
 
     func collect(
-        codexHome: URL,
+        sessionFileIndex: CodexSessionFileIndex,
         days: Int,
         now: Date,
         cursors: inout [String: ProjectConversationCursor]
@@ -333,25 +328,22 @@ private struct ProjectConversationCollector {
         let chunkBytes = 256 * 1_024
         var events: [TeamInputEvent] = []
         var candidates: [ProjectConversationFileCandidate] = []
-        for folder in ["sessions", "archived_sessions"] {
-            let root = codexHome.appendingPathComponent(folder)
-            guard let enumerator = FileManager.default.enumerator(
-                at: root,
-                includingPropertiesForKeys: [.contentModificationDateKey],
-                options: [.skipsHiddenFiles]
-            ) else { continue }
-            for case let url as URL in enumerator where url.pathExtension == "jsonl" {
-                let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
-                let modifiedAt = values?.contentModificationDate ?? .distantPast
-                let fileSize = UInt64(max(0, values?.fileSize ?? 0))
-                let cursorKey = ProjectActivityStore.digest(url.standardizedFileURL.path)
-                let existing = cursors[cursorKey]
-                guard modifiedAt >= cutoff || existing != nil else { continue }
-                guard fileSize != (existing?.offset ?? 0) else { continue }
-                candidates.append(ProjectConversationFileCandidate(
-                    url: url, cursorKey: cursorKey, modifiedAt: modifiedAt, fileSize: fileSize
-                ))
+        for file in sessionFileIndex.uniqueFiles() {
+            let fileSize = UInt64(file.size)
+            let cursorKey = ProjectActivityStore.digest(file.stableKey)
+            let legacyCursorKey = ProjectActivityStore.digest(file.path)
+            if cursors[cursorKey] == nil, let legacy = cursors.removeValue(forKey: legacyCursorKey) {
+                cursors[cursorKey] = legacy
             }
+            let existing = cursors[cursorKey]
+            guard file.modifiedAt >= cutoff || existing != nil else { continue }
+            guard fileSize != (existing?.offset ?? 0) else { continue }
+            candidates.append(ProjectConversationFileCandidate(
+                url: file.url,
+                cursorKey: cursorKey,
+                modifiedAt: file.modifiedAt,
+                fileSize: fileSize
+            ))
         }
         candidates.sort { left, right in
             if left.modifiedAt != right.modifiedAt { return left.modifiedAt > right.modifiedAt }
@@ -392,23 +384,22 @@ private struct ProjectConversationCollector {
                 let tail = try? handle.read(upToCount: max(1, requestedBytes))
                 try? handle.close()
                 guard let data = tail, !data.isEmpty else { continue }
-                let reachedEOF = cursor.offset + UInt64(data.count) >= fileSize
-                let consumable: Data
-                if reachedEOF {
-                    consumable = data
-                } else if let newline = data.lastIndex(of: 0x0A) {
-                    consumable = Data(data.prefix(through: newline))
-                } else {
-                    // A single oversized JSONL row must not monopolize the menu-bar app.
-                    // Advance one bounded chunk; normal human turns are far smaller and
-                    // complete rows resume on the next newline.
-                    cursor.offset += UInt64(data.count)
-                    cursor.updatedAt = modifiedAt.timeIntervalSince1970
-                    cursors[cursorKey] = cursor
+                guard let newline = data.lastIndex(of: 0x0A) else {
+                    // Preserve an incomplete JSONL row until its terminating
+                    // newline arrives. A non-EOF 256 KB row is deliberately
+                    // skipped in bounded pieces so it cannot block all newer
+                    // project events forever.
+                    let reachedEOF = cursor.offset + UInt64(data.count) >= fileSize
+                    if !reachedEOF {
+                        cursor.offset += UInt64(data.count)
+                        cursor.updatedAt = modifiedAt.timeIntervalSince1970
+                        cursors[cursorKey] = cursor
+                    }
                     bytesRead += data.count
                     chunksRead += 1
                     continue
                 }
+                let consumable = Data(data.prefix(through: newline))
                 guard let source = String(data: consumable, encoding: .utf8) else {
                     cursor.offset += UInt64(consumable.count)
                     cursor.updatedAt = modifiedAt.timeIntervalSince1970
@@ -462,7 +453,7 @@ private struct ProjectConversationCollector {
                 for (date, text) in messages {
                     let sentAt = Self.isoString(date)
                     events.append(TeamInputEvent(
-                        id: ProjectActivityStore.digest("\(cursorKey)|\(sessionID)|\(sentAt)|\(text)"),
+                        id: ProjectActivityStore.digest("\(sessionID)|\(sentAt)|\(text)"),
                         projectId: projectID,
                         projectName: projectName,
                         sessionId: sessionID,

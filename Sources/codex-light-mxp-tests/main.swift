@@ -462,7 +462,9 @@ func testSessionQuotaCollectorUsesNewestCodexRateLimitEvent() throws {
     try Data((older + "\n").utf8).write(to: sessions.appendingPathComponent("rollout-old.jsonl"))
     try Data((newer + "\n").utf8).write(to: archived.appendingPathComponent("rollout-new.jsonl"))
 
-    let observation = CodexSessionQuotaCollector().collect(
+    let observation = CodexSessionQuotaCollector(
+        stateURL: root.appendingPathComponent("quota-state.json")
+    ).collect(
         codexHome: root,
         now: Date(timeIntervalSince1970: 1_787_389_000),
         fileMaxAge: 86_400
@@ -483,7 +485,9 @@ func testSessionQuotaCollectorIgnoresSparkRateLimitEvent() throws {
     let spark = #"{"timestamp":"2026-08-22T06:30:00.000Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"codex_bengalfox","limit_name":"GPT-5.3-Codex-Spark","primary":{"used_percent":0,"window_minutes":300,"resets_at":1787390000},"secondary":{"used_percent":0,"window_minutes":10080,"resets_at":1788011074}}}}"#
     try Data((codex + "\n" + spark + "\n").utf8).write(to: sessions.appendingPathComponent("rollout-mixed.jsonl"))
 
-    let observation = CodexSessionQuotaCollector().collect(
+    let observation = CodexSessionQuotaCollector(
+        stateURL: root.appendingPathComponent("quota-state.json")
+    ).collect(
         codexHome: root,
         now: Date(timeIntervalSince1970: 1_787_389_000),
         fileMaxAge: 86_400
@@ -545,13 +549,220 @@ func testSessionQuotaCollectorRejectsLegacy300MinuteEvent() throws {
     let event = #"{"timestamp":"2026-08-22T06:30:00.000Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"codex","primary":{"used_percent":0,"window_minutes":300,"resets_at":1787390000}}}}"#
     try Data((event + "\n").utf8).write(to: sessions.appendingPathComponent("rollout-legacy-window.jsonl"))
 
-    let observation = CodexSessionQuotaCollector().collect(
+    let observation = CodexSessionQuotaCollector(
+        stateURL: root.appendingPathComponent("quota-state.json")
+    ).collect(
         codexHome: root,
         now: Date(timeIntervalSince1970: 1_787_389_000),
         fileMaxAge: 86_400
     )
 
     try expectEqual(observation, nil, "a 300 minute quota must never be reported as weekly quota")
+}
+
+func testSessionQuotaCollectorPersistsOffsetsAndHandlesArchiveAndTruncation() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("codex-session-incremental-tests-\(UUID().uuidString)", isDirectory: true)
+    let sessions = root.appendingPathComponent("sessions/2026/08/25", isDirectory: true)
+    let archived = root.appendingPathComponent("archived_sessions", isDirectory: true)
+    let stateURL = root.appendingPathComponent("state/session-quota.json")
+    try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: archived, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    func event(_ timestamp: String, used: Int) -> String {
+        #"{"timestamp":"\#(timestamp)","type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"codex","primary":{"used_percent":\#(used),"window_minutes":10080,"resets_at":1788163200}}}}"#
+    }
+
+    let formatter = ISO8601DateFormatter()
+    let now = formatter.date(from: "2026-08-25T10:00:00Z")!
+    let filename = "rollout-2026-08-25T18-00-00-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.jsonl"
+    var file = sessions.appendingPathComponent(filename)
+    try (event("2026-08-25T09:59:00.000Z", used: 30) + "\n").write(
+        to: file, atomically: true, encoding: .utf8
+    )
+    try FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: file.path)
+    let collector = CodexSessionQuotaCollector(stateURL: stateURL)
+
+    let first = collector.collect(codexHome: root, now: now, fileMaxAge: 86_400)
+    try expectEqual(first?.weeklyRemainingPercent, 70, "initial quota scan should baseline the recent tail")
+    let firstInode = try FileManager.default.attributesOfItem(atPath: stateURL.path)[.systemFileNumber] as? NSNumber
+    let unchanged = collector.collect(codexHome: root, now: now.addingTimeInterval(30), fileMaxAge: 86_400)
+    let unchangedInode = try FileManager.default.attributesOfItem(atPath: stateURL.path)[.systemFileNumber] as? NSNumber
+    try expectEqual(unchanged?.weeklyRemainingPercent, 70, "unchanged files should reuse the persisted latest quota")
+    try expectEqual(unchangedInode, firstInode, "unchanged quota files must not rewrite the atomic cursor state")
+
+    let handle = try FileHandle(forWritingTo: file)
+    try handle.seekToEnd()
+    try handle.write(contentsOf: Data((event("2026-08-25T10:01:00.000Z", used: 40) + "\n").utf8))
+    try handle.close()
+    try FileManager.default.setAttributes([.modificationDate: now.addingTimeInterval(60)], ofItemAtPath: file.path)
+    let appended = collector.collect(codexHome: root, now: now.addingTimeInterval(60), fileMaxAge: 86_400)
+    try expectEqual(appended?.weeklyRemainingPercent, 60, "appended quota bytes should advance the saved offset")
+
+    let moved = archived.appendingPathComponent(filename)
+    try FileManager.default.moveItem(at: file, to: moved)
+    file = moved
+    let movedResult = collector.collect(codexHome: root, now: now.addingTimeInterval(120), fileMaxAge: 86_400)
+    try expectEqual(movedResult?.weeklyRemainingPercent, 60, "archiving a rollout must preserve its stable cursor")
+    try expect(try String(contentsOf: stateURL, encoding: .utf8).contains("archived_sessions"), "archive moves should update only the persisted path")
+
+    try (event("2026-08-25T10:03:00.000Z", used: 50) + "\n").write(
+        to: file, atomically: true, encoding: .utf8
+    )
+    try FileManager.default.setAttributes([.modificationDate: now.addingTimeInterval(180)], ofItemAtPath: file.path)
+    let truncated = collector.collect(codexHome: root, now: now.addingTimeInterval(180), fileMaxAge: 86_400)
+    try expectEqual(truncated?.weeklyRemainingPercent, 50, "truncated or replaced files should rebaseline only that file tail")
+}
+
+func testSessionQuotaCollectorRejectsFutureObservationFreshness() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("codex-session-future-tests-\(UUID().uuidString)", isDirectory: true)
+    let sessions = root.appendingPathComponent("sessions", isDirectory: true)
+    let stateURL = root.appendingPathComponent("quota-state.json")
+    try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let file = sessions.appendingPathComponent("rollout-future.jsonl")
+    let rows = [
+        #"{"timestamp":"2026-08-25T09:59:00.000Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"codex","primary":{"used_percent":35,"window_minutes":10080,"resets_at":1788163200}}}}"#,
+        #"{"timestamp":"2026-08-25T10:10:00.000Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"codex","primary":{"used_percent":5,"window_minutes":10080,"resets_at":1788163200}}}}"#,
+    ].joined(separator: "\n") + "\n"
+    try rows.write(to: file, atomically: true, encoding: .utf8)
+    let now = ISO8601DateFormatter().date(from: "2026-08-25T10:00:00Z")!
+    try FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: file.path)
+
+    let observation = CodexSessionQuotaCollector(stateURL: stateURL).collect(
+        codexHome: root,
+        now: now,
+        fileMaxAge: 86_400
+    )
+    try expectEqual(observation?.weeklyRemainingPercent, 65, "a future-dated quota must not replace the newest plausible observation")
+    let future = CodexSessionQuotaObservation(
+        weeklyRemainingPercent: 95,
+        weeklyResetsAt: nil,
+        observedAt: now.addingTimeInterval(61)
+    )
+    try expect(!CodexSessionQuotaCollector.isFresh(future, now: now), "a future event beyond clock tolerance must not suppress app-server fallback")
+    let tolerated = CodexSessionQuotaObservation(
+        weeklyRemainingPercent: 65,
+        weeklyResetsAt: nil,
+        observedAt: now.addingTimeInterval(30)
+    )
+    try expect(CodexSessionQuotaCollector.isFresh(tolerated, now: now), "minor clock skew should remain usable")
+}
+
+func testSessionActivityDeltaRequiresAcknowledgementAndDailyFull() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("session-activity-delta-tests-\(UUID().uuidString)", isDirectory: true)
+    let stateURL = root.appendingPathComponent("state.json")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = TeamSessionActivityDeltaStore(stateURL: stateURL)
+    let formatter = ISO8601DateFormatter()
+    let now = formatter.date(from: "2026-08-25T02:00:00Z")!
+    let first = TeamSessionActivity(
+        sessionId: "session-a",
+        day: "2026-08-25",
+        startedAt: "2026-08-25T01:00:00.000Z",
+        updatedAt: "2026-08-25T01:30:00.000Z"
+    )
+    let second = TeamSessionActivity(
+        sessionId: "session-b",
+        day: "2026-08-25",
+        startedAt: "2026-08-25T01:10:00.000Z",
+        updatedAt: "2026-08-25T01:40:00.000Z"
+    )
+
+    let initial = store.prepare(current: [first, second], days: 45, now: now)
+    try expectEqual(initial.mode, "full", "the first upload of a local day should be a full snapshot")
+    try expectEqual(initial.cutoffDay, "2026-07-11", "the session cutoff should use the domestic calendar")
+    try expectEqual(store.prepare(current: [first, second], days: 45, now: now).mode, "full", "a failed full upload must remain pending")
+    store.acknowledge(initial)
+
+    let unchanged = store.prepare(current: [first, second], days: 45, now: now.addingTimeInterval(60))
+    try expectEqual(unchanged.mode, "delta_v1", "acknowledged snapshots should switch to the delta protocol")
+    try expect(unchanged.activities.isEmpty, "unchanged sessions should not be uploaded again")
+    let compatibilityFull = store.prepare(
+        current: [first, second],
+        days: 45,
+        now: now.addingTimeInterval(90),
+        forceFull: true
+    )
+    try expectEqual(compatibilityFull.mode, "full", "missing server capability must fail closed to a full snapshot")
+    try expectEqual(compatibilityFull.activities.count, 2, "compatibility full mode must include every retained session")
+    var updated = first
+    updated.updatedAt = "2026-08-25T02:01:00.000Z"
+    let delta = store.prepare(current: [updated, second], days: 45, now: now.addingTimeInterval(120))
+    try expectEqual(delta.activities.map(\.sessionId), ["session-a"], "only changed session metadata should be included")
+    try expectEqual(
+        store.prepare(current: [updated, second], days: 45, now: now.addingTimeInterval(180)).activities.map(\.sessionId),
+        ["session-a"],
+        "an unacknowledged delta must be retried after a network failure"
+    )
+    store.acknowledge(delta)
+    try expect(store.prepare(current: [updated, second], days: 45, now: now.addingTimeInterval(240)).activities.isEmpty, "an acknowledged delta should leave no duplicate upload")
+
+    let nextDay = now.addingTimeInterval(24 * 60 * 60)
+    let daily = store.prepare(current: [updated, second], days: 45, now: nextDay)
+    try expectEqual(daily.mode, "full", "the first successful sync attempt each domestic day should self-heal with a full snapshot")
+    try expectEqual(daily.activities.count, 2, "daily full validation should include the retained snapshot")
+}
+
+func testTeamServerCapabilityRequiresExactDeltaProtocol() throws {
+    let supported = try JSONDecoder().decode(
+        TeamServerCapabilities.self,
+        from: Data(#"{"status":"ok","sessionActivityProtocol":"delta_v1"}"#.utf8)
+    )
+    let missing = try JSONDecoder().decode(
+        TeamServerCapabilities.self,
+        from: Data(#"{"status":"ok"}"#.utf8)
+    )
+    let unknown = try JSONDecoder().decode(
+        TeamServerCapabilities.self,
+        from: Data(#"{"sessionActivityProtocol":"delta_v2"}"#.utf8)
+    )
+    try expect(supported.supportsSessionActivityDelta, "the exact negotiated delta_v1 capability should enable deltas")
+    try expect(!missing.supportsSessionActivityDelta, "an older health response must keep full uploads")
+    try expect(!unknown.supportsSessionActivityDelta, "an unknown future protocol must not be guessed compatible")
+
+    let legacyResult = try JSONDecoder().decode(
+        TeamUsageSyncResult.self,
+        from: Data(#"{"status":"ok","accepted":1,"total":1}"#.utf8)
+    )
+    try expectEqual(legacyResult.sessionActivityModeAccepted, nil, "a legacy response must not acknowledge a local delta cursor")
+    try expectEqual(legacyResult.sessionActivityDurable, nil, "a legacy response cannot prove that a delta was durably saved")
+    let volatileResult = try JSONDecoder().decode(
+        TeamUsageSyncResult.self,
+        from: Data(#"{"status":"ok","accepted":1,"total":1,"sessionActivityModeAccepted":"delta_v1","sessionActivityDurable":false}"#.utf8)
+    )
+    try expectEqual(volatileResult.sessionActivityDurable, false, "an explicitly volatile response must leave the delta pending")
+    let acceptedResult = try JSONDecoder().decode(
+        TeamUsageSyncResult.self,
+        from: Data(#"{"status":"ok","accepted":1,"total":1,"sessionActivityModeAccepted":"delta_v1","sessionActivityDurable":true}"#.utf8)
+    )
+    try expectEqual(acceptedResult.sessionActivityModeAccepted, "delta_v1", "the server must explicitly echo the accepted activity mode")
+    try expectEqual(acceptedResult.sessionActivityDurable, true, "the server must explicitly confirm durable persistence before cursor acknowledgement")
+}
+
+func testCollectorsCanReuseOneSessionFileIndexSnapshot() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("shared-session-index-tests-\(UUID().uuidString)", isDirectory: true)
+    let sessions = root.appendingPathComponent("sessions/2026/08/25", isDirectory: true)
+    try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let now = ISO8601DateFormatter().date(from: "2026-08-25T03:00:00Z")!
+    let first = sessions.appendingPathComponent("rollout-2026-08-25T10-00-00-11111111-1111-1111-1111-111111111111.jsonl")
+    try "{}\n".write(to: first, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: first.path)
+    let shared = CodexSessionFileIndex(codexHome: root)
+    let second = sessions.appendingPathComponent("rollout-2026-08-25T10-30-00-22222222-2222-2222-2222-222222222222.jsonl")
+    try "{}\n".write(to: second, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: second.path)
+
+    let counter = CodexSessionFileCounter()
+    let sharedResult = counter.collect(codexHome: root, sessionFileIndex: shared, days: 7, now: now)
+    let freshResult = counter.collect(codexHome: root, days: 7, now: now)
+    try expectEqual(sharedResult.count, 1, "all collectors should observe the caller-owned immutable metadata snapshot")
+    try expectEqual(freshResult.count, 2, "the compatibility overload should still build a fresh standalone index")
 }
 
 func testAppServerQuotaMapperFallsBackToTopLevelRateLimits() throws {
@@ -1211,8 +1422,11 @@ func testTodayLiveCollectorStartsAtEOFAndCountsOnlyAppendedUsage() throws {
     try expectEqual(updated.tokens, 50, "collector should count the newly appended turn only")
     try expectEqual(updated.utcDay, nil, "a mid-day baseline must not pretend it observed the whole settlement day")
     try expectEqual(updated.utcTokens, nil, "UTC continuation stays unavailable until the first observed rollover")
+    let stateInode = try FileManager.default.attributesOfItem(atPath: stateURL.path)[.systemFileNumber] as? NSNumber
     let unchanged = collector.collect(codexHome: root.appendingPathComponent("codex"), now: now.addingTimeInterval(120))
+    let unchangedStateInode = try FileManager.default.attributesOfItem(atPath: stateURL.path)[.systemFileNumber] as? NSNumber
     try expectEqual(unchanged.tokens, 50, "collector should not count an appended event twice")
+    try expectEqual(unchangedStateInode, stateInode, "unchanged token tails should not rewrite collector state")
     let persisted = try String(contentsOf: stateURL, encoding: .utf8)
     try expect(!persisted.contains("private text"), "collector state must never persist conversation text")
     try expect(persisted.contains("11111111-1111-1111-1111-111111111111"), "active cumulative session state must survive pruning")
@@ -1287,12 +1501,211 @@ func testGrindHistoryIncrementalCollectorStartsAtEOF() throws {
     let appended = #"{"timestamp":"2026-08-23T08:01:00.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"更新后的输入"}]}}"#
     let handle = try FileHandle(forWritingTo: file)
     try handle.seekToEnd()
-    try handle.write(contentsOf: Data(("\n" + appended).utf8))
+    try handle.write(contentsOf: Data(("\n" + appended + "\n").utf8))
     try handle.close()
     let updated = collector.collectIncremental(codexHome: root.appendingPathComponent("codex"), now: now.addingTimeInterval(60), stateURL: stateURL)
     try expectEqual(updated.sessions.first?.dayTurnCount, 1, "incremental interaction collector should count only appended turns")
+    let stateInode = try FileManager.default.attributesOfItem(atPath: stateURL.path)[.systemFileNumber] as? NSNumber
     let unchanged = collector.collectIncremental(codexHome: root.appendingPathComponent("codex"), now: now.addingTimeInterval(120), stateURL: stateURL)
+    let unchangedStateInode = try FileManager.default.attributesOfItem(atPath: stateURL.path)[.systemFileNumber] as? NSNumber
     try expect(unchanged.sessions.isEmpty, "incremental interaction collector must not rescan unchanged files")
+    try expectEqual(unchangedStateInode, stateInode, "unchanged interaction tails should not rewrite collector state")
+}
+
+func testGrindIncrementalDrainsMoreThanSixteenNewFiles() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("grind-drain-\(UUID().uuidString)")
+    let codexHome = root.appendingPathComponent("codex")
+    let sessions = codexHome.appendingPathComponent("sessions/2026/08/25")
+    let stateURL = root.appendingPathComponent("state/grind.json")
+    try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let now = ISO8601DateFormatter().date(from: "2026-08-25T08:00:00Z")!
+    let collector = CodexGrindHistoryCollector()
+    _ = collector.collectIncremental(codexHome: codexHome, now: now, stateURL: stateURL)
+
+    for index in 0..<20 {
+        let id = String(format: "00000000-0000-0000-0000-%012d", index)
+        let file = sessions.appendingPathComponent("rollout-2026-08-25T16-00-00-\(id).jsonl")
+        let event = #"{"timestamp":"2026-08-25T08:00:\#(String(format: "%02d", index)).000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"输入\#(index)"}]}}"#
+        try (event + "\n").write(to: file, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: file.path)
+    }
+
+    let first = collector.collectIncremental(codexHome: codexHome, now: now.addingTimeInterval(60), stateURL: stateURL)
+    let second = collector.collectIncremental(codexHome: codexHome, now: now.addingTimeInterval(120), stateURL: stateURL)
+    let drained = Set((first.sessions + second.sessions).map(\.sessionId))
+    try expectEqual(first.sessions.count, 16, "one bounded sync should process at most sixteen changed rollout files")
+    try expectEqual(second.sessions.count, 4, "the next sync must drain the remaining registered offsets")
+    try expectEqual(drained.count, 20, "advancing global freshness must never baseline pending files at EOF")
+}
+
+func testGrindIncrementalReReadsTruncatedReplacement() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("grind-truncate-\(UUID().uuidString)")
+    let codexHome = root.appendingPathComponent("codex")
+    let sessions = codexHome.appendingPathComponent("sessions")
+    let stateURL = root.appendingPathComponent("state/grind.json")
+    try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let file = sessions.appendingPathComponent("rollout-2026-08-25T16-00-00-88888888-8888-8888-8888-888888888888.jsonl")
+    try (String(repeating: "x", count: 8_192) + "\n").write(to: file, atomically: true, encoding: .utf8)
+    let now = ISO8601DateFormatter().date(from: "2026-08-25T08:00:00Z")!
+    try FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: file.path)
+    let collector = CodexGrindHistoryCollector()
+    _ = collector.collectIncremental(codexHome: codexHome, now: now, stateURL: stateURL)
+
+    let replacement = #"{"timestamp":"2026-08-25T08:01:00.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"截断替换后的完整输入"}]}}"# + "\n"
+    try replacement.write(to: file, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.modificationDate: now.addingTimeInterval(60)], ofItemAtPath: file.path)
+    let report = collector.collectIncremental(
+        codexHome: codexHome,
+        now: now.addingTimeInterval(60),
+        stateURL: stateURL
+    )
+    try expectEqual(report.sessions.first?.dayTurnCount, 1, "a smaller replacement file must invalidate and restart its old byte offset")
+}
+
+func testGrindMigratesLegacyPathCursorAfterArchiveMove() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("grind-legacy-move-\(UUID().uuidString)")
+    let codexHome = root.appendingPathComponent("codex")
+    let archived = codexHome.appendingPathComponent("archived_sessions")
+    let stateURL = root.appendingPathComponent("state/grind.json")
+    try FileManager.default.createDirectory(at: archived, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: stateURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let filename = "rollout-2026-08-25T16-00-00-99999999-9999-9999-9999-999999999999.jsonl"
+    let file = archived.appendingPathComponent(filename)
+    let event = #"{"timestamp":"2026-08-25T08:01:00.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"升级前已归档"}]}}"# + "\n"
+    try event.write(to: file, atomically: true, encoding: .utf8)
+    let now = ISO8601DateFormatter().date(from: "2026-08-25T08:02:00Z")!
+    try FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: file.path)
+    let oldLivePath = codexHome.appendingPathComponent("sessions/2026/08/25/\(filename)").path
+    let legacyState: [String: Any] = [
+        "initialized": true,
+        "updatedAt": "2026-08-25T08:00:00.000Z",
+        "fileOffsets": [oldLivePath: 0],
+    ]
+    try JSONSerialization.data(withJSONObject: legacyState).write(to: stateURL, options: [.atomic])
+
+    let report = CodexGrindHistoryCollector().collectIncremental(
+        codexHome: codexHome,
+        now: now,
+        stateURL: stateURL
+    )
+    try expectEqual(report.sessions.first?.dayTurnCount, 1, "a legacy live-path cursor should migrate by rollout basename after archiving")
+    let migrated = try String(contentsOf: stateURL, encoding: .utf8)
+    try expect(!migrated.contains(oldLivePath), "the migrated state should discard its obsolete absolute path key")
+    try expect(migrated.contains(filename), "the migrated state should persist the stable rollout key")
+}
+
+func testTailCollectorsPreservePartialRowsAcrossArchiveMove() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("tail-move-\(UUID().uuidString)")
+    let codexHome = root.appendingPathComponent("codex")
+    let sessions = codexHome.appendingPathComponent("sessions/2026/08/25")
+    let archived = codexHome.appendingPathComponent("archived_sessions")
+    let grindState = root.appendingPathComponent("state/grind.json")
+    let todayState = root.appendingPathComponent("state/today.json")
+    try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: archived, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let now = ISO8601DateFormatter().date(from: "2026-08-25T03:00:00Z")!
+
+    let grindName = "rollout-2026-08-25T11-00-00-33333333-3333-3333-3333-333333333333.jsonl"
+    var grindFile = sessions.appendingPathComponent(grindName)
+    try Data().write(to: grindFile)
+    let grind = CodexGrindHistoryCollector()
+    _ = grind.collectIncremental(codexHome: codexHome, now: now, stateURL: grindState)
+    let interaction = #"{"timestamp":"2026-08-25T03:01:00.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"半行完成"}]}}"#
+    try interaction.write(to: grindFile, atomically: false, encoding: .utf8)
+    try FileManager.default.setAttributes([.modificationDate: now.addingTimeInterval(60)], ofItemAtPath: grindFile.path)
+    try expect(grind.collectIncremental(codexHome: codexHome, now: now.addingTimeInterval(60), stateURL: grindState).sessions.isEmpty, "an EOF partial interaction row must wait for its newline")
+    let movedGrind = archived.appendingPathComponent(grindName)
+    try FileManager.default.moveItem(at: grindFile, to: movedGrind)
+    grindFile = movedGrind
+    let grindHandle = try FileHandle(forWritingTo: grindFile)
+    try grindHandle.seekToEnd()
+    try grindHandle.write(contentsOf: Data("\n".utf8))
+    try grindHandle.close()
+    let completed = grind.collectIncremental(codexHome: codexHome, now: now.addingTimeInterval(120), stateURL: grindState)
+    try expectEqual(completed.sessions.first?.dayTurnCount, 1, "a stable rollout key must resume the partial row after archiving")
+    try expect(grind.collectIncremental(codexHome: codexHome, now: now.addingTimeInterval(180), stateURL: grindState).sessions.isEmpty, "the completed moved row must not be counted twice")
+
+    let tokenName = "rollout-2026-08-25T11-10-00-44444444-4444-4444-4444-444444444444.jsonl"
+    var tokenFile = sessions.appendingPathComponent(tokenName)
+    try Data().write(to: tokenFile)
+    let today = TodayCodexUsageCollector(stateURL: todayState)
+    _ = today.collect(codexHome: codexHome, now: now)
+    let token = #"{"timestamp":"2026-08-25T03:02:00.000Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"total_tokens":33},"total_token_usage":{"total_tokens":133}}}}"#
+    try token.write(to: tokenFile, atomically: false, encoding: .utf8)
+    try FileManager.default.setAttributes([.modificationDate: now.addingTimeInterval(120)], ofItemAtPath: tokenFile.path)
+    try expectEqual(today.collect(codexHome: codexHome, now: now.addingTimeInterval(120)).tokens, 0, "an EOF partial token row must not advance its offset")
+    let movedToken = archived.appendingPathComponent(tokenName)
+    try FileManager.default.moveItem(at: tokenFile, to: movedToken)
+    tokenFile = movedToken
+    let tokenHandle = try FileHandle(forWritingTo: tokenFile)
+    try tokenHandle.seekToEnd()
+    try tokenHandle.write(contentsOf: Data("\n".utf8))
+    try tokenHandle.close()
+    let tokenReport = today.collect(codexHome: codexHome, now: now.addingTimeInterval(180))
+    try expectEqual(tokenReport.tokens, 33, "today usage must continue a partial row after sessions-to-archive movement")
+    try expectEqual(today.collect(codexHome: codexHome, now: now.addingTimeInterval(240)).tokens, 33, "the moved token row must remain idempotent")
+}
+
+func testCollectorsReadSessionFirstDiscoveredAfterArchiving() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("new-archived-session-\(UUID().uuidString)")
+    let codexHome = root.appendingPathComponent("codex")
+    let sessions = codexHome.appendingPathComponent("sessions")
+    let archived = codexHome.appendingPathComponent("archived_sessions")
+    let grindState = root.appendingPathComponent("state/grind.json")
+    let todayState = root.appendingPathComponent("state/today.json")
+    try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: archived, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let now = ISO8601DateFormatter().date(from: "2026-08-25T03:00:00Z")!
+    let grind = CodexGrindHistoryCollector()
+    let today = TodayCodexUsageCollector(stateURL: todayState)
+    _ = grind.collectIncremental(codexHome: codexHome, now: now, stateURL: grindState)
+    _ = today.collect(codexHome: codexHome, now: now)
+
+    let file = archived.appendingPathComponent(
+        "rollout-2026-08-25T11-01-00-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.jsonl"
+    )
+    let rows = [
+        #"{"timestamp":"2026-08-25T03:01:00.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"短会话输入"}]}}"#,
+        #"{"timestamp":"2026-08-25T03:01:30.000Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"total_tokens":42},"total_token_usage":{"total_tokens":142}}}}"#,
+    ].joined(separator: "\n") + "\n"
+    try rows.write(to: file, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.modificationDate: now.addingTimeInterval(90)], ofItemAtPath: file.path)
+
+    let grindReport = grind.collectIncremental(
+        codexHome: codexHome,
+        now: now.addingTimeInterval(120),
+        stateURL: grindState
+    )
+    let todayReport = today.collect(codexHome: codexHome, now: now.addingTimeInterval(120))
+    try expectEqual(grindReport.sessions.first?.dayTurnCount, 1, "a session created and archived between polls must still contribute work activity")
+    try expectEqual(todayReport.tokens, 42, "a session first discovered in archived_sessions must still contribute today's tokens")
+}
+
+func testGrindOversizedRowDoesNotBlockNewerEvents() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("grind-oversized-\(UUID().uuidString)")
+    let codexHome = root.appendingPathComponent("codex")
+    let sessions = codexHome.appendingPathComponent("sessions")
+    let stateURL = root.appendingPathComponent("state/grind.json")
+    try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let file = sessions.appendingPathComponent("rollout-2026-08-25T12-00-00-55555555-5555-5555-5555-555555555555.jsonl")
+    try Data().write(to: file)
+    let now = ISO8601DateFormatter().date(from: "2026-08-25T04:00:00Z")!
+    let collector = CodexGrindHistoryCollector()
+    _ = collector.collectIncremental(codexHome: codexHome, now: now, stateURL: stateURL)
+    let event = #"{"timestamp":"2026-08-25T04:01:00.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"超大行后的正常输入"}]}}"#
+    try (String(repeating: "x", count: 300_000) + "\n" + event + "\n").write(
+        to: file, atomically: false, encoding: .utf8
+    )
+    try FileManager.default.setAttributes([.modificationDate: now.addingTimeInterval(60)], ofItemAtPath: file.path)
+    try expect(collector.collectIncremental(codexHome: codexHome, now: now.addingTimeInterval(60), stateURL: stateURL).sessions.isEmpty, "the first bounded chunk may skip an oversized row")
+    let resumed = collector.collectIncremental(codexHome: codexHome, now: now.addingTimeInterval(120), stateURL: stateURL)
+    try expectEqual(resumed.sessions.first?.dayTurnCount, 1, "a skipped oversized row must not block later complete JSONL events")
 }
 
 func testClientVersionComparison() throws {
@@ -1548,13 +1961,93 @@ func testProjectActivityBuildsReliableHumanInputOutbox() throws {
     let appended = #"{"timestamp":"\#(appendedTimestamp)","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"继续完善客户工单筛选和状态提醒"}]}}"#
     let handle = try FileHandle(forWritingTo: sessionURL)
     try handle.seekToEnd()
-    try handle.write(contentsOf: Data(("\n" + appended).utf8))
+    try handle.write(contentsOf: Data(("\n" + appended + "\n").utf8))
     try handle.close()
     let incremental = store.prepareSync(days: 30, now: now.addingTimeInterval(120), codexHome: codexHome)
     try expectEqual(incremental.inputEvents.count, 4, "incremental collector should append only the newly written input")
     try expect(incremental.inputEvents.last?.text.contains("客户工单筛选") == true, "new human input should retain its exact text")
     store.acknowledgeInputEvents(ids: incremental.inputEvents.map(\.id))
     try expect(store.prepareSync(days: 30, now: now.addingTimeInterval(180), codexHome: codexHome).inputEvents.isEmpty, "acknowledged events must leave the reliable outbox")
+}
+
+func testProjectInputCursorSurvivesArchiveMoveAndPartialRows() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("project-move-\(UUID().uuidString)")
+    let repository = root.appendingPathComponent("创新局")
+    let codexHome = root.appendingPathComponent("codex")
+    let sessions = codexHome.appendingPathComponent("sessions/2026/08/25")
+    let archived = codexHome.appendingPathComponent("archived_sessions")
+    let activityURL = root.appendingPathComponent("support/project.json")
+    try FileManager.default.createDirectory(at: repository.appendingPathComponent(".git"), withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: archived, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let filename = "rollout-2026-08-25T13-00-00-66666666-6666-6666-6666-666666666666.jsonl"
+    var file = sessions.appendingPathComponent(filename)
+    try Data().write(to: file)
+    let now = Date()
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    let store = ProjectActivityStore(activityURL: activityURL)
+    _ = store.prepareSync(days: 30, now: now, codexHome: codexHome)
+
+    func message(at date: Date, text: String) -> String {
+        #"{"timestamp":"\#(formatter.string(from: date))","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"\#(text)"}]}}"#
+    }
+    let meta = #"{"timestamp":"\#(formatter.string(from: now))","type":"session_meta","payload":{"id":"stable-project-session","cwd":"\#(repository.path)","source":"vscode"}}"#
+    try (meta + "\n" + message(at: now.addingTimeInterval(1), text: "移动前输入") + "\n").write(
+        to: file, atomically: false, encoding: .utf8
+    )
+    let beforeMove = store.prepareSync(days: 30, now: now.addingTimeInterval(2), codexHome: codexHome)
+    try expectEqual(beforeMove.inputEvents.map(\.text), ["移动前输入"], "the live rollout should emit its first appended input once")
+    store.acknowledgeInputEvents(ids: beforeMove.inputEvents.map(\.id))
+
+    let moved = archived.appendingPathComponent(filename)
+    try FileManager.default.moveItem(at: file, to: moved)
+    file = moved
+    let moveHandle = try FileHandle(forWritingTo: file)
+    try moveHandle.seekToEnd()
+    try moveHandle.write(contentsOf: Data((message(at: now.addingTimeInterval(3), text: "归档后输入") + "\n").utf8))
+    try moveHandle.close()
+    let afterMove = store.prepareSync(days: 30, now: now.addingTimeInterval(4), codexHome: codexHome)
+    try expectEqual(afterMove.inputEvents.map(\.text), ["归档后输入"], "archive movement must reuse the stable cursor without replaying acknowledged text")
+    store.acknowledgeInputEvents(ids: afterMove.inputEvents.map(\.id))
+
+    let partialHandle = try FileHandle(forWritingTo: file)
+    try partialHandle.seekToEnd()
+    try partialHandle.write(contentsOf: Data(message(at: now.addingTimeInterval(5), text: "补全后的输入").utf8))
+    try partialHandle.close()
+    try expect(store.prepareSync(days: 30, now: now.addingTimeInterval(6), codexHome: codexHome).inputEvents.isEmpty, "an EOF partial project row must retain its cursor")
+    let newlineHandle = try FileHandle(forWritingTo: file)
+    try newlineHandle.seekToEnd()
+    try newlineHandle.write(contentsOf: Data("\n".utf8))
+    try newlineHandle.close()
+    let completed = store.prepareSync(days: 30, now: now.addingTimeInterval(7), codexHome: codexHome)
+    try expectEqual(completed.inputEvents.map(\.text), ["补全后的输入"], "the completed project row should be emitted after its newline arrives")
+}
+
+func testProjectOversizedRowDoesNotBlockNewerInput() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("project-oversized-\(UUID().uuidString)")
+    let repository = root.appendingPathComponent("创新局")
+    let codexHome = root.appendingPathComponent("codex")
+    let sessions = codexHome.appendingPathComponent("sessions")
+    let activityURL = root.appendingPathComponent("support/project.json")
+    try FileManager.default.createDirectory(at: repository.appendingPathComponent(".git"), withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let file = sessions.appendingPathComponent("rollout-oversized-77777777-7777-7777-7777-777777777777.jsonl")
+    try Data().write(to: file)
+    let store = ProjectActivityStore(activityURL: activityURL)
+    let now = Date()
+    let timestamp = ISO8601DateFormatter().string(from: now)
+    _ = store.prepareSync(days: 30, now: now, codexHome: codexHome)
+    let meta = #"{"timestamp":"\#(timestamp)","type":"session_meta","payload":{"id":"oversized-session","cwd":"\#(repository.path)","source":"vscode"}}"#
+    let event = #"{"timestamp":"\#(timestamp)","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"超大行后的项目输入"}]}}"#
+    try (String(repeating: "x", count: 300_000) + "\n" + meta + "\n" + event + "\n").write(
+        to: file, atomically: false, encoding: .utf8
+    )
+    try expect(store.prepareSync(days: 30, now: now.addingTimeInterval(1), codexHome: codexHome).inputEvents.isEmpty, "one oversized chunk may be skipped without advancing to EOF")
+    let resumed = store.prepareSync(days: 30, now: now.addingTimeInterval(2), codexHome: codexHome)
+    try expectEqual(resumed.inputEvents.map(\.text), ["超大行后的项目输入"], "oversized JSONL rows must not block later human input")
 }
 
 func testProjectActivityDoesNotInventPurposeForGenericProjectName() throws {
@@ -1688,6 +2181,8 @@ let tests: [(String, () throws -> Void)] = [
     ("session quota collector repairs Spark contamination", testSessionQuotaCollectorRepairsNewerSparkContamination),
     ("session quota collector replaces fresh unverified cache", testSessionQuotaCollectorReplacesFreshUnverifiedCache),
     ("session quota collector rejects legacy 300-minute event", testSessionQuotaCollectorRejectsLegacy300MinuteEvent),
+    ("session quota collector persists incremental cursors", testSessionQuotaCollectorPersistsOffsetsAndHandlesArchiveAndTruncation),
+    ("session quota rejects future freshness", testSessionQuotaCollectorRejectsFutureObservationFreshness),
     ("app-server quota mapper reads codex limit", testAppServerQuotaMapperReadsCodexLimitByExactDurations),
     ("app-server quota mapper falls back top-level", testAppServerQuotaMapperFallsBackToTopLevelRateLimits),
     ("app-server quota mapper rejects Spark fallback", testAppServerQuotaMapperRejectsSparkFallback),
@@ -1722,13 +2217,24 @@ let tests: [(String, () throws -> Void)] = [
     ("official Codex usage parses daily buckets", testOfficialCodexUsageParsesDailyBuckets),
     ("official usage refresh tracks UTC settlement", testOfficialUsageRefreshPolicyTracksUTCSettlement),
     ("session counter uses local filename and metadata only", testSessionCounterUsesLocalFilenameAndMetadataWithoutReadingContents),
+    ("collectors reuse one session file index", testCollectorsCanReuseOneSessionFileIndexSnapshot),
+    ("session activity uses acknowledged daily deltas", testSessionActivityDeltaRequiresAcknowledgementAndDailyFull),
+    ("team server capability gates session deltas", testTeamServerCapabilityRequiresExactDeltaProtocol),
     ("grind history reads event timestamps only", testGrindHistoryCollectorReadsOnlyEventTimestamps),
     ("today live collector tails appended usage only", testTodayLiveCollectorStartsAtEOFAndCountsOnlyAppendedUsage),
     ("today live collector splits local and UTC days", testTodayLiveCollectorSplitsLocalAndUTCDayAtSettlementBoundary),
     ("today live collector protects legacy UTC baseline", testTodayLiveCollectorDoesNotTrustLegacyMidDayStateAsUTCBaseline),
     ("grind history collector tails appended interactions only", testGrindHistoryIncrementalCollectorStartsAtEOF),
+    ("grind history drains more than sixteen files", testGrindIncrementalDrainsMoreThanSixteenNewFiles),
+    ("grind history re-reads truncated replacements", testGrindIncrementalReReadsTruncatedReplacement),
+    ("grind history migrates legacy moved cursors", testGrindMigratesLegacyPathCursorAfterArchiveMove),
+    ("tail collectors preserve partial rows across moves", testTailCollectorsPreservePartialRowsAcrossArchiveMove),
+    ("collectors read newly archived short sessions", testCollectorsReadSessionFirstDiscoveredAfterArchiving),
+    ("grind history skips oversized rows without blocking", testGrindOversizedRowDoesNotBlockNewerEvents),
     ("project audit sanitizes workspace and session", testProjectActivityStoreKeepsOnlySanitizedProjectAudit),
     ("project input ledger filters and acknowledges human text", testProjectActivityBuildsReliableHumanInputOutbox),
+    ("project input cursor survives archive and partial rows", testProjectInputCursorSurvivesArchiveMoveAndPartialRows),
+    ("project input skips oversized rows without blocking", testProjectOversizedRowDoesNotBlockNewerInput),
     ("project audit does not invent generic purpose", testProjectActivityDoesNotInventPurposeForGenericProjectName),
     ("project audit uses neutral property purpose", testProjectActivityUsesNeutralPropertyPurpose),
     ("project input baseline is metadata-only and bounded", testProjectActivityBaselineIsMetadataOnlyAndBounded),

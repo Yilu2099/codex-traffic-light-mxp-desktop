@@ -83,6 +83,13 @@ public struct TeamSessionActivity: Codable, Equatable, Sendable {
     public var day: String
     public var startedAt: String?
     public var updatedAt: String?
+
+    public init(sessionId: String, day: String, startedAt: String? = nil, updatedAt: String? = nil) {
+        self.sessionId = sessionId
+        self.day = day
+        self.startedAt = startedAt
+        self.updatedAt = updatedAt
+    }
 }
 
 public struct TeamGrindHistoryDay: Codable, Equatable, Sendable {
@@ -224,28 +231,38 @@ public struct CodexSessionFileCounter: Sendable {
     public init() {}
 
     public func collect(codexHome: URL, days: Int, now: Date = Date()) -> [TeamSessionActivity] {
+        collect(
+            codexHome: codexHome,
+            sessionFileIndex: CodexSessionFileIndex(codexHome: codexHome),
+            days: days,
+            now: now
+        )
+    }
+
+    public func collect(
+        codexHome: URL,
+        sessionFileIndex: CodexSessionFileIndex,
+        days: Int,
+        now: Date = Date()
+    ) -> [TeamSessionActivity] {
         let cutoff = now.addingTimeInterval(-Double(max(1, days)) * 86_400)
-        let roots = ["sessions", "archived_sessions"].map { codexHome.appendingPathComponent($0) }
         var sessions: [String: TeamSessionActivity] = [:]
-        for root in roots {
-            guard let enumerator = FileManager.default.enumerator(
-                at: root,
-                includingPropertiesForKeys: [.contentModificationDateKey],
-                options: [.skipsHiddenFiles]
-            ) else { continue }
-            for case let url as URL in enumerator where url.pathExtension == "jsonl" {
-                let values = try? url.resourceValues(forKeys: [.contentModificationDateKey])
-                let modifiedAt = values?.contentModificationDate ?? .distantPast
-                let sessionStartedAt = timestampFromFilename(url.lastPathComponent) ?? modifiedAt
-                guard max(sessionStartedAt, modifiedAt) >= cutoff else { continue }
-                let sessionID = sessionIDFromFilename(url.deletingPathExtension().lastPathComponent)
-                sessions[sessionID] = TeamSessionActivity(
-                    sessionId: sessionID,
-                    day: dayString(sessionStartedAt),
-                    startedAt: isoString(sessionStartedAt),
-                    updatedAt: modifiedAt == .distantPast ? nil : isoString(modifiedAt)
-                )
+        for file in sessionFileIndex.uniqueFiles() {
+            let modifiedAt = file.modifiedAt
+            let sessionStartedAt = timestampFromFilename(file.url.lastPathComponent) ?? modifiedAt
+            guard max(sessionStartedAt, modifiedAt) >= cutoff else { continue }
+            let sessionID = sessionIDFromFilename(file.url.deletingPathExtension().lastPathComponent)
+            let candidate = TeamSessionActivity(
+                sessionId: sessionID,
+                day: dayString(sessionStartedAt),
+                startedAt: isoString(sessionStartedAt),
+                updatedAt: modifiedAt == .distantPast ? nil : isoString(modifiedAt)
+            )
+            if let existing = sessions[sessionID],
+               (existing.updatedAt ?? "") >= (candidate.updatedAt ?? "") {
+                continue
             }
+            sessions[sessionID] = candidate
         }
         return sessions.values.sorted { ($0.day, $0.sessionId) < ($1.day, $1.sessionId) }
     }
@@ -471,47 +488,87 @@ public struct CodexGrindHistoryCollector: Sendable {
         stateURL: URL = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".wanhe-codex-token/grind-live.json")
     ) -> (history: [TeamGrindHistoryDay], sessions: [TeamSessionInteractionSummary]) {
+        collectIncremental(
+            codexHome: codexHome,
+            sessionFileIndex: CodexSessionFileIndex(codexHome: codexHome),
+            days: days,
+            now: now,
+            stateURL: stateURL
+        )
+    }
+
+    public func collectIncremental(
+        codexHome: URL,
+        sessionFileIndex: CodexSessionFileIndex,
+        days: Int = 30,
+        now: Date = Date(),
+        stateURL: URL = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".wanhe-codex-token/grind-live.json")
+    ) -> (history: [TeamGrindHistoryDay], sessions: [TeamSessionInteractionSummary]) {
         let cutoff = now.addingTimeInterval(-Double(max(1, days) + 1) * 86_400)
-        var files: [(url: URL, modifiedAt: Date, size: Int64)] = []
-        for folder in ["sessions", "archived_sessions"] {
-            let root = codexHome.appendingPathComponent(folder)
-            guard let enumerator = FileManager.default.enumerator(
-                at: root,
-                includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey],
-                options: [.skipsHiddenFiles]
-            ) else { continue }
-            for case let url as URL in enumerator where url.pathExtension == "jsonl" {
-                let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
-                let modifiedAt = values?.contentModificationDate ?? .distantPast
-                guard modifiedAt >= cutoff else { continue }
-                files.append((url, modifiedAt, Int64(max(0, values?.fileSize ?? 0))))
-            }
-        }
+        var files = sessionFileIndex.uniqueFiles(modifiedSince: cutoff)
         files.sort { $0.modifiedAt > $1.modifiedAt }
-        var state = (try? Data(contentsOf: stateURL)).flatMap { try? JSONDecoder().decode(IncrementalState.self, from: $0) }
+        let loadedState = (try? Data(contentsOf: stateURL))
+            .flatMap { try? JSONDecoder().decode(IncrementalState.self, from: $0) }
+        var state = loadedState
             ?? IncrementalState(initialized: false, updatedAt: isoString(now), fileOffsets: [:])
+        var stateChanged = loadedState == nil
         if !state.initialized {
-            for file in files { state.fileOffsets[file.url.path] = file.size }
+            for file in files { state.fileOffsets[file.stableKey] = file.size }
             state.initialized = true
             state.updatedAt = isoString(now)
             saveIncrementalState(state, to: stateURL)
             return ([], [])
         }
 
-        let previousUpdate = Self.isoDate(state.updatedAt) ?? now
+        // Register every candidate before applying the per-run read budget.
+        // Pending new live files retain offset zero, so files beyond the first
+        // 16 are drained on later syncs instead of being baselined at EOF.
+        for file in files {
+            let key = file.stableKey
+            if state.fileOffsets[key] == nil, let legacyOffset = state.fileOffsets[file.path] {
+                state.fileOffsets[key] = legacyOffset
+                state.fileOffsets.removeValue(forKey: file.path)
+                stateChanged = true
+            } else if state.fileOffsets[key] == nil,
+                      let movedLegacy = state.fileOffsets.first(where: {
+                          $0.key.contains("/")
+                              && URL(fileURLWithPath: $0.key).lastPathComponent == key
+                      }) {
+                // A pre-stable-key state may still name the old sessions path
+                // after Codex has already moved the file into archived_sessions.
+                state.fileOffsets[key] = movedLegacy.value
+                state.fileOffsets.removeValue(forKey: movedLegacy.key)
+                stateChanged = true
+            } else if state.fileOffsets[key] == nil {
+                // Initialization already baselines all historical files. Any
+                // rollout first discovered later is new work, even if Codex
+                // created and archived the short session between two polls.
+                state.fileOffsets[key] = 0
+                stateChanged = true
+            }
+        }
         var interactionDates: [String: InteractionDates] = [:]
         var history: [String: (day: Date?, night: Date?)] = [:]
         var processed = 0
         for file in files where processed < 16 {
-            let knownOffset = state.fileOffsets[file.url.path]
-            let start = knownOffset.map { min(max(0, $0), file.size) }
-                ?? (file.modifiedAt >= previousUpdate && !file.url.path.contains("/archived_sessions/") ? 0 : file.size)
+            let key = file.stableKey
+            let knownOffset = state.fileOffsets[key]
+            let start = knownOffset.map { offset in
+                // Truncation or in-place replacement invalidates the former
+                // byte boundary. Re-read this one file so complete new events
+                // already present before the next sync are not lost.
+                offset > file.size ? 0 : max(0, offset)
+            } ?? file.size
             guard start < file.size else {
-                state.fileOffsets[file.url.path] = file.size
+                if knownOffset != file.size { stateChanged = true }
+                state.fileOffsets[key] = file.size
                 continue
             }
             if isSubagentSession(file.url) {
-                state.fileOffsets[file.url.path] = file.size
+                state.fileOffsets[key] = file.size
+                stateChanged = true
+                processed += 1
                 continue
             }
             guard let handle = try? FileHandle(forReadingFrom: file.url) else { continue }
@@ -519,17 +576,19 @@ public struct CodexGrindHistoryCollector: Sendable {
             let data = (try? handle.read(upToCount: 256 * 1_024)) ?? Data()
             try? handle.close()
             guard !data.isEmpty else { continue }
-            let reachedEOF = start + Int64(data.count) >= file.size
-            let complete: Data
-            if reachedEOF {
-                complete = data
-            } else if let newline = data.lastIndex(of: 0x0A) {
-                complete = Data(data.prefix(through: newline))
-            } else {
-                state.fileOffsets[file.url.path] = start + Int64(data.count)
+            guard let newline = data.lastIndex(of: 0x0A) else {
+                let reachedEOF = start + Int64(data.count) >= file.size
+                if !reachedEOF {
+                    // Skip one bounded piece of an oversized JSONL row so it
+                    // cannot block every newer event forever. At EOF, retain
+                    // the offset because an ordinary partial row may complete.
+                    state.fileOffsets[key] = start + Int64(data.count)
+                    stateChanged = true
+                }
                 processed += 1
                 continue
             }
+            let complete = Data(data.prefix(through: newline))
             var modern: [Date] = []
             var legacy: [Date] = []
             for line in complete.split(separator: 0x0A) {
@@ -554,13 +613,18 @@ public struct CodexGrindHistoryCollector: Sendable {
                 if hour >= 23 || hour < 5 { values.night.append(date) }
                 interactionDates[key] = values
             }
-            state.fileOffsets[file.url.path] = start + Int64(complete.count)
+            state.fileOffsets[key] = start + Int64(complete.count)
+            stateChanged = true
             processed += 1
         }
-        let activePaths = Set(files.map { $0.url.path })
-        state.fileOffsets = state.fileOffsets.filter { activePaths.contains($0.key) }
-        state.updatedAt = isoString(now)
-        saveIncrementalState(state, to: stateURL)
+        let activeKeys = Set(files.map(\.stableKey))
+        let previousOffsetCount = state.fileOffsets.count
+        state.fileOffsets = state.fileOffsets.filter { activeKeys.contains($0.key) }
+        if state.fileOffsets.count != previousOffsetCount { stateChanged = true }
+        if stateChanged {
+            state.updatedAt = isoString(now)
+            saveIncrementalState(state, to: stateURL)
+        }
         let sessions = interactionDates.compactMap { key, values -> TeamSessionInteractionSummary? in
             let parts = key.split(separator: "|", maxSplits: 1).map(String.init)
             guard parts.count == 2 else { return nil }

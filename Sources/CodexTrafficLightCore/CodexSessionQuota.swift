@@ -23,65 +23,190 @@ public struct CodexSessionQuotaCollector: Sendable {
     public static let source = "codex-session-rate-limits"
     public static let primaryLimitID = "codex"
 
+    public static func defaultStateURL() -> URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".wanhe-codex-token/session-quota.json")
+    }
+
+    private struct FileCursor: Codable, Equatable {
+        var path: String
+        var fileIdentifier: String?
+        var offset: UInt64
+        var size: UInt64
+        var modifiedAt: TimeInterval
+    }
+
+    private struct PersistedObservation: Codable, Equatable {
+        var weeklyRemainingPercent: Int
+        var weeklyResetsAt: TimeInterval?
+        var observedAt: TimeInterval
+
+        init(_ observation: CodexSessionQuotaObservation) {
+            weeklyRemainingPercent = observation.weeklyRemainingPercent
+            weeklyResetsAt = observation.weeklyResetsAt?.timeIntervalSince1970
+            observedAt = observation.observedAt.timeIntervalSince1970
+        }
+
+        var observation: CodexSessionQuotaObservation {
+            CodexSessionQuotaObservation(
+                weeklyRemainingPercent: weeklyRemainingPercent,
+                weeklyResetsAt: weeklyResetsAt.map { Date(timeIntervalSince1970: $0) },
+                observedAt: Date(timeIntervalSince1970: observedAt)
+            )
+        }
+    }
+
+    private struct State: Codable, Equatable {
+        var version: Int
+        var files: [String: FileCursor]
+        var latest: PersistedObservation?
+    }
+
     private let tailBytes: UInt64
     private let maximumFiles: Int
+    private let stateURL: URL
 
-    public init(tailBytes: UInt64 = 1_048_576, maximumFiles: Int = 200) {
+    public init(
+        tailBytes: UInt64 = 1_048_576,
+        maximumFiles: Int = 200,
+        stateURL: URL = CodexSessionQuotaCollector.defaultStateURL()
+    ) {
         self.tailBytes = max(65_536, tailBytes)
         self.maximumFiles = max(1, maximumFiles)
+        self.stateURL = stateURL
     }
 
     public func collect(codexHome: URL, now: Date = Date(), fileMaxAge: TimeInterval = 2 * 86_400) -> CodexSessionQuotaObservation? {
+        collect(
+            sessionFileIndex: CodexSessionFileIndex(codexHome: codexHome),
+            now: now,
+            fileMaxAge: fileMaxAge
+        )
+    }
+
+    public func collect(
+        sessionFileIndex: CodexSessionFileIndex,
+        now: Date = Date(),
+        fileMaxAge: TimeInterval = 2 * 86_400
+    ) -> CodexSessionQuotaObservation? {
         let cutoff = now.addingTimeInterval(-fileMaxAge)
-        let roots = ["sessions", "archived_sessions"].map { codexHome.appendingPathComponent($0) }
-        var files: [(url: URL, modifiedAt: Date)] = []
-
-        for root in roots {
-            guard let enumerator = FileManager.default.enumerator(
-                at: root,
-                includingPropertiesForKeys: [.isRegularFileKey, .contentModificationDateKey],
-                options: [.skipsHiddenFiles]
-            ) else { continue }
-            for case let url as URL in enumerator where url.pathExtension == "jsonl" {
-                guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .contentModificationDateKey]),
-                      values.isRegularFile == true else { continue }
-                let modifiedAt = values.contentModificationDate ?? .distantPast
-                if modifiedAt >= cutoff { files.append((url, modifiedAt)) }
-            }
+        var uniqueFiles: [String: CodexSessionFileIndex.Entry] = [:]
+        for file in sessionFileIndex.files where file.modifiedAt >= cutoff {
+            let key = file.stableKey
+            if let existing = uniqueFiles[key], existing.modifiedAt >= file.modifiedAt { continue }
+            uniqueFiles[key] = file
         }
+        let files = uniqueFiles.values.sorted { $0.modifiedAt > $1.modifiedAt }
+        let original = loadState() ?? State(version: 1, files: [:], latest: nil)
+        var state = original
+        var newest = state.latest?.observation
+        if let observation = newest, observation.observedAt > now.addingTimeInterval(60) {
+            newest = nil
+        }
+        let activeKeys = Set(files.prefix(maximumFiles).map(\.stableKey))
 
-        files.sort { $0.modifiedAt > $1.modifiedAt }
-        var newest: CodexSessionQuotaObservation?
         for file in files.prefix(maximumFiles) {
-            guard let observation = newestObservation(in: file.url) else { continue }
-            if newest == nil || observation.observedAt > newest!.observedAt { newest = observation }
+            let key = file.stableKey
+            let size = UInt64(max(0, file.size))
+            let modifiedAt = file.modifiedAt.timeIntervalSince1970
+            if var cursor = state.files[key],
+               cursor.size == size,
+               cursor.modifiedAt == modifiedAt {
+                // Moving a rollout from sessions to archived_sessions preserves
+                // its stable filename and therefore does not trigger a reread.
+                cursor.path = file.path
+                cursor.fileIdentifier = file.fileIdentifier
+                state.files[key] = cursor
+                continue
+            }
+
+            let previous = state.files[key]
+            let isSameFile = previous.map {
+                guard let previousID = $0.fileIdentifier,
+                      let currentID = file.fileIdentifier else { return $0.path == file.path }
+                return previousID == currentID
+            } ?? false
+            let isAppend = previous.map {
+                isSameFile && size > $0.size && $0.offset <= $0.size
+            } ?? false
+            let start: UInt64
+            let discardLeadingPartial: Bool
+            if isAppend, let previous {
+                start = min(previous.offset, size)
+                discardLeadingPartial = false
+            } else {
+                start = size > tailBytes ? size - tailBytes : 0
+                discardLeadingPartial = start > 0
+            }
+
+            guard let result = observations(
+                in: file.url,
+                from: start,
+                discardLeadingPartial: discardLeadingPartial
+            ) else { continue }
+            for observation in result.values
+            where observation.observedAt <= now.addingTimeInterval(60)
+                && (newest == nil || observation.observedAt > newest!.observedAt) {
+                newest = observation
+            }
+            state.files[key] = FileCursor(
+                path: file.path,
+                fileIdentifier: file.fileIdentifier,
+                offset: result.nextOffset,
+                size: size,
+                modifiedAt: modifiedAt
+            )
         }
+
+        state.files = state.files.filter { activeKeys.contains($0.key) }
+        state.latest = newest.map(PersistedObservation.init)
+        if state != original { saveState(state) }
         return newest
     }
 
-    private func newestObservation(in url: URL) -> CodexSessionQuotaObservation? {
+    private func observations(
+        in url: URL,
+        from start: UInt64,
+        discardLeadingPartial: Bool
+    ) -> (values: [CodexSessionQuotaObservation], nextOffset: UInt64)? {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
         defer { try? handle.close() }
-        guard let end = try? handle.seekToEnd() else { return nil }
-        let start = end > tailBytes ? end - tailBytes : 0
         do {
             try handle.seek(toOffset: start)
-            guard let data = try handle.readToEnd(), !data.isEmpty,
-                  let text = String(data: data, encoding: .utf8) else { return nil }
-            var lines = text.split(separator: "\n", omittingEmptySubsequences: true)
-            if start > 0, !text.hasPrefix("\n"), !lines.isEmpty { lines.removeFirst() }
-            for line in lines.reversed() {
-                guard line.contains("\"type\":\"token_count\""), line.contains("\"rate_limits\""),
-                      let observation = parse(line: line) else { continue }
-                return observation
+            let data = try handle.readToEnd() ?? Data()
+            guard !data.isEmpty else { return ([], start) }
+            guard let newline = data.lastIndex(of: 0x0A) else { return ([], start) }
+            let complete = data.prefix(through: newline)
+            var lines = complete.split(separator: 0x0A, omittingEmptySubsequences: true)
+            if discardLeadingPartial, !lines.isEmpty { lines.removeFirst() }
+            var values: [CodexSessionQuotaObservation] = []
+            for line in lines {
+                guard line.range(of: Data("\"type\":\"token_count\"".utf8)) != nil,
+                      line.range(of: Data("\"rate_limits\"".utf8)) != nil,
+                      let observation = parse(line: String(decoding: line, as: UTF8.self)) else { continue }
+                values.append(observation)
             }
+            return (values, start + UInt64(complete.count))
         } catch {
             return nil
         }
-        return nil
     }
 
-    private func parse(line: Substring) -> CodexSessionQuotaObservation? {
+    private func loadState() -> State? {
+        guard let data = try? Data(contentsOf: stateURL) else { return nil }
+        return try? JSONDecoder().decode(State.self, from: data)
+    }
+
+    private func saveState(_ state: State) {
+        try? FileManager.default.createDirectory(
+            at: stateURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        guard let data = try? JSONEncoder().encode(state) else { return }
+        try? data.write(to: stateURL, options: [.atomic])
+    }
+
+    private func parse(line: String) -> CodexSessionQuotaObservation? {
         guard let object = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
               let timestamp = object["timestamp"] as? String,
               let observedAt = Self.isoDate(timestamp),
@@ -133,6 +258,15 @@ public struct CodexSessionQuotaCollector: Sendable {
               let existingReset = existing.weeklyResetsAt,
               let observedReset = observation.weeklyResetsAt else { return false }
         return existingReset.timeIntervalSince(observedReset) > 12 * 60 * 60
+    }
+
+    public static func isFresh(
+        _ observation: CodexSessionQuotaObservation,
+        now: Date,
+        freshness: TimeInterval = 15 * 60
+    ) -> Bool {
+        let age = now.timeIntervalSince(observation.observedAt)
+        return age >= -60 && age <= freshness
     }
 
     private static func resetDate(_ window: [String: Any]) -> Date? {

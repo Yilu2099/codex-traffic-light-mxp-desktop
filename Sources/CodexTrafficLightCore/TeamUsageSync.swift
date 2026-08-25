@@ -338,6 +338,8 @@ public struct TeamUsagePayload: Codable, Equatable, Sendable {
     public var officialUsage: OfficialCodexUsageReport
     public var todayLiveUsage: TodayLiveUsageReport
     public var sessionActivity: [TeamSessionActivity]
+    public var sessionActivityMode: String?
+    public var sessionActivityCutoffDay: String?
     public var interactionSummary: [TeamSessionInteractionSummary]
     public var grindHistory: [TeamGrindHistoryDay]
     public var grindHistoryMode: String
@@ -379,6 +381,16 @@ public struct TeamUsageSyncResult: Codable, Equatable, Sendable {
     public var accepted: Int
     public var total: Int
     public var inputEventIds: [String]?
+    public var sessionActivityModeAccepted: String?
+    public var sessionActivityDurable: Bool?
+}
+
+public struct TeamServerCapabilities: Codable, Equatable, Sendable {
+    public var sessionActivityProtocol: String?
+
+    public var supportsSessionActivityDelta: Bool {
+        sessionActivityProtocol == "delta_v1"
+    }
 }
 
 public struct TeamPresencePayload: Codable, Equatable, Sendable {
@@ -802,6 +814,13 @@ public struct TeamUsageSyncService: Sendable {
         return components?.url ?? websiteURL
     }
 
+    public var healthURL: URL {
+        var components = URLComponents(url: websiteURL, resolvingAgainstBaseURL: false)
+        components?.path = "/api/health"
+        components?.query = nil
+        return components?.url ?? websiteURL
+    }
+
     public static func presenceMarkerURL(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> URL {
         home.appendingPathComponent("Library/Application Support/CodexTrafficLight/last-activity")
     }
@@ -822,10 +841,20 @@ public struct TeamUsageSyncService: Sendable {
         )
     }
 
-    public func makePayload(quota: TeamQuotaReport?, quotaDiagnostic: TeamQuotaDiagnostic? = nil) throws -> TeamUsagePayload {
+    public func makePayload(
+        quota: TeamQuotaReport?,
+        quotaDiagnostic: TeamQuotaDiagnostic? = nil,
+        sessionActivityProtocol: String? = nil
+    ) throws -> TeamUsagePayload {
+        let now = Date()
         let device = TeamDeviceIdentity.current()
         let officialUsage = try cachedOfficialUsage()
-        let todayLiveUsage = TodayCodexUsageCollector().collect(codexHome: configuration.codexHome)
+        let sessionFileIndex = CodexSessionFileIndex(codexHome: configuration.codexHome)
+        let todayLiveUsage = TodayCodexUsageCollector().collect(
+            codexHome: configuration.codexHome,
+            sessionFileIndex: sessionFileIndex,
+            now: now
+        )
         // Token accounting reads only session metadata and token_count totals.
         // The separately authorized input ledger below tails human input text;
         // it never includes assistant replies, code, attachments or injected context.
@@ -833,23 +862,35 @@ public struct TeamUsageSyncService: Sendable {
         // TodayCodexUsageCollector already tails appended token events and the
         // server retains earlier calendar buckets for week/month aggregation.
         let calendarUsage: [TeamUsageSession] = []
-        let sessionActivity = CodexSessionFileCounter().collect(
+        let allSessionActivity = CodexSessionFileCounter().collect(
             codexHome: configuration.codexHome,
-            days: configuration.collectDays
+            sessionFileIndex: sessionFileIndex,
+            days: configuration.collectDays,
+            now: now
+        )
+        let sessionActivityPlan = TeamSessionActivityDeltaStore().prepare(
+            current: allSessionActivity,
+            days: configuration.collectDays,
+            now: now,
+            forceFull: sessionActivityProtocol != "delta_v1"
         )
         let interactionReport = CodexGrindHistoryCollector().collectIncremental(
             codexHome: configuration.codexHome,
-            days: min(30, configuration.collectDays)
+            sessionFileIndex: sessionFileIndex,
+            days: min(30, configuration.collectDays),
+            now: now
         )
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         let projectReport = ProjectActivityStore().prepareSync(
             days: configuration.collectDays,
-            codexHome: configuration.codexHome
+            now: now,
+            codexHome: configuration.codexHome,
+            sessionFileIndex: sessionFileIndex
         )
         return TeamUsagePayload(
             collector: "wanhe-codex-mac-menu",
-            collectedAt: formatter.string(from: Date()),
+            collectedAt: formatter.string(from: now),
             profile: TeamUsageProfile(
                 userId: configuration.userID,
                 userName: configuration.userName,
@@ -862,7 +903,9 @@ public struct TeamUsageSyncService: Sendable {
             quotaDiagnostic: quotaDiagnostic,
             officialUsage: officialUsage,
             todayLiveUsage: todayLiveUsage,
-            sessionActivity: sessionActivity,
+            sessionActivity: sessionActivityPlan.activities,
+            sessionActivityMode: sessionActivityPlan.mode,
+            sessionActivityCutoffDay: sessionActivityPlan.cutoffDay,
             interactionSummary: interactionReport.sessions,
             grindHistory: interactionReport.history,
             grindHistoryMode: "interaction_v7",
@@ -906,7 +949,15 @@ public struct TeamUsageSyncService: Sendable {
     }
 
     public func sync(quota: TeamQuotaReport?, quotaDiagnostic: TeamQuotaDiagnostic? = nil) async throws -> TeamUsageSyncResult {
-        let payload = try makePayload(quota: quota, quotaDiagnostic: quotaDiagnostic)
+        // Capability negotiation is deliberately fail-closed. If health is
+        // unavailable or an older server omits the protocol field, the upload
+        // remains a full snapshot and is still allowed to proceed.
+        let activityProtocol = await fetchServerCapabilities()?.sessionActivityProtocol
+        let payload = try makePayload(
+            quota: quota,
+            quotaDiagnostic: quotaDiagnostic,
+            sessionActivityProtocol: activityProtocol
+        )
         var request = URLRequest(url: configuration.endpoint)
         request.httpMethod = "POST"
         request.timeoutInterval = 45
@@ -922,8 +973,40 @@ public struct TeamUsageSyncService: Sendable {
         guard let result = try? JSONDecoder().decode(TeamUsageSyncResult.self, from: data) else {
             throw TeamUsageSyncError.invalidResponse
         }
+        if let mode = payload.sessionActivityMode,
+           result.sessionActivityModeAccepted == mode,
+           result.sessionActivityDurable == true,
+           let cutoffDay = payload.sessionActivityCutoffDay,
+           let collectedAt = Self.isoDate(payload.collectedAt) {
+            TeamSessionActivityDeltaStore().acknowledge(TeamSessionActivityDeltaPlan(
+                mode: mode,
+                cutoffDay: cutoffDay,
+                localDay: Self.localDayString(collectedAt),
+                activities: payload.sessionActivity
+            ))
+        }
         ProjectActivityStore().acknowledgeInputEvents(ids: result.inputEventIds ?? [])
         return result
+    }
+
+    private func fetchServerCapabilities() async -> TeamServerCapabilities? {
+        var request = URLRequest(url: healthURL)
+        request.timeoutInterval = 5
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.setValue("Bearer \(configuration.token)", forHTTPHeaderField: "Authorization")
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              let http = response as? HTTPURLResponse,
+              (200..<300).contains(http.statusCode) else { return nil }
+        return try? JSONDecoder().decode(TeamServerCapabilities.self, from: data)
+    }
+
+    private static func localDayString(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_CA")
+        formatter.timeZone = TimeZone(identifier: "Asia/Shanghai")
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: date)
     }
 
     public func syncPresence(lastActiveAt: Date?, taskActiveAt: Date?) async throws -> TeamPresenceResult {
