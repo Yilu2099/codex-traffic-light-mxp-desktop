@@ -446,6 +446,7 @@ public struct TeamPresencePayload: Codable, Equatable, Sendable {
     public var device: TeamDeviceIdentity
     public var lastActiveAt: String?
     public var taskActiveAt: String?
+    public var todayLiveUsage: TodayLiveUsageReport?
 }
 
 public struct TeamPresenceResult: Codable, Equatable, Sendable {
@@ -948,7 +949,8 @@ public struct TeamUsageSyncService: Sendable {
             collectedAt: formatter.string(from: now),
             device: TeamDeviceIdentity.current(),
             lastActiveAt: lastActiveAt.map(formatter.string),
-            taskActiveAt: taskActiveAt.map(formatter.string)
+            taskActiveAt: taskActiveAt.map(formatter.string),
+            todayLiveUsage: TodayCodexUsageCollector().cachedReport(now: now)
         )
     }
 

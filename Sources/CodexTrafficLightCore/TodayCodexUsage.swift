@@ -76,6 +76,21 @@ public struct TodayCodexUsageCollector: Sendable {
         )
     }
 
+    /// Reads the small persisted counter without enumerating or opening any
+    /// Codex session file. Presence heartbeats use this as a lightweight
+    /// fallback when a full team payload is still being prepared.
+    public func cachedReport(now: Date = Date()) -> TodayLiveUsageReport? {
+        guard let state = loadState(), state.initialized, state.day == dayString(now) else { return nil }
+        let utcDay = utcDayString(now)
+        return TodayLiveUsageReport(
+            day: state.day,
+            tokens: state.tokens,
+            utcDay: state.utcBaselineComplete == true && state.utcDay == utcDay ? utcDay : nil,
+            utcTokens: state.utcBaselineComplete == true && state.utcDay == utcDay ? state.utcTokens : nil,
+            updatedAt: state.updatedAt
+        )
+    }
+
     /// Uses a caller-owned metadata snapshot so a team sync does not enumerate
     /// the same Codex directory once per collector.
     public func collect(
