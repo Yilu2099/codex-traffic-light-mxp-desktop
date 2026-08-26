@@ -10,6 +10,10 @@ public struct TodayLiveUsageReport: Codable, Equatable, Sendable {
     public var utcTokens: Int?
     public var updatedAt: String
     public var source: String
+    /// Version 2 rebuilds the current day from validated per-turn deltas. The
+    /// server may use a newer counter version to replace an inflated legacy
+    /// cumulative value instead of applying the normal same-day monotonic max.
+    public var counterVersion: Int?
 
     public init(
         day: String,
@@ -17,7 +21,8 @@ public struct TodayLiveUsageReport: Codable, Equatable, Sendable {
         utcDay: String? = nil,
         utcTokens: Int? = nil,
         updatedAt: String,
-        source: String = "local_live_increment"
+        source: String = "local_live_increment",
+        counterVersion: Int? = 2
     ) {
         self.day = day
         self.tokens = max(0, tokens)
@@ -25,6 +30,7 @@ public struct TodayLiveUsageReport: Codable, Equatable, Sendable {
         self.utcTokens = utcTokens.map { max(0, $0) }
         self.updatedAt = updatedAt
         self.source = source
+        self.counterVersion = counterVersion
     }
 }
 
@@ -41,7 +47,14 @@ public struct TodayCodexUsageCollector: Sendable {
         var updatedAt: String
         var fileOffsets: [String: Int64]
         var sessionCumulativeTokens: [String: Int]
+        var eventValidationVersion: Int?
     }
+
+    /// One Codex request cannot legitimately account for tens of millions of
+    /// tokens. Forked/continued sessions can occasionally expose an inherited
+    /// cumulative total as `last_token_usage`; count the day without that one
+    /// impossible event while retaining the new cumulative baseline.
+    private static let maximumSingleEventTokens = 20_000_000
 
     private let stateURL: URL
     private let timeZone: TimeZone
@@ -74,6 +87,8 @@ public struct TodayCodexUsageCollector: Sendable {
         let utcDay = utcDayString(now)
         let files = recentJSONLFiles(sessionFileIndex: sessionFileIndex, now: now)
         let loadedState = loadState()
+        let requiresValidatedRebuild = loadedState?.initialized == true
+            && (loadedState?.eventValidationVersion ?? 0) < 1
         var state = loadedState ?? State(
             initialized: false,
             day: day,
@@ -83,7 +98,8 @@ public struct TodayCodexUsageCollector: Sendable {
             utcBaselineComplete: false,
             updatedAt: isoString(now),
             fileOffsets: [:],
-            sessionCumulativeTokens: [:]
+            sessionCumulativeTokens: [:],
+            eventValidationVersion: 1
         )
         var stateChanged = loadedState == nil
 
@@ -106,11 +122,45 @@ public struct TodayCodexUsageCollector: Sendable {
             stateChanged = true
         }
 
-        if !state.initialized {
+        if requiresValidatedRebuild {
+            var rebuiltLocalTokens = 0
+            var rebuiltUTCTokens = 0
+            var rebuiltOffsets: [String: Int64] = [:]
+            var rebuiltCumulativeTokens: [String: Int] = [:]
+            for file in files {
+                let result = appendedUsage(
+                    file: file.url,
+                    from: 0,
+                    expectedLocalDay: day,
+                    expectedUTCDay: utcDay,
+                    previousCumulative: nil
+                )
+                rebuiltLocalTokens += result.localTokens
+                rebuiltUTCTokens += result.utcTokens
+                rebuiltOffsets[file.stableKey] = result.nextOffset
+                if let cumulative = result.cumulative {
+                    rebuiltCumulativeTokens[sessionID(file)] = cumulative
+                }
+            }
+            // If the underlying session files are unavailable, retain the
+            // existing counter instead of manufacturing a zero correction.
+            if !rebuiltCumulativeTokens.isEmpty {
+                state.tokens = rebuiltLocalTokens
+                state.utcDay = utcDay
+                state.utcTokens = rebuiltUTCTokens
+                state.utcBaselineComplete = true
+                state.fileOffsets = rebuiltOffsets
+                state.sessionCumulativeTokens = rebuiltCumulativeTokens
+            }
+            state.initialized = true
+            state.eventValidationVersion = 1
+            stateChanged = true
+        } else if !state.initialized {
             for file in files {
                 state.fileOffsets[file.stableKey] = file.size
             }
             state.initialized = true
+            state.eventValidationVersion = 1
             stateChanged = true
         } else {
             let previousUpdate = isoDate(state.updatedAt) ?? now
@@ -245,6 +295,7 @@ public struct TodayCodexUsageCollector: Sendable {
                     delta = integer((info["last_token_usage"] as? [String: Any])?["total_tokens"])
                 }
                 cumulative = current
+                guard delta > 0, delta <= Self.maximumSingleEventTokens else { continue }
                 if dayString(timestamp) == expectedLocalDay { localAdded += delta }
                 if utcDayString(timestamp) == expectedUTCDay { utcAdded += delta }
             }
