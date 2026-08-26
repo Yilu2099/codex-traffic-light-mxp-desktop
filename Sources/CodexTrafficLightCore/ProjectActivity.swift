@@ -88,19 +88,21 @@ public final class ProjectActivityStore {
     ) -> ProjectActivitySyncReport {
         let cutoff = now.addingTimeInterval(-Double(max(1, days)) * 86_400).timeIntervalSince1970
         var ledger = read()
-        var conversationCursors = ledger.inputEventCollectionVersion == 2 ? (ledger.conversationCursors ?? [:]) : [:]
+        var conversationCursors = ledger.inputEventCollectionVersion == 3 ? (ledger.conversationCursors ?? [:]) : [:]
         let previousConversationCursors = conversationCursors
         let collection: ProjectConversationCollection
         if let codexHome {
             let fileIndex = sessionFileIndex ?? CodexSessionFileIndex(codexHome: codexHome)
-            if ledger.inputEventCollectionVersion != 2 {
-                // The first run establishes an EOF baseline only. Historical prompts are
-                // deliberately not parsed or uploaded, keeping upgrades lightweight.
+            if ledger.inputEventCollectionVersion != 3 {
+                // First install performs a bounded, metadata-only 30-day audit.
+                // Historical prompt text is discarded before anything is persisted.
+                let activities = ProjectConversationCollector().backfillActivities(
+                    sessionFileIndex: fileIndex, days: min(30, days), now: now
+                )
                 ProjectConversationCollector().establishBaseline(
                     sessionFileIndex: fileIndex, now: now, cursors: &conversationCursors
                 )
-                collection = ProjectConversationCollection(events: [])
-                ledger.pendingInputEvents = []
+                collection = ProjectConversationCollection(events: [], activities: activities)
             } else {
                 collection = ProjectConversationCollector().collect(
                     sessionFileIndex: fileIndex,
@@ -110,12 +112,24 @@ public final class ProjectActivityStore {
                 )
             }
         } else {
-            collection = ProjectConversationCollection(events: [])
+            collection = ProjectConversationCollection(events: [], activities: [])
         }
         ledger.conversationCursors = conversationCursors
-        var ledgerChanged = previousConversationCursors != conversationCursors || ledger.inputEventCollectionVersion != 2
-        ledger.inputEventCollectionVersion = 2
+        var ledgerChanged = previousConversationCursors != conversationCursors || ledger.inputEventCollectionVersion != 3
+        ledger.inputEventCollectionVersion = 3
         var pendingByID = Dictionary(uniqueKeysWithValues: (ledger.pendingInputEvents ?? []).map { ($0.id, $0) })
+        for activity in collection.activities {
+            guard let sentAt = Self.isoDate(activity.sentAt)?.timeIntervalSince1970 else { continue }
+            var record = ledger.projects[activity.projectID] ?? ProjectActivityRecord(
+                id: activity.projectID, name: activity.projectName, sessions: [:]
+            )
+            record.name = activity.projectName
+            if sentAt > (record.sessions[activity.sessionID] ?? 0) {
+                record.sessions[activity.sessionID] = sentAt
+                ledger.projects[activity.projectID] = record
+                ledgerChanged = true
+            }
+        }
         for event in collection.events {
             if pendingByID[event.id] == nil {
                 pendingByID[event.id] = event
@@ -280,6 +294,14 @@ public final class ProjectActivityStore {
 
 private struct ProjectConversationCollection {
     var events: [TeamInputEvent]
+    var activities: [ProjectConversationActivity] = []
+}
+
+private struct ProjectConversationActivity {
+    var projectID: String
+    var projectName: String
+    var sessionID: String
+    var sentAt: String
 }
 
 private struct ProjectConversationFileCandidate {
@@ -313,6 +335,46 @@ private struct ProjectConversationCollector {
                 updatedAt: (file.modifiedAt == .distantPast ? now : file.modifiedAt).timeIntervalSince1970
             )
         }
+    }
+
+    func backfillActivities(
+        sessionFileIndex: CodexSessionFileIndex,
+        days: Int,
+        now: Date
+    ) -> [ProjectConversationActivity] {
+        let cutoff = now.addingTimeInterval(-Double(max(1, days) + 1) * 86_400)
+        var result: [ProjectConversationActivity] = []
+        for file in sessionFileIndex.uniqueFiles(modifiedSince: cutoff) {
+            let cursorKey = ProjectActivityStore.digest(file.stableKey)
+            var cursor = ProjectConversationCursor(
+                projectID: nil,
+                projectName: nil,
+                sessionID: nil,
+                offset: 0,
+                isSubagent: false,
+                updatedAt: file.modifiedAt.timeIntervalSince1970
+            )
+            hydrateMetadata(url: file.url, cursorKey: cursorKey, cursor: &cursor)
+            guard !cursor.isSubagent,
+                  let projectID = cursor.projectID,
+                  let projectName = cursor.projectName else { continue }
+            let sessionID = cursor.sessionID ?? cursorKey
+            enumerateRecentLines(in: file.url) { line in
+                guard let json = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+                      let payload = json["payload"] as? [String: Any],
+                      let timestamp = json["timestamp"] as? String,
+                      let date = Self.isoDate(timestamp),
+                      date >= cutoff,
+                      isHumanInput(json: json, payload: payload) else { return }
+                result.append(ProjectConversationActivity(
+                    projectID: projectID,
+                    projectName: projectName,
+                    sessionID: sessionID,
+                    sentAt: Self.isoString(date)
+                ))
+            }
+        }
+        return result
     }
 
     func collect(
@@ -514,6 +576,60 @@ private struct ProjectConversationCollector {
         value = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty, !looksLikeCode(value) else { return nil }
         return String(value.prefix(2_000_000))
+    }
+
+    private func isHumanInput(json: [String: Any], payload: [String: Any]) -> Bool {
+        if json["type"] as? String == "response_item",
+           payload["type"] as? String == "message",
+           payload["role"] as? String == "user",
+           let content = payload["content"] as? [[String: Any]] {
+            return content.contains { item in
+                item["type"] as? String == "input_text"
+                    && isUserAuthoredText(item["text"] as? String ?? "")
+            }
+        }
+        if json["type"] as? String == "event_msg",
+           payload["type"] as? String == "user_message" {
+            return isUserAuthoredText(payload["message"] as? String ?? "")
+        }
+        return false
+    }
+
+    private func isUserAuthoredText(_ raw: String) -> Bool {
+        let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return false }
+        return !ignoredPrefixes.contains(where: value.hasPrefix)
+    }
+
+    private func enumerateRecentLines(
+        in url: URL,
+        maximumBytes: UInt64 = 4 * 1_024 * 1_024,
+        visit: (String) -> Void
+    ) {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return }
+        defer { try? handle.close() }
+        let size = (try? handle.seekToEnd()) ?? 0
+        let start = size > maximumBytes ? size - maximumBytes : 0
+        try? handle.seek(toOffset: start)
+        var buffer = Data()
+        var discardPartialLine = start > 0
+        while let chunk = try? handle.read(upToCount: 64 * 1_024), !chunk.isEmpty {
+            buffer.append(chunk)
+            while let newline = buffer.firstIndex(of: 0x0A) {
+                let line = buffer.subdata(in: buffer.startIndex..<newline)
+                if discardPartialLine {
+                    discardPartialLine = false
+                } else if let text = String(data: line, encoding: .utf8) {
+                    visit(text)
+                }
+                buffer.removeSubrange(buffer.startIndex...newline)
+            }
+        }
+        if !discardPartialLine,
+           !buffer.isEmpty,
+           let text = String(data: buffer, encoding: .utf8) {
+            visit(text)
+        }
     }
 
     private func looksLikeCode(_ value: String) -> Bool {

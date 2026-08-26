@@ -305,6 +305,9 @@ public struct CodexGrindHistoryCollector: Sendable {
         var initialized: Bool
         var updatedAt: String
         var fileOffsets: [String: Int64]
+        var collectionVersion: Int? = nil
+        var pendingHistory: [TeamGrindHistoryDay]? = nil
+        var pendingSessions: [TeamSessionInteractionSummary]? = nil
     }
     private struct InteractionDates {
         var day: [Date] = []
@@ -513,12 +516,20 @@ public struct CodexGrindHistoryCollector: Sendable {
         var state = loadedState
             ?? IncrementalState(initialized: false, updatedAt: isoString(now), fileOffsets: [:])
         var stateChanged = loadedState == nil
-        if !state.initialized {
+        if !state.initialized || state.collectionVersion != 2 {
+            // First install (and the one-time v2 migration) reads only authored-user
+            // timestamps from the recent 30-day window. Conversation text, assistant
+            // replies, attachments, injected context and subagent sessions are never
+            // retained in this state or included in the upload.
+            let backfill = collectDetailed(codexHome: codexHome, days: min(30, days), now: now)
             for file in files { state.fileOffsets[file.stableKey] = file.size }
             state.initialized = true
+            state.collectionVersion = 2
+            state.pendingHistory = mergeHistory(state.pendingHistory ?? [], backfill.history)
+            state.pendingSessions = mergeSessions(state.pendingSessions ?? [], backfill.sessions)
             state.updatedAt = isoString(now)
             saveIncrementalState(state, to: stateURL)
-            return ([], [])
+            return (state.pendingHistory ?? [], state.pendingSessions ?? [])
         }
 
         // Register every candidate before applying the per-run read budget.
@@ -621,10 +632,6 @@ public struct CodexGrindHistoryCollector: Sendable {
         let previousOffsetCount = state.fileOffsets.count
         state.fileOffsets = state.fileOffsets.filter { activeKeys.contains($0.key) }
         if state.fileOffsets.count != previousOffsetCount { stateChanged = true }
-        if stateChanged {
-            state.updatedAt = isoString(now)
-            saveIncrementalState(state, to: stateURL)
-        }
         let sessions = interactionDates.compactMap { key, values -> TeamSessionInteractionSummary? in
             let parts = key.split(separator: "|", maxSplits: 1).map(String.init)
             guard parts.count == 2 else { return nil }
@@ -643,7 +650,85 @@ public struct CodexGrindHistoryCollector: Sendable {
                 grindDay: day, dayGrindTime: item.day.map(timeString), nightGrindTime: item.night.map(timeString)
             )
         }
-        return (grind, sessions)
+        if !grind.isEmpty || !sessions.isEmpty {
+            state.pendingHistory = mergeHistory(state.pendingHistory ?? [], grind)
+            state.pendingSessions = mergeSessions(state.pendingSessions ?? [], sessions)
+            stateChanged = true
+        }
+        if stateChanged {
+            state.updatedAt = isoString(now)
+            saveIncrementalState(state, to: stateURL)
+        }
+        return (state.pendingHistory ?? [], state.pendingSessions ?? [])
+    }
+
+    public func acknowledgeUploaded(
+        stateURL: URL = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".wanhe-codex-token/grind-live.json")
+    ) {
+        guard let data = try? Data(contentsOf: stateURL),
+              var state = try? JSONDecoder().decode(IncrementalState.self, from: data),
+              !(state.pendingHistory ?? []).isEmpty || !(state.pendingSessions ?? []).isEmpty else { return }
+        state.pendingHistory = []
+        state.pendingSessions = []
+        state.updatedAt = isoString(Date())
+        saveIncrementalState(state, to: stateURL)
+    }
+
+    private func mergeHistory(
+        _ current: [TeamGrindHistoryDay],
+        _ incoming: [TeamGrindHistoryDay]
+    ) -> [TeamGrindHistoryDay] {
+        var byDay = Dictionary(uniqueKeysWithValues: current.map { ($0.grindDay, $0) })
+        for item in incoming {
+            var merged = byDay[item.grindDay] ?? item
+            if let incomingStart = item.dayGrindTime,
+               merged.dayGrindTime == nil || incomingStart < merged.dayGrindTime! {
+                merged.dayGrindTime = incomingStart
+            }
+            if let incomingFinish = item.nightGrindTime,
+               merged.nightGrindTime == nil || nightOrder(incomingFinish) > nightOrder(merged.nightGrindTime!) {
+                merged.nightGrindTime = incomingFinish
+            }
+            byDay[item.grindDay] = merged
+        }
+        return byDay.values.sorted { $0.grindDay < $1.grindDay }.suffix(30).map { $0 }
+    }
+
+    private func mergeSessions(
+        _ current: [TeamSessionInteractionSummary],
+        _ incoming: [TeamSessionInteractionSummary]
+    ) -> [TeamSessionInteractionSummary] {
+        var byKey = Dictionary(uniqueKeysWithValues: current.map { ("\($0.sessionId)|\($0.day)", $0) })
+        for item in incoming {
+            let key = "\(item.sessionId)|\(item.day)"
+            guard var merged = byKey[key] else {
+                byKey[key] = item
+                continue
+            }
+            if let value = item.firstDayUserAt,
+               merged.firstDayUserAt == nil || value < merged.firstDayUserAt! {
+                merged.firstDayUserAt = value
+            }
+            if let value = item.lastDayUserAt,
+               merged.lastDayUserAt == nil || value > merged.lastDayUserAt! {
+                merged.lastDayUserAt = value
+            }
+            if let value = item.lastNightUserAt,
+               merged.lastNightUserAt == nil || value > merged.lastNightUserAt! {
+                merged.lastNightUserAt = value
+            }
+            merged.dayTurnCount += item.dayTurnCount
+            merged.nightTurnCount += item.nightTurnCount
+            byKey[key] = merged
+        }
+        return byKey.values.sorted { "\($0.day)|\($0.sessionId)" < "\($1.day)|\($1.sessionId)" }
+    }
+
+    private func nightOrder(_ time: String) -> Int {
+        let parts = time.split(separator: ":").compactMap { Int($0) }
+        guard parts.count == 2 else { return -1 }
+        return (parts[0] < 5 ? parts[0] + 24 : parts[0]) * 60 + parts[1]
     }
 
     private func saveIncrementalState(_ state: IncrementalState, to url: URL) {

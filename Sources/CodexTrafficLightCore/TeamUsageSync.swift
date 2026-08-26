@@ -1101,6 +1101,7 @@ public struct TeamUsageSyncService: Sendable {
             ))
         }
         ProjectActivityStore().acknowledgeInputEvents(ids: result.inputEventIds ?? [])
+        CodexGrindHistoryCollector().acknowledgeUploaded()
         if configuration.endpoint.host == "c.wanhe.cn",
            result.accepted >= payload.sessions.count {
             OneTimeUsageBackfillStore().acknowledge()

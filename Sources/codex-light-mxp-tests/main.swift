@@ -1624,7 +1624,7 @@ func testTodayLiveCollectorDoesNotTrustLegacyMidDayStateAsUTCBaseline() throws {
     try expect(!(try String(contentsOf: stateURL, encoding: .utf8)).contains("stale-session"), "inactive cumulative sessions should be pruned from collector state")
 }
 
-func testGrindHistoryIncrementalCollectorStartsAtEOF() throws {
+func testGrindHistoryIncrementalCollectorBackfillsThirtyDaysOnce() throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     let sessions = root.appendingPathComponent("codex/sessions/2026/08/23")
     let stateURL = root.appendingPathComponent("state/grind-live.json")
@@ -1635,7 +1635,9 @@ func testGrindHistoryIncrementalCollectorStartsAtEOF() throws {
     let now = ISO8601DateFormatter().date(from: "2026-08-23T08:00:00Z")!
     let collector = CodexGrindHistoryCollector()
     let baseline = collector.collectIncremental(codexHome: root.appendingPathComponent("codex"), now: now, stateURL: stateURL)
-    try expect(baseline.sessions.isEmpty, "incremental interaction collector must baseline historical files at EOF")
+    try expectEqual(baseline.sessions.first?.dayTurnCount, 1, "first install should backfill recent human-input timestamps")
+    try expect(!(try String(contentsOf: stateURL, encoding: .utf8)).contains("历史输入"), "grind backfill state must never retain conversation text")
+    collector.acknowledgeUploaded(stateURL: stateURL)
     let appended = #"{"timestamp":"2026-08-23T08:01:00.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"更新后的输入"}]}}"#
     let handle = try FileHandle(forWritingTo: file)
     try handle.seekToEnd()
@@ -1643,6 +1645,7 @@ func testGrindHistoryIncrementalCollectorStartsAtEOF() throws {
     try handle.close()
     let updated = collector.collectIncremental(codexHome: root.appendingPathComponent("codex"), now: now.addingTimeInterval(60), stateURL: stateURL)
     try expectEqual(updated.sessions.first?.dayTurnCount, 1, "incremental interaction collector should count only appended turns")
+    collector.acknowledgeUploaded(stateURL: stateURL)
     let stateInode = try FileManager.default.attributesOfItem(atPath: stateURL.path)[.systemFileNumber] as? NSNumber
     let unchanged = collector.collectIncremental(codexHome: root.appendingPathComponent("codex"), now: now.addingTimeInterval(120), stateURL: stateURL)
     let unchangedStateInode = try FileManager.default.attributesOfItem(atPath: stateURL.path)[.systemFileNumber] as? NSNumber
@@ -1670,6 +1673,7 @@ func testGrindIncrementalDrainsMoreThanSixteenNewFiles() throws {
     }
 
     let first = collector.collectIncremental(codexHome: codexHome, now: now.addingTimeInterval(60), stateURL: stateURL)
+    collector.acknowledgeUploaded(stateURL: stateURL)
     let second = collector.collectIncremental(codexHome: codexHome, now: now.addingTimeInterval(120), stateURL: stateURL)
     let drained = Set((first.sessions + second.sessions).map(\.sessionId))
     try expectEqual(first.sessions.count, 16, "one bounded sync should process at most sixteen changed rollout files")
@@ -1765,6 +1769,7 @@ func testTailCollectorsPreservePartialRowsAcrossArchiveMove() throws {
     try grindHandle.close()
     let completed = grind.collectIncremental(codexHome: codexHome, now: now.addingTimeInterval(120), stateURL: grindState)
     try expectEqual(completed.sessions.first?.dayTurnCount, 1, "a stable rollout key must resume the partial row after archiving")
+    grind.acknowledgeUploaded(stateURL: grindState)
     try expect(grind.collectIncremental(codexHome: codexHome, now: now.addingTimeInterval(180), stateURL: grindState).sessions.isEmpty, "the completed moved row must not be counted twice")
 
     let tokenName = "rollout-2026-08-25T11-10-00-44444444-4444-4444-4444-444444444444.jsonl"
@@ -2067,9 +2072,9 @@ func testProjectActivityBuildsReliableHumanInputOutbox() throws {
     ].joined(separator: "\n")
     try lines.write(to: sessionURL, atomically: true, encoding: .utf8)
     let store = ProjectActivityStore(activityURL: activityURL)
-    try store.record(workspace: repository.path, taskID: "session:test", now: now)
     let prepared = store.prepareSync(days: 30, now: now, codexHome: codexHome)
-    try expect(prepared.inputEvents.isEmpty, "first run must baseline at EOF without historical prompt backfill")
+    try expect(prepared.inputEvents.isEmpty, "first run must not upload historical prompt text")
+    try expectEqual(prepared.projects.first?.name, "app", "first run should recover sanitized recent project activity")
     let historicalRows = lines.split(separator: "\n").dropFirst().joined(separator: "\n")
     let baselineHandle = try FileHandle(forWritingTo: sessionURL)
     try baselineHandle.seekToEnd()
@@ -2238,8 +2243,8 @@ func testProjectActivityBaselineIsMetadataOnlyAndBounded() throws {
     try expect(report.inputEvents.isEmpty, "metadata baseline must never upload historical prompts")
     try expect(elapsed < 1.0, "600-file metadata baseline should stay below one second")
     let stored = try String(contentsOf: activityURL, encoding: .utf8)
-    try expect(stored.contains("\"inputEventCollectionVersion\" : 2"), "metadata baseline should persist the v2 cursor format")
-    try expect(!stored.contains("历史文字不应补采"), "metadata baseline must not read prompt text into its ledger")
+    try expect(stored.contains("\"inputEventCollectionVersion\" : 3"), "metadata backfill should persist the v3 cursor format")
+    try expect(!stored.contains("历史文字不应补采"), "metadata backfill must not retain prompt text in its ledger")
 }
 
 func testDesktopMonitorInstallerMigratesPackagedMonitor() throws {
@@ -2368,7 +2373,7 @@ let tests: [(String, () throws -> Void)] = [
     ("today live collector rejects split inherited spikes", testTodayLiveCollectorRejectsSplitInheritedSpikeInNewShortSession),
     ("today live collector splits local and UTC days", testTodayLiveCollectorSplitsLocalAndUTCDayAtSettlementBoundary),
     ("today live collector protects legacy UTC baseline", testTodayLiveCollectorDoesNotTrustLegacyMidDayStateAsUTCBaseline),
-    ("grind history collector tails appended interactions only", testGrindHistoryIncrementalCollectorStartsAtEOF),
+    ("grind history collector safely backfills thirty days", testGrindHistoryIncrementalCollectorBackfillsThirtyDaysOnce),
     ("grind history drains more than sixteen files", testGrindIncrementalDrainsMoreThanSixteenNewFiles),
     ("grind history re-reads truncated replacements", testGrindIncrementalReReadsTruncatedReplacement),
     ("grind history migrates legacy moved cursors", testGrindMigratesLegacyPathCursorAfterArchiveMove),
