@@ -1528,35 +1528,46 @@ func testTodayLiveCollectorStartsAtEOFAndCountsOnlyAppendedUsage() throws {
     try expect(persisted.contains("11111111-1111-1111-1111-111111111111"), "active cumulative session state must survive pruning")
 }
 
-func testTodayLiveCollectorRebuildsLegacyStateAndRejectsInheritedCumulativeSpike() throws {
+func testTodayLiveCollectorRejectsSplitInheritedSpikeInNewShortSession() throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    let sessions = root.appendingPathComponent("codex/sessions/2026/08/26")
+    let sessions = root.appendingPathComponent("codex/archived_sessions")
     let stateURL = root.appendingPathComponent("state/today-live.json")
     try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
-    try FileManager.default.createDirectory(at: stateURL.deletingLastPathComponent(), withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: root) }
 
-    let file = sessions.appendingPathComponent("rollout-2026-08-26T03-47-48-33333333-3333-3333-3333-333333333333.jsonl")
-    let lines = [
-        #"{"type":"event_msg","timestamp":"2026-08-26T03:47:49.000Z","payload":{"type":"token_count","info":{"last_token_usage":{"total_tokens":100},"total_token_usage":{"total_tokens":100}}}}"#,
-        #"{"type":"event_msg","timestamp":"2026-08-26T03:47:50.000Z","payload":{"type":"token_count","info":{"last_token_usage":{"total_tokens":1341985439},"total_token_usage":{"total_tokens":1341985539}}}}"#,
-        #"{"type":"event_msg","timestamp":"2026-08-26T03:47:51.000Z","payload":{"type":"token_count","info":{"last_token_usage":{"total_tokens":50},"total_token_usage":{"total_tokens":1341985589}}}}"#,
-    ].joined(separator: "\n") + "\n"
-    try lines.write(to: file, atomically: true, encoding: .utf8)
-    let legacyState = #"{"initialized":true,"day":"2026-08-26","tokens":1357373166,"utcDay":"2026-08-26","utcTokens":1357373166,"utcBaselineComplete":true,"updatedAt":"2026-08-26T03:47:53.000Z","fileOffsets":{},"sessionCumulativeTokens":{}}"#
-    try legacyState.write(to: stateURL, atomically: true, encoding: .utf8)
-    let now = ISO8601DateFormatter().date(from: "2026-08-26T03:48:00Z")!
-    try FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: file.path)
+    let formatter = ISO8601DateFormatter()
+    let baselineTime = formatter.date(from: "2026-08-26T03:40:00Z")!
+    let collector = TodayCodexUsageCollector(stateURL: stateURL)
+    _ = collector.collect(codexHome: root.appendingPathComponent("codex"), now: baselineTime)
 
-    let report = TodayCodexUsageCollector(stateURL: stateURL).collect(
+    let goodFile = sessions.appendingPathComponent("rollout-2026-08-26T03-46-00-44444444-4444-4444-4444-444444444444.jsonl")
+    let goodLines = [
+        #"{"type":"event_msg","timestamp":"2026-08-26T03:47:49.000Z","payload":{"type":"token_count","info":{"last_token_usage":{"total_tokens":100},"total_token_usage":{"total_tokens":100}}}}"#,
+        #"{"type":"event_msg","timestamp":"2026-08-26T03:47:51.000Z","payload":{"type":"token_count","info":{"last_token_usage":{"total_tokens":50},"total_token_usage":{"total_tokens":150}}}}"#,
+    ].joined(separator: "\n") + "\n"
+    try goodLines.write(to: goodFile, atomically: true, encoding: .utf8)
+
+    let badFile = sessions.appendingPathComponent("rollout-2026-08-26T03-47-48-33333333-3333-3333-3333-333333333333.jsonl")
+    let badLines = (0..<80).map { index in
+        let second = 49 + (index % 5)
+        let cumulative = (index + 1) * 18_000_000
+        return #"{"type":"event_msg","timestamp":"2026-08-26T03:47:\#(String(format: "%02d", second)).000Z","payload":{"type":"token_count","info":{"last_token_usage":{"total_tokens":18000000},"total_token_usage":{"total_tokens":\#(cumulative)}}}}"#
+    }.joined(separator: "\n") + "\n"
+    try badLines.write(to: badFile, atomically: true, encoding: .utf8)
+
+    let now = formatter.date(from: "2026-08-26T03:48:00Z")!
+    try FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: goodFile.path)
+    try FileManager.default.setAttributes([.modificationDate: formatter.date(from: "2026-08-26T03:47:53Z")!], ofItemAtPath: badFile.path)
+
+    let report = collector.collect(
         codexHome: root.appendingPathComponent("codex"),
         now: now
     )
-    try expectEqual(report.tokens, 150, "validated rebuild should retain normal turns and discard one inherited cumulative spike")
-    try expectEqual(report.utcTokens, 150, "validated rebuild should correct the UTC continuation too")
-    try expectEqual(report.counterVersion, 2, "the corrected counter must tell the server it can replace a legacy high value")
+    try expectEqual(report.tokens, 150, "a normal new session should survive while a split inherited spike from a five-second session is discarded")
+    try expectEqual(report.utcTokens, nil, "a mid-day baseline still must not claim a complete UTC continuation")
+    try expectEqual(report.counterVersion, 2, "validated reports retain the audited counter protocol")
     let persisted = try String(contentsOf: stateURL, encoding: .utf8)
-    try expect(persisted.contains(#""eventValidationVersion":1"#), "validated state migration must run only once")
+    try expect(persisted.contains(#""eventValidationVersion":2"#), "the lightweight validation migration must not rescan again")
 }
 
 func testTodayLiveCollectorSplitsLocalAndUTCDayAtSettlementBoundary() throws {
@@ -2354,7 +2365,7 @@ let tests: [(String, () throws -> Void)] = [
     ("team server capability gates session deltas", testTeamServerCapabilityRequiresExactDeltaProtocol),
     ("grind history reads event timestamps only", testGrindHistoryCollectorReadsOnlyEventTimestamps),
     ("today live collector tails appended usage only", testTodayLiveCollectorStartsAtEOFAndCountsOnlyAppendedUsage),
-    ("today live collector repairs inherited cumulative spikes", testTodayLiveCollectorRebuildsLegacyStateAndRejectsInheritedCumulativeSpike),
+    ("today live collector rejects split inherited spikes", testTodayLiveCollectorRejectsSplitInheritedSpikeInNewShortSession),
     ("today live collector splits local and UTC days", testTodayLiveCollectorSplitsLocalAndUTCDayAtSettlementBoundary),
     ("today live collector protects legacy UTC baseline", testTodayLiveCollectorDoesNotTrustLegacyMidDayStateAsUTCBaseline),
     ("grind history collector tails appended interactions only", testGrindHistoryIncrementalCollectorStartsAtEOF),

@@ -322,22 +322,27 @@ struct StatusPopoverView: View {
     }
 
     private func onlineStatusDot(isOnline: Bool, hasActivity: Bool) -> some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 12.0, paused: !isOnline || reduceMotion)) { context in
-            let duration = 1.8
+        TimelineView(.animation(minimumInterval: 1.0 / 16.0, paused: !isOnline || reduceMotion)) { context in
+            let duration = 1.65
             let phase = reduceMotion ? 0 : context.date.timeIntervalSinceReferenceDate
                 .truncatingRemainder(dividingBy: duration) / duration
             ZStack {
                 if isOnline {
                     Circle()
-                        .stroke(green.opacity(0.46 * (1 - phase)), lineWidth: 1.25)
-                        .frame(width: 5, height: 5)
-                        .scaleEffect(0.7 + 2.5 * phase)
+                        .fill(green.opacity(0.24 * (1 - phase)))
+                        .frame(width: 9, height: 9)
+                        .scaleEffect(0.88 + 1.22 * phase)
+                    Circle()
+                        .stroke(green.opacity(0.72 * (1 - phase)), lineWidth: 1.5)
+                        .frame(width: 8, height: 8)
+                        .scaleEffect(0.92 + 1.38 * phase)
                 }
                 Circle()
                     .fill(hasActivity ? green : muted.opacity(0.45))
-                    .frame(width: 5, height: 5)
+                    .frame(width: 7, height: 7)
+                    .shadow(color: isOnline ? green.opacity(0.72) : .clear, radius: 3.2)
             }
-            .frame(width: 5, height: 5)
+            .frame(width: 8, height: 8)
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)

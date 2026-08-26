@@ -290,8 +290,8 @@ final class StatusBarController {
         let haloAlpha: CGFloat
         if let haloProgress {
             let eased = 1 - pow(1 - haloProgress, 2)
-            haloDiameter = 13.2 + (4.0 * eased)
-            haloAlpha = 0.48 * (1 - pow(haloProgress, 2.25))
+            haloDiameter = 13.6 + (4.4 * eased)
+            haloAlpha = 0.66 * (1 - pow(haloProgress, 2.15))
         } else {
             haloDiameter = 13.4 + (2.4 * glow)
             haloAlpha = 0.13 + (0.11 * glow)
@@ -302,16 +302,16 @@ final class StatusBarController {
             width: haloDiameter,
             height: haloDiameter
         )
-        color.withAlphaComponent(haloAlpha * 0.36).setFill()
+        color.withAlphaComponent(haloAlpha * 0.48).setFill()
         NSBezierPath(ovalIn: haloRect).fill()
 
         color.withAlphaComponent(haloAlpha).setStroke()
         let haloRing = NSBezierPath(ovalIn: haloRect.insetBy(dx: 0.6, dy: 0.6))
-        haloRing.lineWidth = 1.25
+        haloRing.lineWidth = 1.55
         haloRing.stroke()
 
         let softGlowRect = NSRect(x: 2.45, y: 2.45, width: 13.1, height: 13.1)
-        color.withAlphaComponent(0.38 * glow).setFill()
+        color.withAlphaComponent(0.46 * glow).setFill()
         NSBezierPath(ovalIn: softGlowRect).fill()
 
         let rimRect = NSRect(x: 2.75, y: 2.75, width: 12.5, height: 12.5)
