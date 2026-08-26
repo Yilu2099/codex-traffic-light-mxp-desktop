@@ -44,17 +44,26 @@ public final class StateStore {
 
     @discardableResult
     public func updateQuota(
-        weeklyPercent: Int,
+        weeklyPercent: Int? = nil,
         weeklyResetsAt: Date? = nil,
+        fiveHourPercent: Int? = nil,
+        fiveHourResetsAt: Date? = nil,
+        primaryWindow: CodexQuotaWindowKind? = nil,
         source: String,
         limitID: String? = nil,
         planType: String? = nil,
         now: Date = Date()
     ) throws -> StateSnapshot {
         var snapshot = read()
+        guard weeklyPercent != nil || fiveHourPercent != nil else {
+            throw StateStoreError.invalidInput("quota requires a 5-hour or weekly remaining percent")
+        }
         let incoming = QuotaSnapshot(
             weeklyRemainingPercent: weeklyPercent,
             weeklyResetsAt: weeklyResetsAt,
+            fiveHourRemainingPercent: fiveHourPercent,
+            fiveHourResetsAt: fiveHourResetsAt,
+            primaryWindow: primaryWindow ?? (fiveHourPercent != nil ? .fiveHour : .weekly),
             source: source,
             limitID: limitID,
             planType: MembershipPlanType.normalized(planType) ?? snapshot.quota?.planType,
@@ -88,18 +97,26 @@ public final class StateStore {
            [CodexSessionQuotaCollector.source, CodexAppServerQuotaCollector.source].contains(incoming.source) {
             return nil
         }
-        guard let previousReset = previous.weeklyResetsAt,
-              now < previousReset.addingTimeInterval(-5 * 60) else { return nil }
-        if let incomingReset = incoming.weeklyResetsAt,
-           incoming.weeklyRemainingPercent >= 99,
-           previous.weeklyRemainingPercent < 99,
-           incomingReset.timeIntervalSince(previousReset) > 12 * 60 * 60 {
-            return "unexpected_full_quota_before_known_reset"
-        }
-        if let incomingReset = incoming.weeklyResetsAt,
-           abs(incomingReset.timeIntervalSince(previousReset)) <= 5 * 60,
-           incoming.weeklyRemainingPercent - previous.weeklyRemainingPercent >= 20 {
-            return "unexpected_quota_increase_in_same_window"
+        let windows: [(Int?, Date?, Int?, Date?)] = [
+            (previous.fiveHourRemainingPercent, previous.fiveHourResetsAt, incoming.fiveHourRemainingPercent, incoming.fiveHourResetsAt),
+            (previous.weeklyRemainingPercent, previous.weeklyResetsAt, incoming.weeklyRemainingPercent, incoming.weeklyResetsAt),
+        ]
+        for (previousRemaining, previousReset, incomingRemaining, incomingReset) in windows {
+            guard let previousRemaining,
+                  let previousReset,
+                  let incomingRemaining,
+                  now < previousReset.addingTimeInterval(-5 * 60) else { continue }
+            if let incomingReset,
+               incomingRemaining >= 99,
+               previousRemaining < 99,
+               incomingReset.timeIntervalSince(previousReset) > 12 * 60 * 60 {
+                return "unexpected_full_quota_before_known_reset"
+            }
+            if let incomingReset,
+               abs(incomingReset.timeIntervalSince(previousReset)) <= 5 * 60,
+               incomingRemaining - previousRemaining >= 20 {
+                return "unexpected_quota_increase_in_same_window"
+            }
         }
         return nil
     }

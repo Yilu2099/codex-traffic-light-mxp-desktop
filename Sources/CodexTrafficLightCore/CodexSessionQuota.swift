@@ -1,18 +1,43 @@
 import Foundation
 
 public struct CodexSessionQuotaObservation: Sendable, Equatable {
-    public var weeklyRemainingPercent: Int
+    public var fiveHourRemainingPercent: Int?
+    public var weeklyRemainingPercent: Int?
+    public var fiveHourResetsAt: Date?
     public var weeklyResetsAt: Date?
+    public var primaryWindow: CodexQuotaWindowKind?
     public var observedAt: Date
 
     public init(
-        weeklyRemainingPercent: Int,
-        weeklyResetsAt: Date?,
+        weeklyRemainingPercent: Int? = nil,
+        weeklyResetsAt: Date? = nil,
+        fiveHourRemainingPercent: Int? = nil,
+        fiveHourResetsAt: Date? = nil,
+        primaryWindow: CodexQuotaWindowKind? = nil,
         observedAt: Date
     ) {
-        self.weeklyRemainingPercent = min(100, max(0, weeklyRemainingPercent))
+        self.fiveHourRemainingPercent = fiveHourRemainingPercent.map { min(100, max(0, $0)) }
+        self.weeklyRemainingPercent = weeklyRemainingPercent.map { min(100, max(0, $0)) }
+        self.fiveHourResetsAt = fiveHourResetsAt
         self.weeklyResetsAt = weeklyResetsAt
+        self.primaryWindow = primaryWindow ?? (fiveHourRemainingPercent != nil ? .fiveHour : .weekly)
         self.observedAt = observedAt
+    }
+
+    public var preferredWindow: CodexQuotaWindow? {
+        if primaryWindow == .fiveHour, let remaining = fiveHourRemainingPercent {
+            return CodexQuotaWindow(kind: .fiveHour, remainingPercent: remaining, resetsAt: fiveHourResetsAt)
+        }
+        if primaryWindow == .weekly, let remaining = weeklyRemainingPercent {
+            return CodexQuotaWindow(kind: .weekly, remainingPercent: remaining, resetsAt: weeklyResetsAt)
+        }
+        if let remaining = fiveHourRemainingPercent {
+            return CodexQuotaWindow(kind: .fiveHour, remainingPercent: remaining, resetsAt: fiveHourResetsAt)
+        }
+        if let remaining = weeklyRemainingPercent {
+            return CodexQuotaWindow(kind: .weekly, remainingPercent: remaining, resetsAt: weeklyResetsAt)
+        }
+        return nil
     }
 }
 
@@ -37,13 +62,19 @@ public struct CodexSessionQuotaCollector: Sendable {
     }
 
     private struct PersistedObservation: Codable, Equatable {
-        var weeklyRemainingPercent: Int
+        var fiveHourRemainingPercent: Int?
+        var weeklyRemainingPercent: Int?
+        var fiveHourResetsAt: TimeInterval?
         var weeklyResetsAt: TimeInterval?
+        var primaryWindow: CodexQuotaWindowKind?
         var observedAt: TimeInterval
 
         init(_ observation: CodexSessionQuotaObservation) {
+            fiveHourRemainingPercent = observation.fiveHourRemainingPercent
             weeklyRemainingPercent = observation.weeklyRemainingPercent
+            fiveHourResetsAt = observation.fiveHourResetsAt?.timeIntervalSince1970
             weeklyResetsAt = observation.weeklyResetsAt?.timeIntervalSince1970
+            primaryWindow = observation.primaryWindow
             observedAt = observation.observedAt.timeIntervalSince1970
         }
 
@@ -51,6 +82,9 @@ public struct CodexSessionQuotaCollector: Sendable {
             CodexSessionQuotaObservation(
                 weeklyRemainingPercent: weeklyRemainingPercent,
                 weeklyResetsAt: weeklyResetsAt.map { Date(timeIntervalSince1970: $0) },
+                fiveHourRemainingPercent: fiveHourRemainingPercent,
+                fiveHourResetsAt: fiveHourResetsAt.map { Date(timeIntervalSince1970: $0) },
+                primaryWindow: primaryWindow,
                 observedAt: Date(timeIntervalSince1970: observedAt)
             )
         }
@@ -215,16 +249,32 @@ public struct CodexSessionQuotaCollector: Sendable {
               let limits = payload["rate_limits"] as? [String: Any],
               Self.limitID(in: limits) == Self.primaryLimitID else { return nil }
 
-        let windows = [limits["primary"], limits["secondary"]].compactMap { $0 as? [String: Any] }
+        let primary = limits["primary"] as? [String: Any]
+        let windows = [primary, limits["secondary"] as? [String: Any]].compactMap { $0 }
+        var fiveHour: [String: Any]?
         var weekly: [String: Any]?
         for window in windows {
             let minutes = Self.int(window["window_minutes"] ?? window["windowDurationMins"])
+            if minutes == 300 { fiveHour = window }
             if minutes == 10_080 { weekly = window }
         }
-        guard let weekly, let weeklyUsed = Self.double(weekly["used_percent"] ?? weekly["usedPercent"]) else { return nil }
+        let fiveHourUsed = fiveHour.flatMap { Self.double($0["used_percent"] ?? $0["usedPercent"]) }
+        let weeklyUsed = weekly.flatMap { Self.double($0["used_percent"] ?? $0["usedPercent"]) }
+        guard fiveHourUsed != nil || weeklyUsed != nil else { return nil }
+        let primaryMinutes = primary.flatMap { Self.int($0["window_minutes"] ?? $0["windowDurationMins"]) }
+        let primaryWindow: CodexQuotaWindowKind? = {
+            if primaryMinutes == 300 { return .fiveHour }
+            if primaryMinutes == 10_080 { return .weekly }
+            if fiveHourUsed != nil && weeklyUsed == nil { return .fiveHour }
+            if weeklyUsed != nil && fiveHourUsed == nil { return .weekly }
+            return nil
+        }()
         return CodexSessionQuotaObservation(
-            weeklyRemainingPercent: Self.remainingPercent(weeklyUsed),
-            weeklyResetsAt: Self.resetDate(weekly),
+            weeklyRemainingPercent: weeklyUsed.map(Self.remainingPercent),
+            weeklyResetsAt: weekly.flatMap(Self.resetDate),
+            fiveHourRemainingPercent: fiveHourUsed.map(Self.remainingPercent),
+            fiveHourResetsAt: fiveHour.flatMap(Self.resetDate),
+            primaryWindow: primaryWindow,
             observedAt: observedAt
         )
     }
@@ -251,12 +301,14 @@ public struct CodexSessionQuotaCollector: Sendable {
         }
         if observation.observedAt > existing.updatedAt { return true }
 
-        guard age >= -60,
-              age <= freshness,
-              existing.weeklyRemainingPercent >= 99,
-              observation.weeklyRemainingPercent < 99,
-              let existingReset = existing.weeklyResetsAt,
-              let observedReset = observation.weeklyResetsAt else { return false }
+        guard age >= -60, age <= freshness,
+              let existingWindow = existing.preferredWindow,
+              let observedWindow = observation.preferredWindow,
+              existingWindow.kind == observedWindow.kind,
+              existingWindow.remainingPercent >= 99,
+              observedWindow.remainingPercent < 99,
+              let existingReset = existingWindow.resetsAt,
+              let observedReset = observedWindow.resetsAt else { return false }
         return existingReset.timeIntervalSince(observedReset) > 12 * 60 * 60
     }
 

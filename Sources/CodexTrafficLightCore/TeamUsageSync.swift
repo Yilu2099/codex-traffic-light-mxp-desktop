@@ -219,29 +219,50 @@ public struct TeamDeviceIdentity: Codable, Equatable, Sendable {
 }
 
 public struct TeamQuotaReport: Codable, Equatable, Sendable {
-    public var weeklyRemainingPercent: Int
-    public var weeklyUsedPercent: Int
+    public var fiveHourRemainingPercent: Int?
+    public var fiveHourUsedPercent: Int?
+    public var weeklyRemainingPercent: Int?
+    public var weeklyUsedPercent: Int?
+    public var fiveHourResetsAt: String?
     public var weeklyResetsAt: String?
+    public var primaryWindow: CodexQuotaWindowKind?
     public var updatedAt: String
     public var source: String?
     public var limitID: String?
     public var planType: String?
 
     enum CodingKeys: String, CodingKey {
+        case fiveHourRemainingPercent
+        case fiveHourUsedPercent
         case weeklyRemainingPercent = "weeklyRemainingPercent"
         case weeklyUsedPercent = "weeklyUsedPercent"
+        case fiveHourResetsAt
         case weeklyResetsAt = "weeklyResetsAt"
+        case primaryWindow
         case updatedAt
         case source
         case limitID = "limitId"
         case planType
     }
 
-    public init(weeklyRemainingPercent: Int, weeklyResetsAt: Date?, updatedAt: Date, source: String? = nil, limitID: String? = nil, planType: String? = nil) {
-        let remaining = min(100, max(0, weeklyRemainingPercent))
-        self.weeklyRemainingPercent = remaining
-        self.weeklyUsedPercent = 100 - remaining
+    public init(
+        weeklyRemainingPercent: Int? = nil,
+        weeklyResetsAt: Date? = nil,
+        fiveHourRemainingPercent: Int? = nil,
+        fiveHourResetsAt: Date? = nil,
+        primaryWindow: CodexQuotaWindowKind? = nil,
+        updatedAt: Date,
+        source: String? = nil,
+        limitID: String? = nil,
+        planType: String? = nil
+    ) {
+        self.fiveHourRemainingPercent = fiveHourRemainingPercent.map { min(100, max(0, $0)) }
+        self.fiveHourUsedPercent = self.fiveHourRemainingPercent.map { 100 - $0 }
+        self.weeklyRemainingPercent = weeklyRemainingPercent.map { min(100, max(0, $0)) }
+        self.weeklyUsedPercent = self.weeklyRemainingPercent.map { 100 - $0 }
+        self.fiveHourResetsAt = fiveHourResetsAt.map(Self.isoString)
         self.weeklyResetsAt = weeklyResetsAt.map(Self.isoString)
+        self.primaryWindow = primaryWindow ?? (fiveHourRemainingPercent != nil ? .fiveHour : .weekly)
         self.updatedAt = Self.isoString(updatedAt)
         self.source = source
         self.limitID = limitID
@@ -250,15 +271,41 @@ public struct TeamQuotaReport: Codable, Equatable, Sendable {
 
     public static func from(snapshot: StateSnapshot) -> TeamQuotaReport? {
         guard let quota = snapshot.quota,
-              quota.limitID == CodexSessionQuotaCollector.primaryLimitID else { return nil }
+              quota.limitID == CodexSessionQuotaCollector.primaryLimitID,
+              quota.preferredWindow != nil else { return nil }
         return TeamQuotaReport(
             weeklyRemainingPercent: quota.weeklyRemainingPercent,
             weeklyResetsAt: quota.weeklyResetsAt,
+            fiveHourRemainingPercent: quota.fiveHourRemainingPercent,
+            fiveHourResetsAt: quota.fiveHourResetsAt,
+            primaryWindow: quota.primaryWindow,
             updatedAt: quota.updatedAt,
             source: quota.source,
             limitID: quota.limitID,
             planType: quota.planType
         )
+    }
+
+    public var availableWindows: [CodexQuotaWindow] {
+        var windows: [CodexQuotaWindow] = []
+        if let remaining = fiveHourRemainingPercent {
+            windows.append(CodexQuotaWindow(kind: .fiveHour, remainingPercent: remaining, resetsAt: fiveHourResetsAtDate))
+        }
+        if let remaining = weeklyRemainingPercent {
+            windows.append(CodexQuotaWindow(kind: .weekly, remainingPercent: remaining, resetsAt: weeklyResetsAtDate))
+        }
+        if let primaryWindow, let index = windows.firstIndex(where: { $0.kind == primaryWindow }), index > 0 {
+            windows.swapAt(0, index)
+        }
+        return windows
+    }
+
+    public var preferredWindow: CodexQuotaWindow? {
+        availableWindows.first
+    }
+
+    public var fiveHourResetsAtDate: Date? {
+        Self.isoDate(fiveHourResetsAt)
     }
 
     public var weeklyResetsAtDate: Date? {
@@ -485,6 +532,10 @@ public struct TeamRankingSnapshot: Codable, Equatable, Sendable {
 
     public func weeklyQuota(for userID: String) -> TeamQuotaReport? {
         members.first { $0.id.caseInsensitiveCompare(userID) == .orderedSame }?.weeklyQuota
+    }
+
+    public func quota(for userID: String) -> TeamQuotaReport? {
+        weeklyQuota(for: userID)
     }
 }
 
@@ -785,6 +836,66 @@ public struct CodexTeamUsageCollector: Sendable {
     }
 }
 
+public struct OneTimeUsageBackfillStore: Sendable {
+    public static let targetDay = "2026-08-25"
+
+    private let markerURL: URL
+
+    public init(
+        markerURL: URL = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".wanhe-codex-token/backfill-2026-08-25-v1.done")
+    ) {
+        self.markerURL = markerURL
+    }
+
+    public var isAcknowledged: Bool {
+        FileManager.default.fileExists(atPath: markerURL.path)
+    }
+
+    public func prepare(
+        configuration: TeamSyncConfiguration,
+        device: TeamDeviceIdentity,
+        now: Date = Date()
+    ) -> [TeamUsageSession] {
+        guard !isAcknowledged, localDay(now) > Self.targetDay else { return [] }
+        var recoveryConfiguration = configuration
+        recoveryConfiguration.collectDays = min(configuration.collectDays, max(2, daysSinceTarget(now) + 2))
+        let records = CodexTeamUsageCollector().collect(configuration: recoveryConfiguration, device: device)
+        return selectTargetDay(from: records, now: now)
+    }
+
+    public func selectTargetDay(from records: [TeamUsageSession], now: Date = Date()) -> [TeamUsageSession] {
+        guard !isAcknowledged, localDay(now) > Self.targetDay else { return [] }
+        return records.filter { $0.day == Self.targetDay }
+    }
+
+    public func acknowledge(now: Date = Date()) {
+        try? FileManager.default.createDirectory(
+            at: markerURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        try? formatter.string(from: now).write(to: markerURL, atomically: true, encoding: .utf8)
+    }
+
+    private func daysSinceTarget(_ now: Date) -> Int {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Asia/Shanghai") ?? .current
+        guard let target = calendar.date(from: DateComponents(year: 2026, month: 8, day: 25)) else { return 2 }
+        return max(0, calendar.dateComponents([.day], from: target, to: now).day ?? 0)
+    }
+
+    private func localDay(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_CA")
+        formatter.timeZone = TimeZone(identifier: "Asia/Shanghai")
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: date)
+    }
+}
+
 public struct TeamUsageSyncService: Sendable {
     public let configuration: TeamSyncConfiguration
 
@@ -861,7 +972,9 @@ public struct TeamUsageSyncService: Sendable {
         // The two-minute live sync must never repeatedly rescan full files.
         // TodayCodexUsageCollector already tails appended token events and the
         // server retains earlier calendar buckets for week/month aggregation.
-        let calendarUsage: [TeamUsageSession] = []
+        let calendarUsage = configuration.endpoint.host == "c.wanhe.cn"
+            ? OneTimeUsageBackfillStore().prepare(configuration: configuration, device: device, now: now)
+            : []
         let allSessionActivity = CodexSessionFileCounter().collect(
             codexHome: configuration.codexHome,
             sessionFileIndex: sessionFileIndex,
@@ -986,6 +1099,10 @@ public struct TeamUsageSyncService: Sendable {
             ))
         }
         ProjectActivityStore().acknowledgeInputEvents(ids: result.inputEventIds ?? [])
+        if configuration.endpoint.host == "c.wanhe.cn",
+           result.accepted >= payload.sessions.count {
+            OneTimeUsageBackfillStore().acknowledge()
+        }
         return result
     }
 

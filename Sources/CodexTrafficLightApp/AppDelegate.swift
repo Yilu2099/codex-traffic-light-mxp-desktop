@@ -267,6 +267,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
                 _ = try? backgroundStore.updateQuota(
                     weeklyPercent: localObservation.weeklyRemainingPercent,
                     weeklyResetsAt: localObservation.weeklyResetsAt,
+                    fiveHourPercent: localObservation.fiveHourRemainingPercent,
+                    fiveHourResetsAt: localObservation.fiveHourResetsAt,
+                    primaryWindow: localObservation.primaryWindow,
                     source: CodexSessionQuotaCollector.source,
                     limitID: CodexSessionQuotaCollector.primaryLimitID,
                     planType: existing?.planType,

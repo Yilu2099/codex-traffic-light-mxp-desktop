@@ -34,7 +34,7 @@ public indirect enum CodexAppServerQuotaError: Error, CustomStringConvertible {
         case .retryExhausted(let attempts, let lastError):
             return "App-server quota failed after \(attempts) attempts: \(lastError.description)"
         case .missingQuota:
-            return "App-server response did not include Codex weekly quota"
+            return "App-server response did not include a supported Codex quota window"
         }
     }
 
@@ -72,6 +72,7 @@ public indirect enum CodexAppServerQuotaError: Error, CustomStringConvertible {
 }
 
 public enum CodexAppServerQuotaMapper {
+    private static let fiveHourDurationMins = 300
     private static let weeklyDurationMins = 10_080
 
     public static func quotaValues(from data: Data) throws -> QuotaValues {
@@ -105,12 +106,22 @@ public enum CodexAppServerQuotaMapper {
 
     private static func quotaValues(from snapshot: AppServerRateLimitSnapshot) -> QuotaValues? {
         let windows = [snapshot.primary, snapshot.secondary].compactMap { $0 }
+        let fiveHourWindow = windows.first { $0.windowDurationMins == fiveHourDurationMins }
         let weeklyWindow = windows.first { $0.windowDurationMins == weeklyDurationMins }
-
-        guard let weeklyWindow else { return nil }
+        guard fiveHourWindow != nil || weeklyWindow != nil else { return nil }
+        let primaryWindow: CodexQuotaWindowKind? = {
+            if snapshot.primary?.windowDurationMins == fiveHourDurationMins { return .fiveHour }
+            if snapshot.primary?.windowDurationMins == weeklyDurationMins { return .weekly }
+            if fiveHourWindow != nil && weeklyWindow == nil { return .fiveHour }
+            if weeklyWindow != nil && fiveHourWindow == nil { return .weekly }
+            return nil
+        }()
         return QuotaValues(
-            weeklyRemainingPercent: remainingPercent(fromUsedPercent: weeklyWindow.usedPercent),
-            weeklyResetsAt: weeklyWindow.resetsAt,
+            weeklyRemainingPercent: weeklyWindow.map { remainingPercent(fromUsedPercent: $0.usedPercent) },
+            weeklyResetsAt: weeklyWindow?.resetsAt,
+            fiveHourRemainingPercent: fiveHourWindow.map { remainingPercent(fromUsedPercent: $0.usedPercent) },
+            fiveHourResetsAt: fiveHourWindow?.resetsAt,
+            primaryWindow: primaryWindow,
             planType: snapshot.planType
         )
     }
@@ -232,12 +243,15 @@ public struct CodexAppServerQuotaCollector {
     @discardableResult
     public func fetchAndUpdate(store: StateStore = StateStore(), now: Date = Date()) throws -> StateSnapshot {
         let quota = try fetchQuota()
-        guard let weekly = quota.weeklyRemainingPercent else {
+        guard quota.preferredWindow != nil else {
             throw CodexAppServerQuotaError.missingQuota
         }
         return try store.updateQuota(
-            weeklyPercent: weekly,
+            weeklyPercent: quota.weeklyRemainingPercent,
             weeklyResetsAt: quota.weeklyResetsAt,
+            fiveHourPercent: quota.fiveHourRemainingPercent,
+            fiveHourResetsAt: quota.fiveHourResetsAt,
+            primaryWindow: quota.primaryWindow,
             source: Self.source,
             limitID: CodexSessionQuotaCollector.primaryLimitID,
             planType: quota.planType,

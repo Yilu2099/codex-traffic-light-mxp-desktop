@@ -7,6 +7,7 @@ struct CLIOptions {
     var json = false
     var stdin = false
     var appServer = false
+    var fiveHourPercent: Int?
     var weeklyPercent: Int?
     var command: String?
 }
@@ -15,7 +16,7 @@ func usage() {
     FileHandle.standardError.write("""
     Usage: \(CommandContract.clientCommandName) status [--json]
            \(CommandContract.clientCommandName) audit --task <task-id> --workspace <path>
-           \(CommandContract.clientCommandName) quota --weekly <0-100> [--json]
+           \(CommandContract.clientCommandName) quota [--five-hour <0-100>] [--weekly <0-100>] [--json]
            \(CommandContract.clientCommandName) quota --stdin [--json]
            \(CommandContract.clientCommandName) quota --app-server [--json]
 
@@ -38,6 +39,12 @@ func parse(_ arguments: [String]) throws -> CLIOptions {
         case "--json": options.json = true
         case "--stdin": options.stdin = true
         case "--app-server": options.appServer = true
+        case "--five-hour":
+            index += 1
+            guard index < arguments.count, let value = Int(arguments[index]) else {
+                throw StateStoreError.invalidInput("--five-hour requires an integer")
+            }
+            options.fiveHourPercent = value
         case "--weekly":
             index += 1
             guard index < arguments.count, let value = Int(arguments[index]) else {
@@ -60,8 +67,8 @@ func printSnapshot(_ snapshot: StateSnapshot, json: Bool) throws {
         encoder.dateEncodingStrategy = .secondsSince1970
         FileHandle.standardOutput.write(try encoder.encode(snapshot))
         print("")
-    } else if let quota = snapshot.quota {
-        print("\(quota.weeklyRemainingPercent)%")
+    } else if let quota = snapshot.quota?.preferredWindow {
+        print("\(quota.kind.label) \(quota.remainingPercent)%")
     } else {
         print("--")
     }
@@ -87,19 +94,27 @@ do {
             snapshot = try CodexAppServerQuotaCollector().fetchAndUpdate(store: store)
         } else if options.stdin {
             let input = FileHandle.standardInput.readDataToEndOfFile()
-            guard let quota = QuotaExtractor.extract(from: input), let weekly = quota.weeklyRemainingPercent else {
-                throw StateStoreError.invalidInput("quota --stdin requires weekly remaining percent")
+            guard let quota = QuotaExtractor.extract(from: input), quota.preferredWindow != nil else {
+                throw StateStoreError.invalidInput("quota --stdin requires a 5-hour or weekly remaining percent")
             }
             snapshot = try store.updateQuota(
-                weeklyPercent: weekly,
+                weeklyPercent: quota.weeklyRemainingPercent,
                 weeklyResetsAt: quota.weeklyResetsAt,
+                fiveHourPercent: quota.fiveHourRemainingPercent,
+                fiveHourResetsAt: quota.fiveHourResetsAt,
+                primaryWindow: quota.primaryWindow,
                 source: "cli",
                 planType: quota.planType
             )
-        } else if let weekly = options.weeklyPercent {
-            snapshot = try store.updateQuota(weeklyPercent: weekly, source: "cli")
+        } else if options.weeklyPercent != nil || options.fiveHourPercent != nil {
+            snapshot = try store.updateQuota(
+                weeklyPercent: options.weeklyPercent,
+                fiveHourPercent: options.fiveHourPercent,
+                primaryWindow: options.fiveHourPercent != nil ? .fiveHour : .weekly,
+                source: "cli"
+            )
         } else {
-            throw StateStoreError.invalidInput("quota requires --weekly, --stdin, or --app-server")
+            throw StateStoreError.invalidInput("quota requires --five-hour, --weekly, --stdin, or --app-server")
         }
         try printSnapshot(snapshot, json: options.json)
     default:

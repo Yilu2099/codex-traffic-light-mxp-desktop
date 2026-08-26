@@ -48,6 +48,15 @@ func testQuotaSnapshotClampsPercentValues() throws {
         updatedAt: updatedAt
     )
     try expectEqual(low.weeklyRemainingPercent, 0, "weekly quota should clamp low values")
+
+    let fiveHour = QuotaSnapshot(
+        fiveHourRemainingPercent: 112,
+        primaryWindow: .fiveHour,
+        source: "test",
+        updatedAt: updatedAt
+    )
+    try expectEqual(fiveHour.fiveHourRemainingPercent, 100, "5-hour quota should clamp high values")
+    try expectEqual(fiveHour.preferredWindow?.kind, .fiveHour, "5-hour-only quota should become the preferred window")
 }
 
 func testQuotaSnapshotStoresResetDates() throws {
@@ -139,6 +148,15 @@ func testQuotaExtractorRequiresBothWindows() throws {
     """.data(using: .utf8)!
 
     try expectEqual(QuotaExtractor.extract(from: data) == nil, true, "extractor should ignore incomplete quota data")
+}
+
+func testQuotaExtractorAllowsFiveHourOnlyData() throws {
+    let data = #"{"quota":{"fiveHourRemainingPercent":72,"fiveHourResetsAt":1781275400,"primaryWindow":"five_hour"}}"#.data(using: .utf8)!
+    let quota = QuotaExtractor.extract(from: data)
+
+    try expectEqual(quota?.fiveHourRemainingPercent, 72, "extractor should read a 5-hour-only allowance")
+    try expectEqual(quota?.weeklyRemainingPercent, nil, "5-hour-only allowance must not invent a weekly value")
+    try expectEqual(quota?.primaryWindow, .fiveHour, "extractor should preserve the official primary window")
 }
 
 func testQuotaExtractorReadsZeroPercentAndResetDates() throws {
@@ -359,7 +377,7 @@ func testHookBridgeUpdatesQuotaAndProjectAudit() throws {
     )
     let snapshot = store.read()
 
-    try expectEqual(result.quotaSummary, "47%", "hook bridge should report weekly quota summary")
+    try expectEqual(result.quotaSummary, "周 47%", "hook bridge should report the actual quota window")
     try expectEqual(snapshot.quota?.weeklyRemainingPercent, 47, "hook bridge should update weekly quota")
     try expectEqual(snapshot.quota?.source, "codex-hook", "hook bridge should mark quota source")
     try expectEqual(result.recordedProject, true, "hook bridge should record current project")
@@ -445,7 +463,9 @@ func testAppServerQuotaMapperReadsCodexLimitByExactDurations() throws {
 
     let quota = try CodexAppServerQuotaMapper.quotaValues(from: data)
 
+    try expectEqual(quota.fiveHourRemainingPercent, Optional(72), "mapper should read the Codex 5-hour window")
     try expectEqual(quota.weeklyRemainingPercent, Optional(48), "mapper should prefer codex weekly window")
+    try expectEqual(quota.primaryWindow, .fiveHour, "mapper should preserve the official primary window")
 }
 
 func testSessionQuotaCollectorUsesNewestCodexRateLimitEvent() throws {
@@ -539,7 +559,7 @@ func testSessionQuotaCollectorReplacesFreshUnverifiedCache() throws {
     )
 }
 
-func testSessionQuotaCollectorRejectsLegacy300MinuteEvent() throws {
+func testSessionQuotaCollectorAcceptsFiveHourOnlyEvent() throws {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("codex-session-legacy-window-tests-\(UUID().uuidString)", isDirectory: true)
     let sessions = root.appendingPathComponent("sessions", isDirectory: true)
@@ -557,7 +577,9 @@ func testSessionQuotaCollectorRejectsLegacy300MinuteEvent() throws {
         fileMaxAge: 86_400
     )
 
-    try expectEqual(observation, nil, "a 300 minute quota must never be reported as weekly quota")
+    try expectEqual(observation?.fiveHourRemainingPercent, 100, "a 300-minute Codex window should be reported as 5-hour quota")
+    try expectEqual(observation?.weeklyRemainingPercent, nil, "a 5-hour-only event must not invent a weekly value")
+    try expectEqual(observation?.primaryWindow, .fiveHour, "the 5-hour-only window should remain primary")
 }
 
 func testSessionQuotaCollectorPersistsOffsetsAndHandlesArchiveAndTruncation() throws {
@@ -827,6 +849,23 @@ func testAppServerQuotaMapperAllowsWeeklyOnlyWindow() throws {
     let quota = try CodexAppServerQuotaMapper.quotaValues(from: data)
 
     try expectEqual(quota.weeklyRemainingPercent, Optional(45), "mapper should read weekly percent when weekly-only window is present")
+    try expectEqual(quota.primaryWindow, .weekly, "a weekly-only response should use the weekly window as primary")
+}
+
+func testAppServerQuotaMapperAllowsFiveHourOnlyWindow() throws {
+    let codex = appServerSnapshot(
+        primaryUsed: 18,
+        primaryDuration: 300,
+        secondaryUsed: nil,
+        secondaryDuration: nil
+    )
+    let data = appServerRateLimitsResponse(rateLimitsByLimitId: #"{"codex": \#(codex)}"#)
+
+    let quota = try CodexAppServerQuotaMapper.quotaValues(from: data)
+
+    try expectEqual(quota.fiveHourRemainingPercent, Optional(82), "mapper should read a 5-hour-only allowance")
+    try expectEqual(quota.weeklyRemainingPercent, nil, "a 5-hour-only response must not invent a weekly value")
+    try expectEqual(quota.primaryWindow, .fiveHour, "a 5-hour-only response should use the 5-hour window as primary")
 }
 
 func testAppServerQuotaMapperRejectsWindowsWithoutWeeklyDuration() throws {
@@ -835,9 +874,9 @@ func testAppServerQuotaMapperRejectsWindowsWithoutWeeklyDuration() throws {
 
     do {
         _ = try CodexAppServerQuotaMapper.quotaValues(from: data)
-        throw TestFailure(description: "mapper should reject windows without an explicit weekly duration")
+        throw TestFailure(description: "mapper should reject windows without an explicit supported duration")
     } catch let error as CodexAppServerQuotaError {
-        try expect(error.summaryKey == "missingQuota", "mapper should report missing weekly quota")
+        try expect(error.summaryKey == "missingQuota", "mapper should report missing Codex quota")
     }
 }
 
@@ -1183,6 +1222,30 @@ func testTeamUsageCollectorBuildsDailySessionDelta() throws {
     try expectEqual(sessions.first?.deviceId, "mac-1", "collector should use the hardware device id")
 }
 
+func testOneTimeUsageBackfillSelectsOnlyAugust25AndAcknowledges() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("one-time-usage-backfill-\(UUID().uuidString)", isDirectory: true)
+    let marker = root.appendingPathComponent("backfill.done")
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let template = try JSONDecoder().decode(TeamUsageSession.self, from: Data(#"""
+    {
+      "userId":"zlu","userName":"张璐","team":"万合创新局","role":"Codex 使用者","avatar":"张璐",
+      "deviceId":"mac-1","sessionId":"session-1","day":"2026-08-25","utcDay":"2026-08-25",
+      "model":"gpt-5.6-sol","inputTokens":80,"cachedInputTokens":20,"cacheWriteInputTokens":0,
+      "outputTokens":20,"reasoningOutputTokens":5,"totalTokens":100,"updatedAt":"2026-08-25T15:59:00.000Z"
+    }
+    """#.utf8))
+    var otherDay = template
+    otherDay.day = "2026-08-24"
+    let now = ISO8601DateFormatter().date(from: "2026-08-25T17:00:00Z")!
+    let store = OneTimeUsageBackfillStore(markerURL: marker)
+    try expectEqual(store.selectTargetDay(from: [otherDay, template], now: now), [template], "one-time recovery should upload only August 25")
+    store.acknowledge(now: now)
+    try expect(store.isAcknowledged, "a successful recovery upload should create its durable marker")
+    try expect(store.selectTargetDay(from: [template], now: now).isEmpty, "an acknowledged recovery must not repeat in the two-minute heartbeat")
+}
+
 func testTeamQuotaReportUsesWeeklyPercentAndReset() throws {
     let reset = Date(timeIntervalSince1970: 2_000)
     let report = TeamQuotaReport(
@@ -1212,6 +1275,27 @@ func testTeamQuotaReportUsesWeeklyPercentAndReset() throws {
         )
     )
     try expectEqual(TeamQuotaReport.from(snapshot: unverified), nil, "a cached quota without an exact Codex limit id must not be uploaded")
+}
+
+func testTeamQuotaReportPreservesDualWindowsAndPrimary() throws {
+    let fiveHourReset = Date(timeIntervalSince1970: 2_000)
+    let weeklyReset = Date(timeIntervalSince1970: 3_000)
+    let report = TeamQuotaReport(
+        weeklyRemainingPercent: 47,
+        weeklyResetsAt: weeklyReset,
+        fiveHourRemainingPercent: 82,
+        fiveHourResetsAt: fiveHourReset,
+        primaryWindow: .fiveHour,
+        updatedAt: Date(timeIntervalSince1970: 1_000),
+        source: CodexSessionQuotaCollector.source,
+        limitID: CodexSessionQuotaCollector.primaryLimitID,
+        planType: "plus"
+    )
+
+    try expectEqual(report.fiveHourUsedPercent, 18, "team quota should derive 5-hour used percent")
+    try expectEqual(report.weeklyUsedPercent, 53, "team quota should derive weekly used percent")
+    try expectEqual(report.preferredWindow?.kind, .fiveHour, "team quota should preserve the actual primary window")
+    try expectEqual(report.availableWindows.map(\.kind), [.fiveHour, .weekly], "team quota should retain both official windows")
 }
 
 func testTeamRankingURLUsesWebsiteOrigin() throws {
@@ -1264,6 +1348,18 @@ func testTeamRankingDecodesMemberWeeklyQuota() throws {
     try expectEqual(ranking.members.first?.weeklyQuota?.weeklyResetsAt, "2026-08-27T03:33:23.000Z", "team ranking should expose each member's weekly reset time")
     try expectEqual(ranking.weeklyQuota(for: "ZLU")?.weeklyRemainingPercent, 75, "status bars should resolve the shared member quota case-insensitively")
     try expectEqual(ranking.weeklyQuota(for: "missing"), nil, "unknown members should not inherit another person's quota")
+}
+
+func testTeamRankingDecodesFiveHourQuota() throws {
+    let data = """
+    {"updatedAt":"2026-08-26 13:50","members":[{"id":"zhanghaiqiang","name":"张海强","tokens":1200,"sessions":12,"weeklyQuota":{"fiveHourRemainingPercent":82,"fiveHourUsedPercent":18,"fiveHourResetsAt":"2026-08-26T08:33:23.000Z","primaryWindow":"five_hour","updatedAt":"2026-08-26T03:50:31.586Z","planType":"plus"}}]}
+    """.data(using: .utf8)!
+    let ranking = try JSONDecoder().decode(TeamRankingSnapshot.self, from: data)
+    let quota = ranking.quota(for: "ZHANGHAIQIANG")
+
+    try expectEqual(quota?.fiveHourRemainingPercent, 82, "team ranking should expose a member's 5-hour remaining percent")
+    try expectEqual(quota?.weeklyRemainingPercent, nil, "5-hour-only ranking data must not invent a weekly value")
+    try expectEqual(quota?.preferredWindow?.kind, .fiveHour, "status bars should display the actual 5-hour primary window")
 }
 
 func testTeamRankingDistinguishesJoinedMemberFromInvitePlaceholder() throws {
@@ -2164,6 +2260,7 @@ let tests: [(String, () throws -> Void)] = [
     ("quota extractor reads quota and rate limits nesting", testQuotaExtractorReadsQuotaAndRateLimitsNesting),
     ("quota extractor rejects Spark limit", testQuotaExtractorRejectsSparkLimit),
     ("quota extractor requires weekly data", testQuotaExtractorRequiresBothWindows),
+    ("quota extractor allows 5-hour-only data", testQuotaExtractorAllowsFiveHourOnlyData),
     ("quota extractor reads zero percent and reset dates", testQuotaExtractorReadsZeroPercentAndResetDates),
     ("quota extractor reads supported membership plan", testQuotaExtractorReadsSupportedMembershipPlanOnly),
     ("old JSON decodes without quota", testStateSnapshotDecodesOldJSONWithoutQuota),
@@ -2180,7 +2277,7 @@ let tests: [(String, () throws -> Void)] = [
     ("session quota collector ignores Spark limit", testSessionQuotaCollectorIgnoresSparkRateLimitEvent),
     ("session quota collector repairs Spark contamination", testSessionQuotaCollectorRepairsNewerSparkContamination),
     ("session quota collector replaces fresh unverified cache", testSessionQuotaCollectorReplacesFreshUnverifiedCache),
-    ("session quota collector rejects legacy 300-minute event", testSessionQuotaCollectorRejectsLegacy300MinuteEvent),
+    ("session quota collector accepts 5-hour-only event", testSessionQuotaCollectorAcceptsFiveHourOnlyEvent),
     ("session quota collector persists incremental cursors", testSessionQuotaCollectorPersistsOffsetsAndHandlesArchiveAndTruncation),
     ("session quota rejects future freshness", testSessionQuotaCollectorRejectsFutureObservationFreshness),
     ("app-server quota mapper reads codex limit", testAppServerQuotaMapperReadsCodexLimitByExactDurations),
@@ -2189,7 +2286,8 @@ let tests: [(String, () throws -> Void)] = [
     ("app-server quota mapper clamps remaining", testAppServerQuotaMapperClampsRemainingPercent),
     ("app-server quota mapper reads reset times", testAppServerQuotaMapperReadsResetTimes),
     ("app-server quota mapper allows weekly-only window", testAppServerQuotaMapperAllowsWeeklyOnlyWindow),
-    ("app-server quota mapper requires explicit weekly duration", testAppServerQuotaMapperRejectsWindowsWithoutWeeklyDuration),
+    ("app-server quota mapper allows 5-hour-only window", testAppServerQuotaMapperAllowsFiveHourOnlyWindow),
+    ("app-server quota mapper requires explicit supported duration", testAppServerQuotaMapperRejectsWindowsWithoutWeeklyDuration),
     ("app-server quota mapper ignores individual limit", testAppServerQuotaMapperIgnoresIndividualLimitRemainingPercent),
     ("app-server JSON-RPC line codec builds request", testAppServerJSONRPCLineCodecBuildsRequest),
     ("app-server JSON-RPC line codec decodes target response", testAppServerJSONRPCLineCodecDecodesMessagesAndFindsTargetResponse),
@@ -2207,11 +2305,14 @@ let tests: [(String, () throws -> Void)] = [
     ("team sync parses environment", testTeamSyncParsesEnvironmentFile),
     ("team device uses hardware names", testTeamDeviceUsesHardwareFamilyNames),
     ("team usage collector aggregates deltas", testTeamUsageCollectorBuildsDailySessionDelta),
+    ("one-time usage backfill selects August 25 once", testOneTimeUsageBackfillSelectsOnlyAugust25AndAcknowledges),
     ("team quota report uses weekly data", testTeamQuotaReportUsesWeeklyPercentAndReset),
+    ("team quota report preserves dual windows", testTeamQuotaReportPreservesDualWindowsAndPrimary),
     ("team ranking URL uses website origin", testTeamRankingURLUsesWebsiteOrigin),
     ("team ranking decodes legacy today activity", testTeamRankingDecodesLegacyTodayActivity),
     ("team ranking decodes realtime presence", testTeamRankingDecodesRealtimePresence),
     ("team ranking decodes member weekly quota", testTeamRankingDecodesMemberWeeklyQuota),
+    ("team ranking decodes member 5-hour quota", testTeamRankingDecodesFiveHourQuota),
     ("team ranking distinguishes joined members", testTeamRankingDistinguishesJoinedMemberFromInvitePlaceholder),
     ("avatar disk cache persists by URL", testAvatarDiskCachePersistsByRemoteURL),
     ("official Codex usage parses daily buckets", testOfficialCodexUsageParsesDailyBuckets),

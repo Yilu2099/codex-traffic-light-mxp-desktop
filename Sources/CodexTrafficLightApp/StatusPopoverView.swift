@@ -139,12 +139,12 @@ struct StatusPopoverView: View {
     }
 
     private var quotaCard: some View {
-        let quota = weeklyQuota
+        let quota = quotaWindow
         let remaining = quota?.remainingPercent
         let balance = Double(remaining ?? 0) / 100
         return HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
-                Text("个人周余额")
+                Text("个人\(quota?.kind.label ?? "")余额")
                     .font(.system(size: 11, weight: .bold))
                     .foregroundStyle(muted)
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
@@ -162,6 +162,12 @@ struct StatusPopoverView: View {
                 Text("已用 \(remaining.map { 100 - $0 } ?? 0)%")
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(muted)
+                if let secondaryQuotaWindow {
+                    Text("同时有 \(secondaryQuotaWindow.kind.label)余额 \(secondaryQuotaWindow.remainingPercent)%")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(muted)
+                        .lineLimit(1)
+                }
                 ProgressView(value: max(0, min(1, balance)))
                     .tint(green)
                     .scaleEffect(x: 1, y: 1.25, anchor: .center)
@@ -440,23 +446,23 @@ struct StatusPopoverView: View {
 
     private func memberQuotaProgress(_ member: TeamRankingMember) -> some View {
         HStack(spacing: 7) {
-            if let quota = member.weeklyQuota {
-                Text("周余额 \(quota.weeklyRemainingPercent)%")
+            if let quota = member.weeklyQuota?.preferredWindow {
+                Text("\(quota.kind.label)余额 \(quota.remainingPercent)%")
                     .font(.system(size: 9.5, weight: .bold))
                     .foregroundStyle(green)
                     .fixedSize(horizontal: true, vertical: false)
-                ProgressView(value: Double(quota.weeklyRemainingPercent) / 100)
+                ProgressView(value: Double(quota.remainingPercent) / 100)
                     .progressViewStyle(.linear)
                     .tint(green)
                     .frame(width: 54)
-                Text(memberQuotaResetText(quota.weeklyResetsAt))
+                Text(memberQuotaResetText(quota.resetsAt))
                     .font(.system(size: 9, weight: .medium))
                     .foregroundStyle(muted)
                     .lineLimit(1)
                     .minimumScaleFactor(0.78)
                     .fixedSize(horizontal: true, vertical: false)
             } else {
-                Text("周余额待同步 · 刷新待更新")
+                Text("额度待同步 · 刷新待更新")
                     .font(.system(size: 9.5, weight: .semibold))
                     .foregroundStyle(muted)
             }
@@ -525,15 +531,8 @@ struct StatusPopoverView: View {
         .padding(.vertical, 3.5)
     }
 
-    private func memberQuotaResetText(_ value: String?) -> String {
-        guard let value else { return "刷新时间待更新" }
-        let precise = ISO8601DateFormatter()
-        precise.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let relaxed = ISO8601DateFormatter()
-        relaxed.formatOptions = [.withInternetDateTime]
-        guard let date = precise.date(from: value) ?? relaxed.date(from: value) else {
-            return "刷新时间待更新"
-        }
+    private func memberQuotaResetText(_ date: Date?) -> String {
+        guard let date else { return "刷新时间待更新" }
         return QuotaDisplayFormatter.refreshCountdownText(until: date)
     }
 
@@ -550,22 +549,30 @@ struct StatusPopoverView: View {
         return url.flatMap(NSImage.init(contentsOf:))
     }()
 
-    private var weeklyQuota: (remainingPercent: Int?, resetsAt: Date?)? {
+    private var quotaWindows: [CodexQuotaWindow] {
         if let quota = model.syncedQuota {
-            return (quota.weeklyRemainingPercent, quota.weeklyResetsAtDate)
+            return quota.availableWindows
         }
         guard let quota = model.snapshot?.quota,
-              quota.limitID == CodexSessionQuotaCollector.primaryLimitID else { return nil }
-        return (quota.weeklyRemainingPercent, quota.weeklyResetsAt)
+              quota.limitID == CodexSessionQuotaCollector.primaryLimitID else { return [] }
+        return quota.availableWindows
+    }
+
+    private var quotaWindow: CodexQuotaWindow? {
+        quotaWindows.first
+    }
+
+    private var secondaryQuotaWindow: CodexQuotaWindow? {
+        quotaWindows.dropFirst().first
     }
 
     private var resetRelativeText: String {
-        guard let date = weeklyQuota?.resetsAt else { return "暂无数据" }
+        guard let date = quotaWindow?.resetsAt else { return "暂无数据" }
         return QuotaDisplayFormatter.refreshCountdownText(until: date)
     }
 
     private var resetAbsoluteText: String {
-        guard let date = weeklyQuota?.resetsAt else { return "—" }
+        guard let date = quotaWindow?.resetsAt else { return "—" }
         return QuotaDisplayFormatter.absoluteDateTimeText(date)
     }
 

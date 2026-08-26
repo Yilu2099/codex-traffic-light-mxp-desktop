@@ -1,16 +1,46 @@
 import Foundation
 
+public enum CodexQuotaWindowKind: String, Codable, Equatable, Sendable {
+    case fiveHour = "five_hour"
+    case weekly
+
+    public var label: String {
+        switch self {
+        case .fiveHour: return "5小时"
+        case .weekly: return "周"
+        }
+    }
+}
+
+public struct CodexQuotaWindow: Equatable, Sendable {
+    public var kind: CodexQuotaWindowKind
+    public var remainingPercent: Int
+    public var resetsAt: Date?
+
+    public init(kind: CodexQuotaWindowKind, remainingPercent: Int, resetsAt: Date?) {
+        self.kind = kind
+        self.remainingPercent = min(100, max(0, remainingPercent))
+        self.resetsAt = resetsAt
+    }
+}
+
 public struct QuotaSnapshot: Codable, Equatable {
-    public var weeklyRemainingPercent: Int
+    public var fiveHourRemainingPercent: Int?
+    public var weeklyRemainingPercent: Int?
+    public var fiveHourResetsAt: Date?
     public var weeklyResetsAt: Date?
+    public var primaryWindow: CodexQuotaWindowKind?
     public var source: String
     public var limitID: String?
     public var planType: String?
     public var updatedAt: Date
 
     enum CodingKeys: String, CodingKey {
+        case fiveHourRemainingPercent = "five_hour_remaining_percent"
         case weeklyRemainingPercent = "weekly_remaining_percent"
+        case fiveHourResetsAt = "five_hour_resets_at"
         case weeklyResetsAt = "weekly_resets_at"
+        case primaryWindow = "primary_window"
         case source
         case limitID = "limit_id"
         case planType = "plan_type"
@@ -18,19 +48,43 @@ public struct QuotaSnapshot: Codable, Equatable {
     }
 
     public init(
-        weeklyRemainingPercent: Int,
+        weeklyRemainingPercent: Int? = nil,
         weeklyResetsAt: Date? = nil,
+        fiveHourRemainingPercent: Int? = nil,
+        fiveHourResetsAt: Date? = nil,
+        primaryWindow: CodexQuotaWindowKind? = nil,
         source: String,
         limitID: String? = nil,
         planType: String? = nil,
         updatedAt: Date
     ) {
-        self.weeklyRemainingPercent = min(100, max(0, weeklyRemainingPercent))
+        self.fiveHourRemainingPercent = fiveHourRemainingPercent.map { min(100, max(0, $0)) }
+        self.weeklyRemainingPercent = weeklyRemainingPercent.map { min(100, max(0, $0)) }
+        self.fiveHourResetsAt = fiveHourResetsAt
         self.weeklyResetsAt = weeklyResetsAt
+        self.primaryWindow = primaryWindow
         self.source = source
         self.limitID = limitID
         self.planType = MembershipPlanType.normalized(planType)
         self.updatedAt = updatedAt
+    }
+
+    public var availableWindows: [CodexQuotaWindow] {
+        var windows: [CodexQuotaWindow] = []
+        if let remaining = fiveHourRemainingPercent {
+            windows.append(CodexQuotaWindow(kind: .fiveHour, remainingPercent: remaining, resetsAt: fiveHourResetsAt))
+        }
+        if let remaining = weeklyRemainingPercent {
+            windows.append(CodexQuotaWindow(kind: .weekly, remainingPercent: remaining, resetsAt: weeklyResetsAt))
+        }
+        if let primaryWindow, let index = windows.firstIndex(where: { $0.kind == primaryWindow }), index > 0 {
+            windows.swapAt(0, index)
+        }
+        return windows
+    }
+
+    public var preferredWindow: CodexQuotaWindow? {
+        availableWindows.first
     }
 }
 
@@ -70,10 +124,13 @@ public struct StateSnapshot: Codable, Equatable {
         if quota == nil,
            let legacyProviders = try container.decodeIfPresent([String: LegacyProviderQuota].self, forKey: .providerQuotas),
            let codex = legacyProviders["codex"],
-           let weekly = codex.weeklyRemainingPercent {
+           codex.fiveHourRemainingPercent != nil || codex.weeklyRemainingPercent != nil {
             quota = QuotaSnapshot(
-                weeklyRemainingPercent: weekly,
+                weeklyRemainingPercent: codex.weeklyRemainingPercent,
                 weeklyResetsAt: codex.weeklyResetsAt,
+                fiveHourRemainingPercent: codex.fiveHourRemainingPercent,
+                fiveHourResetsAt: codex.fiveHourResetsAt,
+                primaryWindow: codex.fiveHourRemainingPercent != nil ? .fiveHour : .weekly,
                 source: codex.source,
                 updatedAt: codex.updatedAt
             )
@@ -94,13 +151,17 @@ public struct StateSnapshot: Codable, Equatable {
 private struct LegacyProviderQuota: Decodable {
     var source: String
     var updatedAt: Date
+    var fiveHourRemainingPercent: Int?
     var weeklyRemainingPercent: Int?
+    var fiveHourResetsAt: Date?
     var weeklyResetsAt: Date?
 
     enum CodingKeys: String, CodingKey {
         case source
         case updatedAt = "updated_at"
+        case fiveHourRemainingPercent = "five_hour_remaining_percent"
         case weeklyRemainingPercent = "weekly_remaining_percent"
+        case fiveHourResetsAt = "five_hour_resets_at"
         case weeklyResetsAt = "weekly_resets_at"
     }
 }

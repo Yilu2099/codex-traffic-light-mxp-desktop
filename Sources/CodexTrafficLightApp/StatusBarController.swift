@@ -45,7 +45,7 @@ final class StatusBarController {
     private var teamWebsiteURL: URL?
     private var teamSyncDetail: String?
     private var syncedQuota: TeamQuotaReport?
-    private var weeklyRemainingPercent: Int?
+    private var quotaRemainingPercent: Int?
     private var breathingTimer: Timer?
     private var breathingFrames: [NSImage] = []
     private var breathingFrameIndex = 0
@@ -90,7 +90,7 @@ final class StatusBarController {
         popoverModel.ranking = ranking
         popoverModel.websiteURL = websiteURL
         if let currentUserID {
-            syncedQuota = ranking?.weeklyQuota(for: currentUserID)
+            syncedQuota = ranking?.quota(for: currentUserID)
             popoverModel.syncedQuota = syncedQuota
             refreshQuotaPresentation()
         }
@@ -120,52 +120,60 @@ final class StatusBarController {
     }
 
     private func statusBarText() -> String {
-        guard let percent = effectiveWeeklyQuota()?.remainingPercent else {
-            return "周余额 --"
+        guard let quota = effectiveQuota() else {
+            return "额度 --"
         }
-        return "周余额 \(percent)%"
+        return "\(quota.kind.label)余额 \(quota.remainingPercent)%"
     }
 
     private func detailLines() -> [String] {
-        let weekly = effectiveWeeklyQuota()
-        let percentText = weekly?.remainingPercent.map { "\($0)%" } ?? "--"
-        guard let resetsAt = weekly?.resetsAt else {
+        let quota = effectiveQuota()
+        let label = quota.map { "\($0.kind.label)余额" } ?? "额度"
+        let percentText = quota.map { "\($0.remainingPercent)%" } ?? "--"
+        let secondaryLine = effectiveQuotaWindows().dropFirst().first.map {
+            "同时有\($0.kind.label)余额：\($0.remainingPercent)%"
+        }
+        guard let resetsAt = quota?.resetsAt else {
             return [
-                "周余额：\(percentText)",
+                "\(label)：\(percentText)",
+                secondaryLine,
                 "距离刷新：暂无数据",
                 "刷新时间：暂无数据"
-            ]
+            ].compactMap { $0 }
         }
 
         return [
-            "周余额：\(percentText)",
+            "\(label)：\(percentText)",
+            secondaryLine,
             "距离刷新：\(QuotaDisplayFormatter.refreshCountdownText(until: resetsAt))",
             "刷新时间：\(QuotaDisplayFormatter.absoluteDateTimeText(resetsAt))"
-        ]
+        ].compactMap { $0 }
     }
 
-    private func weeklyQuota(from snapshot: StateSnapshot?) -> (remainingPercent: Int?, resetsAt: Date?)? {
+    private func quotaWindows(from snapshot: StateSnapshot?) -> [CodexQuotaWindow] {
         guard let quota = snapshot?.quota,
-              quota.limitID == CodexSessionQuotaCollector.primaryLimitID else { return nil }
-        return (quota.weeklyRemainingPercent, quota.weeklyResetsAt)
+              quota.limitID == CodexSessionQuotaCollector.primaryLimitID else { return [] }
+        return quota.availableWindows
     }
 
-    private func effectiveWeeklyQuota() -> (remainingPercent: Int?, resetsAt: Date?)? {
-        if let syncedQuota {
-            return (syncedQuota.weeklyRemainingPercent, syncedQuota.weeklyResetsAtDate)
-        }
-        return weeklyQuota(from: snapshot)
+    private func effectiveQuota() -> CodexQuotaWindow? {
+        effectiveQuotaWindows().first
+    }
+
+    private func effectiveQuotaWindows() -> [CodexQuotaWindow] {
+        if let syncedQuota { return syncedQuota.availableWindows }
+        return quotaWindows(from: snapshot)
     }
 
     private func refreshQuotaPresentation() {
-        weeklyRemainingPercent = effectiveWeeklyQuota()?.remainingPercent
+        quotaRemainingPercent = effectiveQuota()?.remainingPercent
         updateQuotaIndicator()
         item.button?.title = statusBarText()
         item.button?.toolTip = detailLines().joined(separator: "\n")
     }
 
     private func updateQuotaIndicator() {
-        guard let percent = weeklyRemainingPercent else {
+        guard let percent = quotaRemainingPercent else {
             stopAnimation()
             item.button?.image = makeQuotaIndicator(color: .systemGray, glow: 0.15)
             return
@@ -219,7 +227,7 @@ final class StatusBarController {
     }
 
     @objc private func breathingTimerFired() {
-        guard let percent = weeklyRemainingPercent, percent > 10 else {
+        guard let percent = quotaRemainingPercent, percent > 10 else {
             updateQuotaIndicator()
             return
         }

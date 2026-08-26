@@ -35,10 +35,13 @@ public enum HookBridge {
         let workspace = ContextResolver.workspace(explicitWorkspace: nil, hookEvent: event)
         let taskID = ContextResolver.taskID(explicitTaskID: nil, workspace: workspace, hookEvent: event)
         if let quota {
-            if let weekly = quota.weeklyRemainingPercent {
+            if quota.preferredWindow != nil {
                 _ = try store.updateQuota(
-                    weeklyPercent: weekly,
+                    weeklyPercent: quota.weeklyRemainingPercent,
                     weeklyResetsAt: quota.weeklyResetsAt,
+                    fiveHourPercent: quota.fiveHourRemainingPercent,
+                    fiveHourResetsAt: quota.fiveHourResetsAt,
+                    primaryWindow: quota.primaryWindow,
                     source: "codex-hook",
                     planType: quota.planType,
                     now: now

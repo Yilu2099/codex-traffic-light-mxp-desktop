@@ -1,28 +1,56 @@
 import Foundation
 
 public struct QuotaValues: Equatable, Sendable {
+    public var fiveHourRemainingPercent: Int?
     public var weeklyRemainingPercent: Int?
+    public var fiveHourResetsAt: Date?
     public var weeklyResetsAt: Date?
+    public var primaryWindow: CodexQuotaWindowKind?
     public var planType: String?
 
     public init(
-        weeklyRemainingPercent: Int?,
+        weeklyRemainingPercent: Int? = nil,
         weeklyResetsAt: Date? = nil,
+        fiveHourRemainingPercent: Int? = nil,
+        fiveHourResetsAt: Date? = nil,
+        primaryWindow: CodexQuotaWindowKind? = nil,
         planType: String? = nil
     ) {
+        self.fiveHourRemainingPercent = fiveHourRemainingPercent.map { min(100, max(0, $0)) }
         self.weeklyRemainingPercent = weeklyRemainingPercent.map { min(100, max(0, $0)) }
+        self.fiveHourResetsAt = fiveHourResetsAt
         self.weeklyResetsAt = weeklyResetsAt
+        self.primaryWindow = primaryWindow
         self.planType = MembershipPlanType.normalized(planType)
     }
 
     public var summary: String {
-        weeklyRemainingPercent.map { "\($0)%" } ?? "--"
+        preferredWindow.map { "\($0.kind.label) \($0.remainingPercent)%" } ?? "--"
+    }
+
+    public var preferredWindow: CodexQuotaWindow? {
+        if primaryWindow == .fiveHour, let remaining = fiveHourRemainingPercent {
+            return CodexQuotaWindow(kind: .fiveHour, remainingPercent: remaining, resetsAt: fiveHourResetsAt)
+        }
+        if primaryWindow == .weekly, let remaining = weeklyRemainingPercent {
+            return CodexQuotaWindow(kind: .weekly, remainingPercent: remaining, resetsAt: weeklyResetsAt)
+        }
+        if let remaining = fiveHourRemainingPercent {
+            return CodexQuotaWindow(kind: .fiveHour, remainingPercent: remaining, resetsAt: fiveHourResetsAt)
+        }
+        if let remaining = weeklyRemainingPercent {
+            return CodexQuotaWindow(kind: .weekly, remainingPercent: remaining, resetsAt: weeklyResetsAt)
+        }
+        return nil
     }
 }
 
 public enum QuotaExtractor {
+    private static let fiveHourKeys = ["five_hour_remaining_percent", "fiveHourRemainingPercent"]
     private static let weeklyKeys = ["weekly_remaining_percent", "weeklyRemainingPercent"]
+    private static let fiveHourResetKeys = ["five_hour_resets_at", "fiveHourResetsAt", "five_hour_reset_at", "fiveHourResetAt"]
     private static let weeklyResetKeys = ["weekly_resets_at", "weeklyResetsAt", "weekly_reset_at", "weeklyResetAt"]
+    private static let primaryWindowKeys = ["primary_window", "primaryWindow"]
     private static let preferredContainerKeys = ["quota", "rate_limits", "rateLimits"]
     private static let planTypeKeys = ["plan_type", "planType"]
 
@@ -70,14 +98,24 @@ public enum QuotaExtractor {
     }
 
     private static func values(in dictionary: [String: Any]) -> QuotaValues? {
-        guard let weekly = firstPercent(in: dictionary, keys: weeklyKeys) else {
-            return nil
-        }
+        let fiveHour = firstPercent(in: dictionary, keys: fiveHourKeys)
+        let weekly = firstPercent(in: dictionary, keys: weeklyKeys)
+        guard fiveHour != nil || weekly != nil else { return nil }
         return QuotaValues(
             weeklyRemainingPercent: weekly,
             weeklyResetsAt: firstDate(in: dictionary, keys: weeklyResetKeys),
+            fiveHourRemainingPercent: fiveHour,
+            fiveHourResetsAt: firstDate(in: dictionary, keys: fiveHourResetKeys),
+            primaryWindow: firstWindowKind(in: dictionary, keys: primaryWindowKeys),
             planType: firstString(in: dictionary, keys: planTypeKeys)
         )
+    }
+
+    private static func firstWindowKind(in dictionary: [String: Any], keys: [String]) -> CodexQuotaWindowKind? {
+        guard let raw = firstString(in: dictionary, keys: keys)?.lowercased() else { return nil }
+        if ["five_hour", "fivehour", "5h", "300"].contains(raw) { return .fiveHour }
+        if ["weekly", "week", "10080"].contains(raw) { return .weekly }
+        return nil
     }
 
     private static func firstString(in dictionary: [String: Any], keys: [String]) -> String? {

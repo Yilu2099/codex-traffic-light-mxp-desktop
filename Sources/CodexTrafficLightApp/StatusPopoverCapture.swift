@@ -10,8 +10,9 @@ enum StatusPopoverCapture {
         model.snapshot = StateSnapshot(
             updatedAt: now,
             quota: QuotaSnapshot(
-                weeklyRemainingPercent: 61,
-                weeklyResetsAt: now.addingTimeInterval(5 * 86_400 + 22 * 3_600),
+                fiveHourRemainingPercent: 82,
+                fiveHourResetsAt: now.addingTimeInterval(3 * 3_600),
+                primaryWindow: .fiveHour,
                 source: "preview",
                 updatedAt: now
             )
@@ -19,6 +20,9 @@ enum StatusPopoverCapture {
         model.syncedQuota = TeamQuotaReport(
             weeklyRemainingPercent: 48,
             weeklyResetsAt: now.addingTimeInterval(4 * 86_400 + 12 * 3_600),
+            fiveHourRemainingPercent: 82,
+            fiveHourResetsAt: now.addingTimeInterval(3 * 3_600),
+            primaryWindow: .fiveHour,
             updatedAt: now
         )
         let previewState = ProcessInfo.processInfo.environment["CODEX_LIGHT_CAPTURE_STATUS_STATE"]
@@ -50,9 +54,9 @@ enum StatusPopoverCapture {
         } else {
             rankingJSON = """
             {"updatedAt":"2026-08-21 13:36","members":[
-              {"id":"zlu","name":"张璐","avatar":"/avatars/58.png","tokens":\(previewTokens.zlu),"sessions":12,"lastActive":"\(recentActive)","online":true,"grindDay":"2026-08-22","dayGrindTime":"09:33","nightGrindTime":"02:04","officialUsage":{"dataThrough":"2026-08-20"},"tokenSource":"today_live","todayLiveUpdatedAt":"2026-08-22T03:49:00Z","weeklyQuota":{"weeklyRemainingPercent":48,"weeklyUsedPercent":52,"weeklyResetsAt":"2026-08-27T03:33:00.000Z","updatedAt":"2026-08-22T03:49:00.000Z"}},
+              {"id":"zlu","name":"张璐","avatar":"/avatars/58.png","tokens":\(previewTokens.zlu),"sessions":12,"lastActive":"\(recentActive)","online":true,"grindDay":"2026-08-22","dayGrindTime":"09:33","nightGrindTime":"02:04","officialUsage":{"dataThrough":"2026-08-20"},"tokenSource":"today_live","todayLiveUpdatedAt":"2026-08-22T03:49:00Z","membershipPlan":"pro","weeklyQuota":{"weeklyRemainingPercent":48,"weeklyUsedPercent":52,"weeklyResetsAt":"2026-08-27T03:33:00.000Z","primaryWindow":"weekly","updatedAt":"2026-08-22T03:49:00.000Z"}},
               {"id":"liguoqing","name":"李国庆","avatar":"/avatars/168.png","tokens":\(previewTokens.liguoqing),"sessions":9,"lastActive":"21:35","grindDay":"2026-08-22","dayGrindTime":"10:16","nightGrindTime":"02:03","officialUsage":{"dataThrough":"2026-08-20"},"tokenSource":"today_live","todayLiveUpdatedAt":"2026-08-22T03:10:00Z","weeklyQuota":{"weeklyRemainingPercent":17,"weeklyUsedPercent":83,"weeklyResetsAt":"2026-08-24T08:56:21.000Z","updatedAt":"2026-08-22T03:10:00.000Z"}},
-              {"id":"qiaoyue","name":"乔月","avatar":"/avatars/201.png","tokens":\(previewTokens.qiaoyue),"sessions":7,"lastActive":"16:50","grindDay":"2026-08-22","dayGrindTime":"09:59","nightGrindTime":"03:08","officialUsage":{"dataThrough":"2026-08-20"},"tokenSource":"today_live","todayLiveUpdatedAt":"2026-08-22T02:35:00Z","weeklyQuota":{"weeklyRemainingPercent":62,"weeklyUsedPercent":38,"weeklyResetsAt":"2026-08-28T03:33:00.000Z","updatedAt":"2026-08-22T02:35:00.000Z"}},
+              {"id":"qiaoyue","name":"乔月","avatar":"/avatars/201.png","tokens":\(previewTokens.qiaoyue),"sessions":7,"lastActive":"16:50","grindDay":"2026-08-22","dayGrindTime":"09:59","nightGrindTime":"03:08","officialUsage":{"dataThrough":"2026-08-20"},"tokenSource":"today_live","todayLiveUpdatedAt":"2026-08-22T02:35:00Z","membershipPlan":"plus","weeklyQuota":{"fiveHourRemainingPercent":82,"fiveHourUsedPercent":18,"fiveHourResetsAt":"2026-08-26T16:33:00.000Z","primaryWindow":"five_hour","updatedAt":"2026-08-22T02:35:00.000Z"}},
               {"id":"huangning","name":"黄宁","avatar":"/avatars/199.png","tokens":\(previewTokens.huangning),"sessions":5,"lastActive":"19:53","grindDay":"2026-08-22","dayGrindTime":"10:05","nightGrindTime":"02:11","officialUsage":{"dataThrough":"2026-08-20"},"tokenSource":"today_live","todayLiveUpdatedAt":"2026-08-22T02:10:00Z","weeklyQuota":{"weeklyRemainingPercent":58,"weeklyUsedPercent":42,"weeklyResetsAt":"2026-08-27T03:33:00.000Z","updatedAt":"2026-08-22T02:10:00.000Z"}},
               {"id":"mameng","name":"马猛","avatar":"/avatars/codex-06.png","tokens":\(previewTokens.mameng),"sessions":4,"lastActive":"20:42","grindDay":"2026-08-22","dayGrindTime":"11:02","nightGrindTime":"01:49","officialUsage":{"dataThrough":"2026-08-20"},"tokenSource":"today_live","todayLiveUpdatedAt":"2026-08-22T01:45:00Z","weeklyQuota":{"weeklyRemainingPercent":35,"weeklyUsedPercent":65,"weeklyResetsAt":"2026-08-26T03:33:00.000Z","updatedAt":"2026-08-22T01:45:00.000Z"}}
             ]}
