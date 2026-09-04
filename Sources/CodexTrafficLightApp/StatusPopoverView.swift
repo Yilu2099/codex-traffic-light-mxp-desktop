@@ -439,7 +439,7 @@ struct StatusPopoverView: View {
             return member.hasEverJoined ? model.selectedRange.emptyUsageText : "还未加入"
         }
         if let lastActive = validLastActive(member) {
-            return member.online == true ? "手搓代码中" : "最后 \(lastActive)"
+            return member.online == true ? "开搓中" : "最后 \(lastActive)"
         }
         return officialDate(member)
     }
