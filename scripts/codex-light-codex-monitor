@@ -5,7 +5,7 @@ APP_ROOT="$HOME/.wanhe-codex-token/app"
 CURRENT_RELEASE="$APP_ROOT/current"
 BRIDGE_REQUEST="$APP_ROOT/launch-agent-bridge.request"
 BRIDGE_LOCK="$APP_ROOT/launch-agent-bridge.lock"
-LEGACY_BRIDGE_VERSION="1.2.96"
+LEGACY_BRIDGE_VERSION="1.2.97"
 LEGACY_BRIDGE_HELPER="$APP_ROOT/releases/$LEGACY_BRIDGE_VERSION/wanhe-status-updater"
 
 bridge_target_is_safe() {

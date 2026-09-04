@@ -44,6 +44,90 @@ public struct MainAppLaunchctlResult: Equatable, Sendable {
     }
 }
 
+private enum LaunchAgentRebootstrapFailure: Error {
+    case bootout(String)
+    case bootstrap(String)
+}
+
+/// `launchctl bootstrap` can transiently return EIO while launchd is still
+/// retiring the prior registration. Retry exactly once, and only after a fresh
+/// bootout plus explicit proof that the service is absent. Other errors remain
+/// terminal; a loaded service is never treated as a successful removal.
+private enum LaunchAgentRebootstrap {
+    static func run(
+        domain: String,
+        service: String,
+        plist: URL,
+        maximumAbsencePolls: Int = 8,
+        pause: () -> Void,
+        runLaunchctl: ([String]) -> MainAppLaunchctlResult
+    ) throws {
+        let initialBootout = runLaunchctl(["bootout", service])
+        guard initialBootout.status == 0
+                || launchctlSaysServiceIsAbsent(initialBootout.output)
+                || isEIO(initialBootout) else {
+            throw LaunchAgentRebootstrapFailure.bootout(initialBootout.output)
+        }
+        try requireServiceAbsent(
+            service,
+            maximumPolls: maximumAbsencePolls,
+            pause: pause,
+            runLaunchctl: runLaunchctl
+        )
+        if isEIO(initialBootout) {
+            pause()
+            try requireServiceAbsent(service, maximumPolls: 0, pause: pause, runLaunchctl: runLaunchctl)
+        }
+
+        let firstBootstrap = runLaunchctl(["bootstrap", domain, plist.path])
+        guard firstBootstrap.status != 0 else { return }
+        guard isEIO(firstBootstrap) else {
+            throw LaunchAgentRebootstrapFailure.bootstrap(firstBootstrap.output)
+        }
+
+        // A failed bootstrap may have partially registered the job. Remove it
+        // again and prove absence before the sole retry.
+        let retryBootout = runLaunchctl(["bootout", service])
+        guard retryBootout.status == 0
+                || launchctlSaysServiceIsAbsent(retryBootout.output)
+                || isEIO(retryBootout) else {
+            throw LaunchAgentRebootstrapFailure.bootout(retryBootout.output)
+        }
+        try requireServiceAbsent(
+            service,
+            maximumPolls: maximumAbsencePolls,
+            pause: pause,
+            runLaunchctl: runLaunchctl
+        )
+        pause()
+        try requireServiceAbsent(service, maximumPolls: 0, pause: pause, runLaunchctl: runLaunchctl)
+
+        let secondBootstrap = runLaunchctl(["bootstrap", domain, plist.path])
+        guard secondBootstrap.status == 0 else {
+            throw LaunchAgentRebootstrapFailure.bootstrap(secondBootstrap.output)
+        }
+    }
+
+    private static func requireServiceAbsent(
+        _ service: String,
+        maximumPolls: Int,
+        pause: () -> Void,
+        runLaunchctl: ([String]) -> MainAppLaunchctlResult
+    ) throws {
+        var last = MainAppLaunchctlResult(status: -1, output: "service absence was not confirmed")
+        for poll in 0...max(0, maximumPolls) {
+            last = runLaunchctl(["print", service])
+            if last.status != 0, launchctlSaysServiceIsAbsent(last.output) { return }
+            if poll < maximumPolls { pause() }
+        }
+        throw LaunchAgentRebootstrapFailure.bootout(last.output.isEmpty ? "service remained registered" : last.output)
+    }
+
+    private static func isEIO(_ result: MainAppLaunchctlResult) -> Bool {
+        result.status == EIO || result.output.lowercased().contains("input/output error")
+    }
+}
+
 public enum MainAppLaunchAgentInstaller {
     public static let label = "com.codex.traffic-light-mxp"
 
@@ -57,6 +141,7 @@ public enum MainAppLaunchAgentInstaller {
         home: URL = FileManager.default.homeDirectoryForCurrentUser,
         userID: uid_t = getuid(),
         forceRebootstrap: Bool = false,
+        bootstrapRetryPause: () -> Void = { Thread.sleep(forTimeInterval: 0.1) },
         runLaunchctl: (([String]) -> MainAppLaunchctlResult)? = nil
     ) throws -> Bool {
         let fileManager = FileManager.default
@@ -84,13 +169,18 @@ public enum MainAppLaunchAgentInstaller {
         let registered = runner(["print", service]).status == 0
         guard forceRebootstrap || plistChanged || !registered else { return false }
 
-        let bootout = runner(["bootout", service])
-        guard bootout.status == 0 || launchctlSaysServiceIsAbsent(bootout.output) else {
-            throw MainAppLaunchAgentError.bootoutFailed(bootout.output)
-        }
-        let bootstrap = runner(["bootstrap", domain, plist.path])
-        guard bootstrap.status == 0 else {
-            throw MainAppLaunchAgentError.bootstrapFailed(bootstrap.output)
+        do {
+            try LaunchAgentRebootstrap.run(
+                domain: domain,
+                service: service,
+                plist: plist,
+                pause: bootstrapRetryPause,
+                runLaunchctl: runner
+            )
+        } catch LaunchAgentRebootstrapFailure.bootout(let detail) {
+            throw MainAppLaunchAgentError.bootoutFailed(detail)
+        } catch LaunchAgentRebootstrapFailure.bootstrap(let detail) {
+            throw MainAppLaunchAgentError.bootstrapFailed(detail)
         }
         // RunAtLoad starts the freshly bootstrapped job. An immediate
         // `kickstart -k` kills that valid first process and causes launchd's
@@ -115,6 +205,7 @@ public enum UpdaterLaunchAgentInstaller {
         home: URL = FileManager.default.homeDirectoryForCurrentUser,
         userID: uid_t = getuid(),
         forceRebootstrap: Bool = false,
+        bootstrapRetryPause: () -> Void = { Thread.sleep(forTimeInterval: 0.1) },
         runLaunchctl: (([String]) -> MainAppLaunchctlResult)? = nil
     ) throws -> Bool {
         let fileManager = FileManager.default
@@ -142,13 +233,18 @@ public enum UpdaterLaunchAgentInstaller {
         let registered = runner(["print", service]).status == 0
         guard forceRebootstrap || plistChanged || !registered else { return false }
 
-        let bootout = runner(["bootout", service])
-        guard bootout.status == 0 || launchctlSaysServiceIsAbsent(bootout.output) else {
-            throw UpdaterLaunchAgentError.bootoutFailed(bootout.output)
-        }
-        let bootstrap = runner(["bootstrap", domain, plist.path])
-        guard bootstrap.status == 0 else {
-            throw UpdaterLaunchAgentError.bootstrapFailed(bootstrap.output)
+        do {
+            try LaunchAgentRebootstrap.run(
+                domain: domain,
+                service: service,
+                plist: plist,
+                pause: bootstrapRetryPause,
+                runLaunchctl: runner
+            )
+        } catch LaunchAgentRebootstrapFailure.bootout(let detail) {
+            throw UpdaterLaunchAgentError.bootoutFailed(detail)
+        } catch LaunchAgentRebootstrapFailure.bootstrap(let detail) {
+            throw UpdaterLaunchAgentError.bootstrapFailed(detail)
         }
         // RunAtLoad is sufficient; do not kill the just-started updater.
         return true
@@ -176,6 +272,7 @@ public enum ExistingLaunchAgentRegistration {
         label: String,
         home: URL = FileManager.default.homeDirectoryForCurrentUser,
         userID: uid_t = getuid(),
+        bootstrapRetryPause: () -> Void = { Thread.sleep(forTimeInterval: 0.1) },
         runLaunchctl: (([String]) -> MainAppLaunchctlResult)? = nil
     ) throws {
         let plist = home.appendingPathComponent("Library/LaunchAgents/\(label).plist")
@@ -186,10 +283,18 @@ public enum ExistingLaunchAgentRegistration {
             boundedProcessResult(executable: "/bin/launchctl", arguments: arguments)
         }
         let domain = "gui/\(userID)"
-        try forceBootout(label: label, userID: userID, runLaunchctl: runner)
-        let bootstrap = runner(["bootstrap", domain, plist.path])
-        guard bootstrap.status == 0 else {
-            throw MainAppLaunchAgentError.bootstrapFailed(bootstrap.output)
+        do {
+            try LaunchAgentRebootstrap.run(
+                domain: domain,
+                service: "\(domain)/\(label)",
+                plist: plist,
+                pause: bootstrapRetryPause,
+                runLaunchctl: runner
+            )
+        } catch LaunchAgentRebootstrapFailure.bootout(let detail) {
+            throw MainAppLaunchAgentError.bootoutFailed(detail)
+        } catch LaunchAgentRebootstrapFailure.bootstrap(let detail) {
+            throw MainAppLaunchAgentError.bootstrapFailed(detail)
         }
         // RunAtLoad is sufficient; rollback must not self-induce throttling.
     }

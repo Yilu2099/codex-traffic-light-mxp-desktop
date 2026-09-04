@@ -580,18 +580,34 @@ public enum LaunchAgentUpdateBridge {
                     throw LaunchAgentUpdateBridgeError.unsafePreviousTarget
                 }
                 try swapCurrentLink(current: current, target: previousTarget)
-                try ExistingLaunchAgentRegistration.forceRebootstrap(
-                    label: UpdaterLaunchAgentInstaller.label,
-                    home: home,
-                    userID: userID,
-                    runLaunchctl: runner
-                )
-                try ExistingLaunchAgentRegistration.forceRebootstrap(
-                    label: MainAppLaunchAgentInstaller.label,
-                    home: home,
-                    userID: userID,
-                    runLaunchctl: runner
-                )
+                // Restore both registrations even when one launchd operation
+                // fails. Updater stays first so a successful RunAtLoad observes
+                // the already-persisted backoff, while main recovery is never
+                // skipped by a persistent updater EIO.
+                var registrationFailures: [String] = []
+                do {
+                    try ExistingLaunchAgentRegistration.forceRebootstrap(
+                        label: UpdaterLaunchAgentInstaller.label,
+                        home: home,
+                        userID: userID,
+                        runLaunchctl: runner
+                    )
+                } catch {
+                    registrationFailures.append("updater: \(error)")
+                }
+                do {
+                    try ExistingLaunchAgentRegistration.forceRebootstrap(
+                        label: MainAppLaunchAgentInstaller.label,
+                        home: home,
+                        userID: userID,
+                        runLaunchctl: runner
+                    )
+                } catch {
+                    registrationFailures.append("main: \(error)")
+                }
+                if !registrationFailures.isEmpty {
+                    throw LaunchAgentUpdateBridgeError.activationFailed(registrationFailures.joined(separator: "; "))
+                }
                 try ensureBefore(overallDeadline)
             } catch {
                 throw LaunchAgentUpdateBridgeError.rollbackFailed(
