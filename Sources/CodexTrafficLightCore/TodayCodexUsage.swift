@@ -10,10 +10,19 @@ public struct TodayLiveUsageReport: Codable, Equatable, Sendable {
     public var utcTokens: Int?
     public var updatedAt: String
     public var source: String
-    /// Version 2 rebuilds the current day from validated per-turn deltas. The
-    /// server may use a newer counter version to replace an inflated legacy
-    /// cumulative value instead of applying the normal same-day monotonic max.
+    /// Version 4 validates every appended turn and reports suspicious usage
+    /// separately. Version 3 is reserved for the earlier manual audit repair.
     public var counterVersion: Int?
+    /// Parser/anomaly-isolation capability. This is deliberately independent
+    /// from counterVersion, which controls same-day replacement authority.
+    public var validationVersion: Int?
+    /// Confirmed usage in the trailing 30 minutes. Quarantined usage is kept
+    /// only in `pendingTokens`, so one bad event cannot freeze later work.
+    public var recent30MinuteTokens: Int?
+    /// Suspicious usage observed on this local calendar day. It is never
+    /// included in `tokens` or `utcTokens`.
+    public var pendingTokens: Int?
+    public var anomalyCount: Int?
 
     public init(
         day: String,
@@ -22,7 +31,11 @@ public struct TodayLiveUsageReport: Codable, Equatable, Sendable {
         utcTokens: Int? = nil,
         updatedAt: String,
         source: String = "local_live_increment",
-        counterVersion: Int? = 2
+        counterVersion: Int? = 4,
+        validationVersion: Int? = 4,
+        recent30MinuteTokens: Int? = 0,
+        pendingTokens: Int? = 0,
+        anomalyCount: Int? = 0
     ) {
         self.day = day
         self.tokens = max(0, tokens)
@@ -31,12 +44,22 @@ public struct TodayLiveUsageReport: Codable, Equatable, Sendable {
         self.updatedAt = updatedAt
         self.source = source
         self.counterVersion = counterVersion
+        self.validationVersion = validationVersion
+        self.recent30MinuteTokens = recent30MinuteTokens.map { max(0, $0) }
+        self.pendingTokens = pendingTokens.map { max(0, $0) }
+        self.anomalyCount = anomalyCount.map { max(0, $0) }
     }
 }
 
 /// Counts only token usage events appended after the collector starts. Existing files are
 /// baselined at EOF, so historical conversations are never rescanned.
 public struct TodayCodexUsageCollector: Sendable {
+    private struct RecentTokenEvent: Codable {
+        var timestamp: String
+        var tokens: Int
+        var confirmed: Bool
+    }
+
     private struct State: Codable {
         var initialized: Bool
         var day: String
@@ -48,13 +71,42 @@ public struct TodayCodexUsageCollector: Sendable {
         var fileOffsets: [String: Int64]
         var sessionCumulativeTokens: [String: Int]
         var eventValidationVersion: Int?
+        /// Separate from the parser version: only a fresh day may claim v4's
+        /// authority to replace a lower same-day server counter.
+        var reportCounterVersion: Int?
+        var pendingTokens: Int?
+        var anomalyCount: Int?
+        var recentEvents: [RecentTokenEvent]?
     }
 
-    /// One Codex request cannot legitimately account for tens of millions of
-    /// tokens. Forked/continued sessions can occasionally expose an inherited
-    /// cumulative total as `last_token_usage`; count the day without that one
-    /// impossible event while retaining the new cumulative baseline.
-    private static let maximumSingleEventTokens = 20_000_000
+    private struct UsageSample {
+        var inputTokens: Int?
+        var cachedInputTokens: Int?
+        var cacheWriteInputTokens: Int?
+        var outputTokens: Int?
+        var reasoningOutputTokens: Int?
+        var totalTokens: Int
+        var componentsPresent: Bool
+        var componentsValid: Bool
+    }
+
+    private struct CandidateEvent {
+        var timestamp: Date
+        var tokens: Int
+        var structurallyValid: Bool
+    }
+
+    private struct AppendedUsageResult {
+        var events: [CandidateEvent]
+        var nextOffset: Int64
+        var cumulative: Int?
+    }
+
+    /// If an older Codex event omits `model_context_window`, quarantine only
+    /// very large turns. Current events use their actual context limit.
+    private static let fallbackMaximumSingleEventTokens = 2_000_000
+    private static let maximumConfirmedThirtyMinuteTokens = 50_000_000
+    private static let recentWindow: TimeInterval = 30 * 60
 
     private let stateURL: URL
     private let timeZone: TimeZone
@@ -82,12 +134,23 @@ public struct TodayCodexUsageCollector: Sendable {
     public func cachedReport(now: Date = Date()) -> TodayLiveUsageReport? {
         guard let state = loadState(), state.initialized, state.day == dayString(now) else { return nil }
         let utcDay = utcDayString(now)
+        let cutoff = now.addingTimeInterval(-Self.recentWindow)
+        let latestAllowed = now.addingTimeInterval(5 * 60)
+        let recent = (state.recentEvents ?? []).filter {
+            guard let timestamp = isoDate($0.timestamp) else { return false }
+            return timestamp >= cutoff && timestamp <= latestAllowed
+        }
         return TodayLiveUsageReport(
             day: state.day,
             tokens: state.tokens,
             utcDay: state.utcBaselineComplete == true && state.utcDay == utcDay ? utcDay : nil,
             utcTokens: state.utcBaselineComplete == true && state.utcDay == utcDay ? state.utcTokens : nil,
-            updatedAt: state.updatedAt
+            updatedAt: state.updatedAt,
+            counterVersion: state.reportCounterVersion ?? 2,
+            validationVersion: state.eventValidationVersion ?? 4,
+            recent30MinuteTokens: recent.reduce(0) { $1.confirmed ? $0 + $1.tokens : $0 },
+            pendingTokens: state.pendingTokens ?? 0,
+            anomalyCount: state.anomalyCount ?? 0
         )
     }
 
@@ -112,20 +175,33 @@ public struct TodayCodexUsageCollector: Sendable {
             updatedAt: isoString(now),
             fileOffsets: [:],
             sessionCumulativeTokens: [:],
-            eventValidationVersion: 2
+            eventValidationVersion: 4,
+            reportCounterVersion: 4,
+            pendingTokens: 0,
+            anomalyCount: 0,
+            recentEvents: []
         )
         var stateChanged = loadedState == nil
-        if (state.eventValidationVersion ?? 0) < 2 {
-            // Do not rescan a whole active day during an upgrade. Some members
-            // have very large session files, and a full rebuild can exceed the
-            // sync watchdog. New files are validated at their first read.
-            state.eventValidationVersion = 2
+        if (state.eventValidationVersion ?? 0) < 4 {
+            // Preserve the already reported counter. Rebuilding every active
+            // file can exceed the sync watchdog; v4 validates all new tails.
+            state.eventValidationVersion = 4
+            // A legacy same-day total may still contain the spike that an
+            // operator already repaired as server-side v3. Do not relabel it
+            // as v4 and resurrect the bad value.
+            state.reportCounterVersion = state.reportCounterVersion ?? 2
+            state.pendingTokens = state.pendingTokens ?? 0
+            state.anomalyCount = state.anomalyCount ?? 0
+            state.recentEvents = state.recentEvents ?? []
             stateChanged = true
         }
 
         if state.day != day {
             state.day = day
             state.tokens = 0
+            state.reportCounterVersion = 4
+            state.pendingTokens = 0
+            state.anomalyCount = 0
             stateChanged = true
         }
         if state.utcDay == nil {
@@ -147,10 +223,12 @@ public struct TodayCodexUsageCollector: Sendable {
                 state.fileOffsets[file.stableKey] = file.size
             }
             state.initialized = true
-            state.eventValidationVersion = 2
+            state.eventValidationVersion = 4
+            state.reportCounterVersion = 4
             stateChanged = true
         } else {
             let previousUpdate = isoDate(state.updatedAt) ?? now
+            var candidates: [CandidateEvent] = []
             for file in files {
                 let key = file.stableKey
                 let size = file.size
@@ -186,21 +264,68 @@ public struct TodayCodexUsageCollector: Sendable {
                 let result = appendedUsage(
                     file: file.url,
                     from: startOffset,
-                    expectedLocalDay: day,
-                    expectedUTCDay: utcDay,
-                    previousCumulative: state.sessionCumulativeTokens[sessionID(file)]
+                    previousCumulative: state.sessionCumulativeTokens[sessionID(file)],
+                    minimumCountedAt: knownOffset == nil && startOffset == 0
+                        ? newSessionWatermark(file: file, previousUpdate: previousUpdate)
+                        : nil
                 )
-                let isFirstRead = knownOffset == nil && startOffset == 0
-                if !isFirstRead || isPlausibleInitialRead(result, file: file) {
-                    state.tokens += result.localTokens
-                    state.utcTokens = (state.utcTokens ?? 0) + result.utcTokens
-                }
+                candidates.append(contentsOf: result.events)
                 state.fileOffsets[key] = result.nextOffset
                 stateChanged = true
                 if let cumulative = result.cumulative {
                     state.sessionCumulativeTokens[sessionID(file)] = cumulative
                 }
             }
+            if !candidates.isEmpty {
+                var recent = (state.recentEvents ?? []).compactMap { stored -> (Date, Int, Bool)? in
+                    guard let timestamp = isoDate(stored.timestamp), stored.tokens > 0 else { return nil }
+                    return (timestamp, stored.tokens, stored.confirmed)
+                }
+                for candidate in candidates.sorted(by: { $0.timestamp < $1.timestamp }) {
+                    let timestampIsPlausible = candidate.timestamp <= now.addingTimeInterval(5 * 60)
+                    let confirmed: Bool
+                    if timestampIsPlausible {
+                        let cutoff = candidate.timestamp.addingTimeInterval(-Self.recentWindow)
+                        recent.removeAll { $0.0 < cutoff }
+                        let confirmedInWindow = recent.reduce(0) { partial, item in
+                            item.2 && item.0 <= candidate.timestamp ? partial + item.1 : partial
+                        }
+                        let withinRate = candidate.tokens <= max(0, Self.maximumConfirmedThirtyMinuteTokens - confirmedInWindow)
+                        confirmed = candidate.structurallyValid && withinRate
+                        recent.append((candidate.timestamp, candidate.tokens, confirmed))
+                    } else {
+                        // A far-future row is auditable pending usage, but it
+                        // must not advance or prune the real rolling window.
+                        confirmed = false
+                    }
+                    if dayString(candidate.timestamp) == day {
+                        if confirmed {
+                            state.tokens += candidate.tokens
+                        } else {
+                            state.pendingTokens = (state.pendingTokens ?? 0) + candidate.tokens
+                            state.anomalyCount = (state.anomalyCount ?? 0) + 1
+                        }
+                    }
+                    if confirmed, utcDayString(candidate.timestamp) == utcDay {
+                        state.utcTokens = (state.utcTokens ?? 0) + candidate.tokens
+                    }
+                }
+                let finalCutoff = now.addingTimeInterval(-Self.recentWindow)
+                state.recentEvents = recent.filter { $0.0 >= finalCutoff }.map {
+                    RecentTokenEvent(timestamp: isoString($0.0), tokens: $0.1, confirmed: $0.2)
+                }
+            }
+        }
+
+        let finalCutoff = now.addingTimeInterval(-Self.recentWindow)
+        let latestAllowed = now.addingTimeInterval(5 * 60)
+        let prunedRecent = (state.recentEvents ?? []).filter {
+            guard let timestamp = isoDate($0.timestamp) else { return false }
+            return timestamp >= finalCutoff && timestamp <= latestAllowed
+        }
+        if prunedRecent.count != (state.recentEvents ?? []).count {
+            state.recentEvents = prunedRecent
+            stateChanged = true
         }
 
         let activeKeys = Set(files.map(\.stableKey))
@@ -222,7 +347,12 @@ public struct TodayCodexUsageCollector: Sendable {
             tokens: state.tokens,
             utcDay: state.utcBaselineComplete == true ? utcDay : nil,
             utcTokens: state.utcBaselineComplete == true ? (state.utcTokens ?? 0) : nil,
-            updatedAt: collectedAt
+            updatedAt: collectedAt,
+            counterVersion: state.reportCounterVersion ?? 2,
+            validationVersion: state.eventValidationVersion ?? 4,
+            recent30MinuteTokens: prunedRecent.reduce(0) { $1.confirmed ? $0 + $1.tokens : $0 },
+            pendingTokens: state.pendingTokens ?? 0,
+            anomalyCount: state.anomalyCount ?? 0
         )
     }
 
@@ -248,33 +378,22 @@ public struct TodayCodexUsageCollector: Sendable {
     private func appendedUsage(
         file: URL,
         from offset: Int64,
-        expectedLocalDay: String,
-        expectedUTCDay: String,
-        previousCumulative: Int?
-    ) -> (
-        localTokens: Int,
-        utcTokens: Int,
-        nextOffset: Int64,
-        cumulative: Int?,
-        firstUsageAt: Date?,
-        lastUsageAt: Date?
-    ) {
+        previousCumulative: Int?,
+        minimumCountedAt: Date? = nil
+    ) -> AppendedUsageResult {
         guard let handle = try? FileHandle(forReadingFrom: file) else {
-            return (0, 0, offset, previousCumulative, nil, nil)
+            return AppendedUsageResult(events: [], nextOffset: offset, cumulative: previousCumulative)
         }
         defer { try? handle.close() }
         do {
             try handle.seek(toOffset: UInt64(offset))
             let data = try handle.readToEnd() ?? Data()
             guard let lastNewline = data.lastIndex(of: 0x0A) else {
-                return (0, 0, offset, previousCumulative, nil, nil)
+                return AppendedUsageResult(events: [], nextOffset: offset, cumulative: previousCumulative)
             }
             let complete = data.prefix(through: lastNewline)
-            var localAdded = 0
-            var utcAdded = 0
             var cumulative = previousCumulative
-            var firstUsageAt: Date?
-            var lastUsageAt: Date?
+            var candidates: [CandidateEvent] = []
             for rawLine in complete.split(separator: 0x0A) {
                 let line = Data(rawLine)
                 guard line.range(of: Data("\"token_count\"".utf8)) != nil,
@@ -282,57 +401,116 @@ public struct TodayCodexUsageCollector: Sendable {
                       let payload = event["payload"] as? [String: Any],
                       payload["type"] as? String == "token_count",
                       let info = payload["info"] as? [String: Any],
-                      let totalUsage = info["total_token_usage"] as? [String: Any] else { continue }
+                      let totalUsage = usageSample(info["total_token_usage"]) else { continue }
                 guard let timestamp = date(event["timestamp"]) else { continue }
-                if firstUsageAt == nil || timestamp < firstUsageAt! { firstUsageAt = timestamp }
-                if lastUsageAt == nil || timestamp > lastUsageAt! { lastUsageAt = timestamp }
-                let current = integer(totalUsage["total_tokens"])
+                let current = totalUsage.totalTokens
                 guard current > 0 else { continue }
-                let delta: Int
+                let lastUsage = usageSample(info["last_token_usage"])
+                let candidateTokens: Int
+                var cumulativeConsistent = true
                 if let cumulative {
-                    if current >= cumulative { delta = current - cumulative }
-                    else { delta = integer((info["last_token_usage"] as? [String: Any])?["total_tokens"]) }
+                    if current >= cumulative {
+                        candidateTokens = current - cumulative
+                    } else {
+                        candidateTokens = lastUsage?.totalTokens ?? current
+                        cumulativeConsistent = false
+                    }
                 } else {
-                    delta = integer((info["last_token_usage"] as? [String: Any])?["total_tokens"])
+                    candidateTokens = lastUsage?.totalTokens ?? current
                 }
                 cumulative = current
-                guard delta > 0, delta <= Self.maximumSingleEventTokens else { continue }
-                if dayString(timestamp) == expectedLocalDay { localAdded += delta }
-                if utcDayString(timestamp) == expectedUTCDay { utcAdded += delta }
+                guard candidateTokens > 0 else { continue }
+                // A newly discovered fork can contain a byte-for-byte copy of
+                // earlier token rows. They establish the cumulative baseline
+                // but do not become new work on this device/day.
+                if let minimumCountedAt, timestamp < minimumCountedAt { continue }
+                let contextWindow = positiveInteger(info["model_context_window"])
+                let maximum = contextWindow ?? Self.fallbackMaximumSingleEventTokens
+                let lastMatchesDelta = lastUsage.map { $0.totalTokens == candidateTokens } ?? true
+                let valid = cumulativeConsistent
+                    && candidateTokens <= maximum
+                    && usageIsValid(totalUsage)
+                    && (lastUsage.map(usageIsValid) ?? true)
+                    && lastMatchesDelta
+                candidates.append(CandidateEvent(
+                    timestamp: timestamp,
+                    tokens: candidateTokens,
+                    structurallyValid: valid
+                ))
             }
-            return (
-                max(0, localAdded),
-                max(0, utcAdded),
-                offset + Int64(complete.count),
-                cumulative,
-                firstUsageAt,
-                lastUsageAt
+            return AppendedUsageResult(
+                events: candidates,
+                nextOffset: offset + Int64(complete.count),
+                cumulative: cumulative
             )
         } catch {
-            return (0, 0, offset, previousCumulative, nil, nil)
+            return AppendedUsageResult(events: [], nextOffset: offset, cumulative: previousCumulative)
         }
     }
 
-    private func isPlausibleInitialRead(
-        _ result: (
-            localTokens: Int,
-            utcTokens: Int,
-            nextOffset: Int64,
-            cumulative: Int?,
-            firstUsageAt: Date?,
-            lastUsageAt: Date?
-        ),
-        file: CodexSessionFileIndex.Entry
-    ) -> Bool {
-        let first = result.firstUsageAt ?? file.modifiedAt
-        let last = max(result.lastUsageAt ?? file.modifiedAt, file.modifiedAt)
-        let duration = max(0, last.timeIntervalSince(first))
-        // This is intentionally a very generous session-rate ceiling rather
-        // than a daily limit: 20M base plus 1M per elapsed second. It rejects
-        // a billion inherited tokens written in a few seconds while allowing
-        // long-running, genuinely heavy sessions to accumulate without a cap.
-        let allowed = 20_000_000 + Int(min(duration, 86_400).rounded(.up)) * 1_000_000
-        return max(result.localTokens, result.utcTokens) <= allowed
+    private func usageSample(_ value: Any?) -> UsageSample? {
+        guard let raw = value as? [String: Any], let total = nonnegativeInteger(raw["total_tokens"]), total > 0 else {
+            return nil
+        }
+        return UsageSample(
+            inputTokens: nonnegativeInteger(raw["input_tokens"]),
+            cachedInputTokens: nonnegativeInteger(raw["cached_input_tokens"]),
+            cacheWriteInputTokens: nonnegativeInteger(raw["cache_write_input_tokens"]),
+            outputTokens: nonnegativeInteger(raw["output_tokens"]),
+            reasoningOutputTokens: nonnegativeInteger(raw["reasoning_output_tokens"]),
+            totalTokens: total,
+            componentsPresent: [
+                "input_tokens", "cached_input_tokens", "cache_write_input_tokens",
+                "output_tokens", "reasoning_output_tokens",
+            ].contains { raw[$0] != nil },
+            componentsValid: [
+                "input_tokens", "cached_input_tokens", "cache_write_input_tokens",
+                "output_tokens", "reasoning_output_tokens",
+            ].allSatisfy { raw[$0] == nil || nonnegativeInteger(raw[$0]) != nil }
+        )
+    }
+
+    private func usageIsValid(_ usage: UsageSample) -> Bool {
+        guard usage.componentsValid else { return false }
+        if !usage.componentsPresent { return true }
+        guard let input = usage.inputTokens, let output = usage.outputTokens else {
+            return false
+        }
+        // Codex occasionally emits last_token_usage with only total_tokens
+        // populated while all component counters are zero. The cumulative
+        // delta and context limit still authenticate that scalar value.
+        if input == 0, output == 0, usage.totalTokens > 0,
+           (usage.cachedInputTokens ?? 0) == 0,
+           (usage.cacheWriteInputTokens ?? 0) == 0,
+           (usage.reasoningOutputTokens ?? 0) == 0 {
+            return true
+        }
+        guard input <= usage.totalTokens, output <= usage.totalTokens,
+              input + output == usage.totalTokens else { return false }
+        if let cached = usage.cachedInputTokens, cached > input { return false }
+        if let cacheWrite = usage.cacheWriteInputTokens, cacheWrite > input { return false }
+        if let reasoning = usage.reasoningOutputTokens, reasoning > output { return false }
+        return true
+    }
+
+    private func newSessionWatermark(file: CodexSessionFileIndex.Entry, previousUpdate: Date) -> Date {
+        let filenameStartedAt = CodexSessionFileCounter().timestampFromFilename(file.url.lastPathComponent)
+        let lowerBound = max(previousUpdate, filenameStartedAt ?? previousUpdate)
+        return lowerBound.addingTimeInterval(-5)
+    }
+
+    private func nonnegativeInteger(_ value: Any?) -> Int? {
+        if let number = value as? NSNumber {
+            let result = number.intValue
+            return result >= 0 ? result : nil
+        }
+        if let text = value as? String, let result = Int(text), result >= 0 { return result }
+        return nil
+    }
+
+    private func positiveInteger(_ value: Any?) -> Int? {
+        guard let result = nonnegativeInteger(value), result > 0 else { return nil }
+        return result
     }
 
     private func loadState() -> State? {
@@ -354,13 +532,6 @@ public struct TodayCodexUsageCollector: Sendable {
 
     private func sessionID(_ file: CodexSessionFileIndex.Entry) -> String {
         sessionID(file.url)
-    }
-
-    private func integer(_ value: Any?) -> Int {
-        if let value = value as? Int { return value }
-        if let value = value as? NSNumber { return value.intValue }
-        if let value = value as? String { return Int(value) ?? 0 }
-        return 0
     }
 
     private func date(_ value: Any?) -> Date? {

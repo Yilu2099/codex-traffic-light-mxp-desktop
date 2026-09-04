@@ -1564,10 +1564,172 @@ func testTodayLiveCollectorRejectsSplitInheritedSpikeInNewShortSession() throws 
         now: now
     )
     try expectEqual(report.tokens, 150, "a normal new session should survive while a split inherited spike from a five-second session is discarded")
+    try expectEqual(report.pendingTokens, 80 * 18_000_000, "every split inherited turn should remain available for audit")
+    try expectEqual(report.anomalyCount, 80, "split inherited turns should be counted without entering confirmed usage")
+    try expectEqual(report.recent30MinuteTokens, 150, "the recent window must include confirmed usage only")
     try expectEqual(report.utcTokens, nil, "a mid-day baseline still must not claim a complete UTC continuation")
-    try expectEqual(report.counterVersion, 2, "validated reports retain the audited counter protocol")
+    try expectEqual(report.counterVersion, 4, "validated reports retain the audited counter protocol")
     let persisted = try String(contentsOf: stateURL, encoding: .utf8)
-    try expect(persisted.contains(#""eventValidationVersion":2"#), "the lightweight validation migration must not rescan again")
+    try expect(persisted.contains(#""eventValidationVersion":4"#), "the lightweight validation migration must not rescan again")
+}
+
+func testTodayLiveCollectorQuarantinesKnownTailAndKeepsLaterWorkMoving() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("known-token-tail-\(UUID().uuidString)")
+    let sessions = root.appendingPathComponent("codex/sessions")
+    let stateURL = root.appendingPathComponent("state/today-live.json")
+    try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let file = sessions.appendingPathComponent("rollout-2026-08-26T04-00-00-55555555-5555-5555-5555-555555555555.jsonl")
+    try "{\"type\":\"session_meta\",\"payload\":{}}\n".write(to: file, atomically: true, encoding: .utf8)
+    let formatter = ISO8601DateFormatter()
+    let baseline = formatter.date(from: "2026-08-26T04:00:00Z")!
+    let collector = TodayCodexUsageCollector(stateURL: stateURL)
+    _ = collector.collect(codexHome: root.appendingPathComponent("codex"), now: baseline)
+
+    let rows = [
+        #"{"type":"event_msg","timestamp":"2026-08-26T04:01:00.000Z","payload":{"type":"token_count","info":{"model_context_window":258400,"last_token_usage":{"total_tokens":18000000},"total_token_usage":{"total_tokens":18000000}}}}"#,
+        #"{"type":"event_msg","timestamp":"2026-08-26T04:01:30.000Z","payload":{"type":"token_count","info":{"model_context_window":100000000,"last_token_usage":{"total_tokens":60000000},"total_token_usage":{"total_tokens":78000000}}}}"#,
+        #"{"type":"event_msg","timestamp":"2026-08-26T04:02:00.000Z","payload":{"type":"token_count","info":{"model_context_window":10000000,"last_token_usage":{"input_tokens":4000000,"cached_input_tokens":3500000,"cache_write_input_tokens":0,"output_tokens":1000000,"reasoning_output_tokens":500000,"total_tokens":5000000},"total_token_usage":{"input_tokens":82000000,"cached_input_tokens":3500000,"cache_write_input_tokens":0,"output_tokens":1000000,"reasoning_output_tokens":500000,"total_tokens":83000000}}}}"#,
+    ].joined(separator: "\n") + "\n"
+    let handle = try FileHandle(forWritingTo: file)
+    try handle.seekToEnd()
+    try handle.write(contentsOf: Data(rows.utf8))
+    try handle.close()
+
+    let report = collector.collect(codexHome: root.appendingPathComponent("codex"), now: formatter.date(from: "2026-08-26T04:03:00Z")!)
+    try expectEqual(report.tokens, 5_000_000, "an invalid known-file tail must not block the next valid turn")
+    try expectEqual(report.pendingTokens, 78_000_000, "context and 30-minute rate anomalies should both be quarantined")
+    try expectEqual(report.anomalyCount, 2, "both anomalous known-file tail events should remain auditable")
+    try expectEqual(report.recent30MinuteTokens, 5_000_000, "pending usage must not freeze the confirmed recent window")
+
+    let cached = collector.cachedReport(now: formatter.date(from: "2026-08-26T04:04:00Z")!)
+    try expectEqual(cached?.pendingTokens, 78_000_000, "presence heartbeats must preserve pending usage")
+    try expectEqual(cached?.anomalyCount, 2, "presence heartbeats must preserve the anomaly count")
+    try expectEqual(cached?.recent30MinuteTokens, 5_000_000, "presence heartbeats must preserve confirmed recent usage")
+    let persisted = try String(contentsOf: stateURL, encoding: .utf8)
+    try expect(!persisted.contains("private conversation"), "token anomaly state must never persist conversation text")
+}
+
+func testTodayLiveCollectorKeepsNormalDeltasAndDoesNotDoubleCountCachedInput() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("normal-token-tail-\(UUID().uuidString)")
+    let sessions = root.appendingPathComponent("codex/sessions")
+    let stateURL = root.appendingPathComponent("state/today-live.json")
+    try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let file = sessions.appendingPathComponent("rollout-2026-08-26T05-00-00-66666666-6666-6666-6666-666666666666.jsonl")
+    try "{\"type\":\"session_meta\",\"payload\":{}}\n".write(to: file, atomically: true, encoding: .utf8)
+    let formatter = ISO8601DateFormatter()
+    let baseline = formatter.date(from: "2026-08-26T05:00:00Z")!
+    let collector = TodayCodexUsageCollector(stateURL: stateURL)
+    _ = collector.collect(codexHome: root.appendingPathComponent("codex"), now: baseline)
+    let rows = [
+        #"{"type":"event_msg","timestamp":"2026-08-26T05:01:00.000Z","payload":{"type":"token_count","info":{"model_context_window":300000,"last_token_usage":{"input_tokens":100000,"cached_input_tokens":80000,"cache_write_input_tokens":0,"output_tokens":20000,"reasoning_output_tokens":10000,"total_tokens":120000},"total_token_usage":{"input_tokens":100000,"cached_input_tokens":80000,"cache_write_input_tokens":0,"output_tokens":20000,"reasoning_output_tokens":10000,"total_tokens":120000}}}}"#,
+        #"{"type":"event_msg","timestamp":"2026-08-26T05:02:00.000Z","payload":{"type":"token_count","info":{"model_context_window":300000,"last_token_usage":{"input_tokens":120000,"cached_input_tokens":90000,"cache_write_input_tokens":0,"output_tokens":30000,"reasoning_output_tokens":15000,"total_tokens":150000},"total_token_usage":{"input_tokens":220000,"cached_input_tokens":170000,"cache_write_input_tokens":0,"output_tokens":50000,"reasoning_output_tokens":25000,"total_tokens":270000}}}}"#,
+        #"{"type":"event_msg","timestamp":"2026-08-26T05:02:30.000Z","payload":{"type":"token_count","info":{"model_context_window":300000,"last_token_usage":{"input_tokens":0,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0,"total_tokens":22725},"total_token_usage":{"input_tokens":242725,"cached_input_tokens":170000,"cache_write_input_tokens":0,"output_tokens":50000,"reasoning_output_tokens":25000,"total_tokens":292725}}}}"#,
+    ].joined(separator: "\n") + "\n"
+    let handle = try FileHandle(forWritingTo: file)
+    try handle.seekToEnd()
+    try handle.write(contentsOf: Data(rows.utf8))
+    try handle.close()
+    let report = collector.collect(codexHome: root.appendingPathComponent("codex"), now: formatter.date(from: "2026-08-26T05:03:00Z")!)
+    try expectEqual(report.tokens, 292_725, "multiple normal deltas and a scalar-only last usage should be confirmed exactly once")
+    try expectEqual(report.recent30MinuteTokens, 292_725, "cached input is a subset of input and must not be added again")
+    try expectEqual(report.pendingTokens, 0, "valid component breakdowns should not be quarantined")
+}
+
+func testTodayLiveCollectorMigratesV2WithoutResetAndClearsPendingNextDay() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("v2-token-migration-\(UUID().uuidString)")
+    let stateURL = root.appendingPathComponent("state/today-live.json")
+    try FileManager.default.createDirectory(at: stateURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let legacy = #"{"initialized":true,"day":"2026-08-26","tokens":55000000,"utcDay":"2026-08-26","utcTokens":55000000,"utcBaselineComplete":true,"updatedAt":"2026-08-26T06:00:00.000Z","fileOffsets":{},"sessionCumulativeTokens":{},"eventValidationVersion":2}"#
+    try legacy.write(to: stateURL, atomically: true, encoding: .utf8)
+    let formatter = ISO8601DateFormatter()
+    let collector = TodayCodexUsageCollector(stateURL: stateURL)
+    let migrated = collector.collect(codexHome: root.appendingPathComponent("codex"), now: formatter.date(from: "2026-08-26T06:01:00Z")!)
+    try expectEqual(migrated.tokens, 55_000_000, "v2 migration must preserve the manually repaired confirmed counter")
+    try expectEqual(migrated.counterVersion, 2, "same-day v2 state must not gain authority to overwrite a manual v3 repair")
+    try expectEqual(migrated.validationVersion, 4, "same-day v2 state must advertise the new anomaly isolation capability separately")
+    try expectEqual(migrated.pendingTokens, 0, "migration starts a fresh pending ledger without rescanning history")
+    try expect((try String(contentsOf: stateURL, encoding: .utf8)).contains(#""eventValidationVersion":4"#), "v4 migration should be durable")
+
+    let sessions = root.appendingPathComponent("codex/sessions")
+    try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+    let file = sessions.appendingPathComponent("rollout-2026-08-26T14-02-00-99999999-9999-9999-9999-999999999999.jsonl")
+    let rows = [
+        #"{"type":"event_msg","timestamp":"2026-08-26T06:02:30.000Z","payload":{"type":"token_count","info":{"model_context_window":258400,"last_token_usage":{"total_tokens":18000000},"total_token_usage":{"total_tokens":18000000}}}}"#,
+        #"{"type":"event_msg","timestamp":"2026-08-26T06:03:00.000Z","payload":{"type":"token_count","info":{"model_context_window":10000000,"last_token_usage":{"total_tokens":5000000},"total_token_usage":{"total_tokens":23000000}}}}"#,
+    ].joined(separator: "\n") + "\n"
+    try rows.write(to: file, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.modificationDate: formatter.date(from: "2026-08-26T06:03:30Z")!], ofItemAtPath: file.path)
+    let guarded = collector.collect(codexHome: root.appendingPathComponent("codex"), now: formatter.date(from: "2026-08-26T06:04:00Z")!)
+    try expectEqual(guarded.counterVersion, 2, "validated tails must not upgrade a legacy same-day counter's replacement authority")
+    try expectEqual(guarded.validationVersion, 4, "validated tails must keep advertising v4 isolation")
+    try expectEqual(guarded.tokens, 60_000_000, "valid work after migration should continue from the preserved counter")
+    try expectEqual(guarded.pendingTokens, 18_000_000, "same-day migrated state should quarantine an inherited anomaly")
+    try expectEqual(guarded.recent30MinuteTokens, 5_000_000, "same-day migrated state should report only confirmed recent usage")
+
+    let nextDay = collector.collect(codexHome: root.appendingPathComponent("codex"), now: formatter.date(from: "2026-08-27T06:01:00Z")!)
+    try expectEqual(nextDay.tokens, 0, "confirmed local usage resets on the next calendar day")
+    try expectEqual(nextDay.counterVersion, 4, "a fresh day may begin the validated v4 protocol")
+    try expectEqual(nextDay.validationVersion, 4, "a fresh day retains the v4 isolation capability")
+    try expectEqual(nextDay.pendingTokens, 0, "pending usage resets on the next calendar day")
+    try expectEqual(nextDay.anomalyCount, 0, "anomaly count resets on the next calendar day")
+}
+
+func testTodayLiveCollectorBaselinesCopiedHistoryInNewFork() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("copied-fork-tail-\(UUID().uuidString)")
+    let sessions = root.appendingPathComponent("codex/sessions")
+    let stateURL = root.appendingPathComponent("state/today-live.json")
+    try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let formatter = ISO8601DateFormatter()
+    let baseline = formatter.date(from: "2026-08-26T06:00:00Z")!
+    let collector = TodayCodexUsageCollector(stateURL: stateURL)
+    _ = collector.collect(codexHome: root.appendingPathComponent("codex"), now: baseline)
+
+    // Filename creation time is 14:10 domestic time / 06:10Z. The first two
+    // structurally valid rows are copied history; only the post-fork row is new.
+    let file = sessions.appendingPathComponent("rollout-2026-08-26T14-10-00-88888888-8888-8888-8888-888888888888.jsonl")
+    let rows = [
+        #"{"type":"event_msg","timestamp":"2026-08-26T05:00:00.000Z","payload":{"type":"token_count","info":{"model_context_window":300000,"last_token_usage":{"total_tokens":100000},"total_token_usage":{"total_tokens":100000}}}}"#,
+        #"{"type":"event_msg","timestamp":"2026-08-26T05:01:00.000Z","payload":{"type":"token_count","info":{"model_context_window":300000,"last_token_usage":{"total_tokens":100000},"total_token_usage":{"total_tokens":200000}}}}"#,
+        #"{"type":"event_msg","timestamp":"2026-08-26T06:11:00.000Z","payload":{"type":"token_count","info":{"model_context_window":300000,"last_token_usage":{"total_tokens":100000},"total_token_usage":{"total_tokens":300000}}}}"#,
+    ].joined(separator: "\n") + "\n"
+    try rows.write(to: file, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.modificationDate: formatter.date(from: "2026-08-26T06:11:30Z")!], ofItemAtPath: file.path)
+
+    let report = collector.collect(codexHome: root.appendingPathComponent("codex"), now: formatter.date(from: "2026-08-26T06:12:00Z")!)
+    try expectEqual(report.tokens, 100_000, "a new fork should baseline copied history and count only its new turn")
+    try expectEqual(report.pendingTokens, 0, "valid copied history should be baselined rather than mislabeled anomalous")
+    try expectEqual(report.recent30MinuteTokens, 100_000, "only post-fork work belongs in the recent window")
+}
+
+func testTodayLiveCollectorFutureTimestampDoesNotPoisonEarlierValidWork() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("future-token-tail-\(UUID().uuidString)")
+    let sessions = root.appendingPathComponent("codex/sessions")
+    let stateURL = root.appendingPathComponent("state/today-live.json")
+    try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let file = sessions.appendingPathComponent("rollout-2026-08-26T07-00-00-77777777-7777-7777-7777-777777777777.jsonl")
+    try "{\"type\":\"session_meta\",\"payload\":{}}\n".write(to: file, atomically: true, encoding: .utf8)
+    let formatter = ISO8601DateFormatter()
+    let baseline = formatter.date(from: "2026-08-26T07:00:00Z")!
+    let collector = TodayCodexUsageCollector(stateURL: stateURL)
+    _ = collector.collect(codexHome: root.appendingPathComponent("codex"), now: baseline)
+    let rows = [
+        #"{"type":"event_msg","timestamp":"2026-08-26T08:00:00.000Z","payload":{"type":"token_count","info":{"model_context_window":10000000,"last_token_usage":{"total_tokens":5000000},"total_token_usage":{"total_tokens":5000000}}}}"#,
+        #"{"type":"event_msg","timestamp":"2026-08-26T07:01:00.000Z","payload":{"type":"token_count","info":{"model_context_window":10000000,"last_token_usage":{"total_tokens":5000000},"total_token_usage":{"total_tokens":10000000}}}}"#,
+    ].joined(separator: "\n") + "\n"
+    let handle = try FileHandle(forWritingTo: file)
+    try handle.seekToEnd()
+    try handle.write(contentsOf: Data(rows.utf8))
+    try handle.close()
+    let report = collector.collect(codexHome: root.appendingPathComponent("codex"), now: formatter.date(from: "2026-08-26T07:02:00Z")!)
+    try expectEqual(report.tokens, 5_000_000, "an out-of-order valid timestamp should still be counted")
+    try expectEqual(report.pendingTokens, 5_000_000, "a far-future event should be quarantined")
+    try expectEqual(report.recent30MinuteTokens, 5_000_000, "a future anomaly must not poison the current confirmed window")
 }
 
 func testTodayLiveCollectorSplitsLocalAndUTCDayAtSettlementBoundary() throws {
@@ -2371,6 +2533,11 @@ let tests: [(String, () throws -> Void)] = [
     ("grind history reads event timestamps only", testGrindHistoryCollectorReadsOnlyEventTimestamps),
     ("today live collector tails appended usage only", testTodayLiveCollectorStartsAtEOFAndCountsOnlyAppendedUsage),
     ("today live collector rejects split inherited spikes", testTodayLiveCollectorRejectsSplitInheritedSpikeInNewShortSession),
+    ("today live collector quarantines known tails", testTodayLiveCollectorQuarantinesKnownTailAndKeepsLaterWorkMoving),
+    ("today live collector validates normal breakdowns", testTodayLiveCollectorKeepsNormalDeltasAndDoesNotDoubleCountCachedInput),
+    ("today live collector safely migrates v2", testTodayLiveCollectorMigratesV2WithoutResetAndClearsPendingNextDay),
+    ("today live collector isolates future timestamps", testTodayLiveCollectorFutureTimestampDoesNotPoisonEarlierValidWork),
+    ("today live collector baselines copied fork history", testTodayLiveCollectorBaselinesCopiedHistoryInNewFork),
     ("today live collector splits local and UTC days", testTodayLiveCollectorSplitsLocalAndUTCDayAtSettlementBoundary),
     ("today live collector protects legacy UTC baseline", testTodayLiveCollectorDoesNotTrustLegacyMidDayStateAsUTCBaseline),
     ("grind history collector safely backfills thirty days", testGrindHistoryIncrementalCollectorBackfillsThirtyDaysOnce),
