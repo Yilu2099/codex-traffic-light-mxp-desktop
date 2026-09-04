@@ -5,7 +5,7 @@ APP_ROOT="$HOME/.wanhe-codex-token/app"
 CURRENT_RELEASE="$APP_ROOT/current"
 BRIDGE_REQUEST="$APP_ROOT/launch-agent-bridge.request"
 BRIDGE_LOCK="$APP_ROOT/launch-agent-bridge.lock"
-LEGACY_BRIDGE_VERSION="1.2.94"
+LEGACY_BRIDGE_VERSION="1.2.95"
 LEGACY_BRIDGE_HELPER="$APP_ROOT/releases/$LEGACY_BRIDGE_VERSION/wanhe-status-updater"
 
 bridge_target_is_safe() {
@@ -32,9 +32,9 @@ prepare_legacy_bridge_request() {
     fi
   fi
 
-  # 1.2.84/85 cannot write a handoff request. Invoke the helper from the
-  # verified target release itself. If the release has not appeared yet, the
-  # monitor loop retries without creating a false terminal marker.
+  # Prepare from the verified target helper before the predecessor can change
+  # current or re-register either LaunchAgent. If the release has not appeared
+  # yet, the monitor loop retries without creating a false terminal marker.
   if [[ ! -f "$BRIDGE_REQUEST"
      && ! -f "$APP_ROOT/launch-agent-bridge-$LEGACY_BRIDGE_VERSION.done"
      && ! -f "$APP_ROOT/launch-agent-bridge-$LEGACY_BRIDGE_VERSION.failed"
@@ -45,10 +45,10 @@ prepare_legacy_bridge_request() {
   fi
 }
 
-prepare_legacy_bridge_request
-
 run_launch_agent_bridge() (
-  [[ -f "$BRIDGE_REQUEST" ]] || return 0
+  # Serialize preparation and consumption across duplicate/restarted monitor
+  # processes. The predecessor may write the same authoritative request, but
+  # no second target helper can start a competing launchctl transaction.
   if ! /bin/mkdir "$BRIDGE_LOCK" 2>/dev/null; then
     local lock_pid="$(/bin/cat "$BRIDGE_LOCK/pid" 2>/dev/null || true)"
     if [[ "$lock_pid" == <-> ]] && /bin/kill -0 "$lock_pid" 2>/dev/null; then
@@ -64,6 +64,9 @@ run_launch_agent_bridge() (
     /bin/rmdir "$BRIDGE_LOCK" 2>/dev/null || true
   }
   trap bridge_unlock EXIT INT TERM
+
+  prepare_legacy_bridge_request
+  [[ -f "$BRIDGE_REQUEST" ]] || return 0
 
   local target_version=""
   local previous_target=""
@@ -110,7 +113,6 @@ last_presence_event_ts=0
 last_task_event_ts=0
 
 while true; do
-  prepare_legacy_bridge_request
   run_launch_agent_bridge
   now="$(date +%s)"
   if [[ -r "$LOG_DB" && -r "$STATE_DB" && -x "$STATE_CMD" ]]; then

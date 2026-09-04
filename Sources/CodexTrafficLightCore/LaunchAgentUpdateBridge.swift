@@ -150,8 +150,6 @@ public enum LegacyIdleUpdaterServiceRemoval {
 }
 
 public enum LegacyLaunchAgentBridgeRequest {
-    private static let firstSelfBridgingUpdaterVersion = "1.2.91"
-
     /// Creates the metadata-only handoff consumed by the monitor. Before the
     /// symlink swap the actual current target is authoritative. After the swap,
     /// use the executable vnode of the still-running predecessor updater. Disk
@@ -190,10 +188,6 @@ public enum LegacyLaunchAgentBridgeRequest {
                   releaseIsValid(currentRelease, version: currentVersion, appRoot: appRoot) else {
                 throw LaunchAgentUpdateBridgeError.unsafePreviousTarget
             }
-            // 1.2.91+ writes its own authoritative request after activating
-            // main. Starting the legacy bridge too would race two simultaneous
-            // bootout/bootstrap sequences against the same main job.
-            guard versionIsLess(currentVersion, firstSelfBridgingUpdaterVersion) else { return nil }
             previousTarget = currentTarget
         } else {
             let executable: URL?
@@ -216,7 +210,6 @@ public enum LegacyLaunchAgentBridgeRequest {
                   releaseIsValid(predecessorRelease, version: predecessorVersion, appRoot: appRoot) else {
                 throw LaunchAgentUpdateBridgeError.unsafePreviousTarget
             }
-            guard versionIsLess(predecessorVersion, firstSelfBridgingUpdaterVersion) else { return nil }
             previousTarget = "releases/\(predecessorVersion)"
         }
 
@@ -411,7 +404,11 @@ public enum LaunchAgentUpdateBridge {
         guard targetVersion == ClientVersion.current else {
             throw LaunchAgentUpdateBridgeError.targetVersionNotAllowed
         }
-        guard isSafeReleaseTarget(previousTarget), previousTarget != "releases/\(targetVersion)" else {
+        let previousVersion = rollbackVersion(previousTarget)
+        guard isSafeReleaseTarget(previousTarget),
+              stableVersionComponents(previousVersion) != nil,
+              stableVersionComponents(targetVersion) != nil,
+              versionIsLess(previousVersion, targetVersion) else {
             throw LaunchAgentUpdateBridgeError.unsafePreviousTarget
         }
 
@@ -419,11 +416,9 @@ public enum LaunchAgentUpdateBridge {
         let appRoot = home.appendingPathComponent(".wanhe-codex-token/app", isDirectory: true)
         let current = appRoot.appendingPathComponent("current")
         let expectedTarget = "releases/\(targetVersion)"
-        let previousVersion = rollbackVersion(previousTarget)
-        let legacyUpdaterTakeoverRequired = ClientVersion.compare(previousVersion, "1.2.91") == .orderedAscending
         let initialCurrentTarget = try? fileManager.destinationOfSymbolicLink(atPath: current.path)
         guard initialCurrentTarget == expectedTarget
-                || (allowActivationFromPrevious && legacyUpdaterTakeoverRequired && initialCurrentTarget == previousTarget) else {
+                || (allowActivationFromPrevious && initialCurrentTarget == previousTarget) else {
             throw LaunchAgentUpdateBridgeError.currentTargetMismatch
         }
         let targetRelease = appRoot.appendingPathComponent(expectedTarget, isDirectory: true)
@@ -457,29 +452,29 @@ public enum LaunchAgentUpdateBridge {
                 timeout: min(5, remaining)
             )
         }
-        var legacyUpdaterWasTakenOver = false
+        var predecessorUpdaterWasTakenOver = false
         do {
             try ensureBefore(activationDeadline)
-            if legacyUpdaterTakeoverRequired {
-                if let takeOverLegacyUpdater {
-                    try takeOverLegacyUpdater(previousTarget)
-                } else {
-                    try defaultTakeOverLegacyUpdater(
-                        previousTarget: previousTarget,
-                        home: home,
-                        userID: userID,
-                        runLaunchctl: runner
-                    )
-                }
-                legacyUpdaterWasTakenOver = true
+            // Every predecessor updater, including 1.2.91+, must be retired
+            // before this transaction changes `current` or either LaunchAgent.
+            // Otherwise its own post-download bootstrap can race this helper
+            // and produce launchd EIO/constraint failures.
+            if let takeOverLegacyUpdater {
+                try takeOverLegacyUpdater(previousTarget)
+            } else {
+                try defaultTakeOverLegacyUpdater(
+                    previousTarget: previousTarget,
+                    home: home,
+                    userID: userID,
+                    runLaunchctl: runner
+                )
             }
-            if legacyUpdaterWasTakenOver {
-                let targetAfterTakeover = try? fileManager.destinationOfSymbolicLink(atPath: current.path)
-                if targetAfterTakeover == previousTarget {
-                    try swapCurrentLink(current: current, target: expectedTarget)
-                } else if targetAfterTakeover != expectedTarget {
-                    throw LaunchAgentUpdateBridgeError.currentTargetMismatch
-                }
+            predecessorUpdaterWasTakenOver = true
+            let targetAfterTakeover = try? fileManager.destinationOfSymbolicLink(atPath: current.path)
+            if targetAfterTakeover == previousTarget {
+                try swapCurrentLink(current: current, target: expectedTarget)
+            } else if targetAfterTakeover != expectedTarget {
+                throw LaunchAgentUpdateBridgeError.currentTargetMismatch
             }
             try assertCurrentTarget(current, expectedTarget: expectedTarget, targetVersion: targetVersion)
             try MainAppLaunchAgentInstaller.install(
@@ -561,8 +556,8 @@ public enum LaunchAgentUpdateBridge {
             UpdateLedger(
                 url: home.appendingPathComponent(".wanhe-codex-token/update-attempts.json")
             ).recordFailure(version: targetVersion)
-            if let bridgeError = error as? LaunchAgentUpdateBridgeError,
-               takeoverFailureRequiresFormalRepair(bridgeError) {
+            if !predecessorUpdaterWasTakenOver
+                || (error as? LaunchAgentUpdateBridgeError).map({ takeoverFailureRequiresFormalRepair($0) }) == true {
                 // A surviving child may still carry the predecessor's queued
                 // kickstart. Never change current or either launch agent until
                 // a formal repair can prove that process group is gone.
@@ -570,15 +565,6 @@ public enum LaunchAgentUpdateBridge {
             }
             do {
                 try ensureBefore(overallDeadline)
-                if legacyUpdaterTakeoverRequired && !legacyUpdaterWasTakenOver {
-                    // A failed identity takeover must not race the predecessor's
-                    // own kickstart/rollback while this transaction restores it.
-                    try ExistingLaunchAgentRegistration.forceBootout(
-                        label: UpdaterLaunchAgentInstaller.label,
-                        userID: userID,
-                        runLaunchctl: runner
-                    )
-                }
                 let rollbackRelease = appRoot.appendingPathComponent(previousTarget, isDirectory: true)
                 let rollbackVersion = Self.rollbackVersion(previousTarget)
                 let rollbackPackagedVersion = (try? String(
@@ -622,6 +608,23 @@ public enum LaunchAgentUpdateBridge {
         let version = String(value.dropFirst("releases/".count))
         guard !version.isEmpty, !version.contains("/"), !version.contains("..") else { return false }
         return version.allSatisfy { $0.isNumber || $0 == "." || $0 == "-" || $0.isLetter }
+    }
+
+    private static func stableVersionComponents(_ version: String) -> [Int]? {
+        let parts = version.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 3,
+              parts.allSatisfy({ !$0.isEmpty && $0.allSatisfy(\.isNumber) }) else { return nil }
+        var components: [Int] = []
+        for part in parts {
+            guard let value = Int(part), (0...999_999).contains(value) else { return nil }
+            components.append(value)
+        }
+        return components
+    }
+
+    private static func versionIsLess(_ lhs: String, _ rhs: String) -> Bool {
+        guard let left = stableVersionComponents(lhs), let right = stableVersionComponents(rhs) else { return false }
+        return left.lexicographicallyPrecedes(right)
     }
 
     private static func assertCurrentTarget(_ current: URL, expectedTarget: String, targetVersion: String) throws {
