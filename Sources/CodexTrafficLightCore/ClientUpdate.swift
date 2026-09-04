@@ -2,7 +2,7 @@ import CryptoKit
 import Foundation
 
 public enum ClientVersion {
-    public static let current = "1.2.92"
+    public static let current = "1.2.93"
     public static let signingPublicKeyBase64 = "kx2EJhi8RR4A+CTuoSs4Fx5f59+oicxN5z9wMPra3nc="
 
     public static func compare(_ left: String, _ right: String) -> ComparisonResult {
@@ -230,7 +230,12 @@ public enum ClientReleaseRetention {
             .filter { ClientVersion.compare($0, currentVersion) == .orderedAscending }
             .sorted { ClientVersion.compare($0, $1) == .orderedDescending }
             .first
-        let keep = Set([currentVersion, previousVersion ?? automaticPrevious, currentTargetVersion].compactMap { $0 })
+        let bridgePrevious = activeBridgePreviousVersion(
+            appRoot: appRoot,
+            currentVersion: currentVersion,
+            fileManager: fileManager
+        )
+        let keep = Set([currentVersion, previousVersion, bridgePrevious, automaticPrevious, currentTargetVersion].compactMap { $0 })
         let currentReleaseIsValid = currentTargetVersion == currentVersion
             && fileManager.fileExists(atPath: releases.appendingPathComponent(currentVersion).path)
         let hasRollbackRelease = keep.contains { version in
@@ -283,6 +288,55 @@ public enum ClientReleaseRetention {
     private static func isVersionDirectory(_ name: String) -> Bool {
         let parts = name.split(separator: ".", omittingEmptySubsequences: false)
         return parts.count >= 3 && parts.allSatisfy { Int($0) != nil }
+    }
+
+    private static func activeBridgePreviousVersion(
+        appRoot: URL,
+        currentVersion: String,
+        fileManager: FileManager
+    ) -> String? {
+        let request = appRoot.appendingPathComponent("launch-agent-bridge.request")
+        guard let attributes = try? fileManager.attributesOfItem(atPath: request.path),
+              let size = attributes[.size] as? NSNumber,
+              size.intValue > 0, size.intValue <= 256,
+              let text = try? String(contentsOf: request, encoding: .utf8) else { return nil }
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        guard lines.count >= 2,
+              lines[0] == currentVersion,
+              lines[1].hasPrefix("releases/") else { return nil }
+        let version = String(lines[1].dropFirst("releases/".count))
+        let components = version.split(separator: ".", omittingEmptySubsequences: false)
+        guard components.count == 3,
+              components.allSatisfy({ part in
+                  !part.isEmpty && part.allSatisfy(\.isNumber)
+                      && Int(part).map { (0...999_999).contains($0) } == true
+              }),
+              !version.contains("/"),
+              ClientVersion.compare(version, currentVersion) == .orderedAscending,
+              bridgeReleaseIsValid(
+                  appRoot.appendingPathComponent("releases/\(version)", isDirectory: true),
+                  version: version,
+                  fileManager: fileManager
+              )
+        else { return nil }
+        return version
+    }
+
+    private static func bridgeReleaseIsValid(
+        _ release: URL,
+        version: String,
+        fileManager: FileManager
+    ) -> Bool {
+        guard let values = try? release.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey]),
+              values.isDirectory == true,
+              values.isSymbolicLink != true else { return false }
+        let packagedVersion = (try? String(
+            contentsOf: release.appendingPathComponent("VERSION"),
+            encoding: .utf8
+        ))?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return packagedVersion == version
+            && fileManager.fileExists(atPath: release.appendingPathComponent("CodexTrafficLightApp").path)
+            && fileManager.fileExists(atPath: release.appendingPathComponent("wanhe-status-updater").path)
     }
 
     private static func isOlderThanOneDay(_ url: URL, fileManager: FileManager) -> Bool {

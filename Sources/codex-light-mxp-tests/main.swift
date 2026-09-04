@@ -2140,6 +2140,37 @@ func testClientReleaseRetentionPreservesOnlyRecoveryCopy() throws {
     try expect(FileManager.default.fileExists(atPath: root.appendingPathComponent("pre-auto-update-backup-first-install").path), "the only legacy install backup must remain")
 }
 
+func testClientReleaseRetentionPinsActiveBridgeRollback() throws {
+    let tokenRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent("codex-release-bridge-retention-\(UUID().uuidString)", isDirectory: true)
+    let root = tokenRoot.appendingPathComponent("app", isDirectory: true)
+    let releases = root.appendingPathComponent("releases", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: tokenRoot) }
+    for version in ["1.2.84", "1.2.91", "1.2.93"] {
+        let release = releases.appendingPathComponent(version)
+        try FileManager.default.createDirectory(at: release, withIntermediateDirectories: true)
+        try version.write(to: release.appendingPathComponent("VERSION"), atomically: true, encoding: .utf8)
+        try "main".write(to: release.appendingPathComponent("CodexTrafficLightApp"), atomically: true, encoding: .utf8)
+        try "updater".write(to: release.appendingPathComponent("wanhe-status-updater"), atomically: true, encoding: .utf8)
+    }
+    try FileManager.default.createSymbolicLink(
+        atPath: root.appendingPathComponent("current").path,
+        withDestinationPath: "releases/1.2.93"
+    )
+    try "1.2.93\nreleases/1.2.84\n".write(
+        to: root.appendingPathComponent("launch-agent-bridge.request"),
+        atomically: true,
+        encoding: .utf8
+    )
+
+    _ = ClientReleaseRetention.prune(appRoot: root, currentVersion: "1.2.93")
+    try expect(FileManager.default.fileExists(atPath: releases.appendingPathComponent("1.2.84").path), "active bridge request must pin its real 1.2.84 rollback release")
+
+    try FileManager.default.removeItem(at: root.appendingPathComponent("launch-agent-bridge.request"))
+    _ = ClientReleaseRetention.prune(appRoot: root, currentVersion: "1.2.93")
+    try expect(!FileManager.default.fileExists(atPath: releases.appendingPathComponent("1.2.84").path), "old rollback may be pruned only after the bridge request is gone")
+}
+
 func testBoundedLogRotatesBeforeExceedingLimit() throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent("bounded-log-\(UUID().uuidString)")
     let log = root.appendingPathComponent("test.log")
@@ -2474,8 +2505,7 @@ func testMainAppLaunchAgentForceRebootstrapsUnchangedSignedTarget() throws {
         ["print", service],
         ["bootout", service],
         ["bootstrap", "gui/501", home.appendingPathComponent("Library/LaunchAgents/com.codex.traffic-light-mxp.plist").path],
-        ["kickstart", "-k", service],
-    ], "forced activation must bootout, bootstrap and kickstart even when bootout reports an absent job")
+    ], "forced activation must bootout and bootstrap even when bootout reports an absent job")
     let rendered = try String(
         contentsOf: home.appendingPathComponent("Library/LaunchAgents/com.codex.traffic-light-mxp.plist"),
         encoding: .utf8
@@ -2491,7 +2521,7 @@ func testMainAppLaunchAgentForceRebootstrapsUnchangedSignedTarget() throws {
         runLaunchctl: runner
     )
     try expect(repeated, "an unchanged plist still needs a rebootstrap after a cdhash change")
-    try expectEqual(commands.map(\.first), ["print", "bootout", "bootstrap", "kickstart"], "repeated signed activation must not collapse to kickstart only")
+    try expectEqual(commands.map(\.first), ["print", "bootout", "bootstrap"], "repeated signed activation must refresh registration without killing the RunAtLoad process")
 }
 
 func testMainAppLaunchAgentRepairsMissingJobAndSurfacesBootstrapFailure() throws {
@@ -2517,7 +2547,7 @@ func testMainAppLaunchAgentRepairsMissingJobAndSurfacesBootstrapFailure() throws
         }
     )
     try expect(repaired, "a missing registered job should be restored")
-    try expectEqual(commands.map(\.first), ["print", "bootout", "bootstrap", "kickstart"], "missing-job repair must complete a full registration")
+    try expectEqual(commands.map(\.first), ["print", "bootout", "bootstrap"], "missing-job repair must complete a full registration")
 
     do {
         _ = try MainAppLaunchAgentInstaller.install(
@@ -2564,14 +2594,16 @@ func testLaunchAgentBridgeWaitsForOldUpdaterAndRefreshesBothJobs() throws {
     let home = root.appendingPathComponent("home")
     let appRoot = home.appendingPathComponent(".wanhe-codex-token/app")
     let previous = appRoot.appendingPathComponent("releases/1.2.90")
-    let target = appRoot.appendingPathComponent("releases/1.2.92")
+    let target = appRoot.appendingPathComponent("releases/1.2.93")
     let launchAgents = home.appendingPathComponent("Library/LaunchAgents")
     try FileManager.default.createDirectory(at: previous, withIntermediateDirectories: true)
     try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
     try FileManager.default.createDirectory(at: launchAgents, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: root) }
-    try FileManager.default.createSymbolicLink(atPath: appRoot.appendingPathComponent("current").path, withDestinationPath: "releases/1.2.92")
-    try "1.2.92\n".write(to: target.appendingPathComponent("VERSION"), atomically: true, encoding: .utf8)
+    try FileManager.default.createSymbolicLink(atPath: appRoot.appendingPathComponent("current").path, withDestinationPath: "releases/1.2.93")
+    try "1.2.93\n".write(to: target.appendingPathComponent("VERSION"), atomically: true, encoding: .utf8)
+    try "1.2.90\n".write(to: previous.appendingPathComponent("VERSION"), atomically: true, encoding: .utf8)
+    try "old main".write(to: previous.appendingPathComponent("CodexTrafficLightApp"), atomically: true, encoding: .utf8)
     try "__APP_PATH__\n__HOME__\n".write(to: target.appendingPathComponent("com.codex.traffic-light-mxp.plist.template"), atomically: true, encoding: .utf8)
     try "__UPDATER_PATH__\n__HOME__\n".write(to: target.appendingPathComponent("com.codex.traffic-light-mxp-updater.plist.template"), atomically: true, encoding: .utf8)
     try "old main".write(to: launchAgents.appendingPathComponent("com.codex.traffic-light-mxp.plist"), atomically: true, encoding: .utf8)
@@ -2580,8 +2612,9 @@ func testLaunchAgentBridgeWaitsForOldUpdaterAndRefreshesBothJobs() throws {
     var commands: [[String]] = []
     var updaterPolls = 0
     var pauses = 0
+    var takeoverTargets: [String] = []
     let result = try LaunchAgentUpdateBridge.run(
-        targetVersion: "1.2.92",
+        targetVersion: "1.2.93",
         previousTarget: "releases/1.2.90",
         home: home,
         userID: 503,
@@ -2594,21 +2627,26 @@ func testLaunchAgentBridgeWaitsForOldUpdaterAndRefreshesBothJobs() throws {
             }
             if arguments == ["print", "gui/503/com.codex.traffic-light-mxp-updater"] {
                 updaterPolls += 1
-                return MainAppLaunchctlResult(status: 0, output: updaterPolls <= 2 ? "state = running" : "state = exited")
+                return MainAppLaunchctlResult(status: 0, output: updaterPolls <= 2 ? "state = running" : "state = exited\nlast exit code = 0")
             }
             return MainAppLaunchctlResult(status: 0)
+        },
+        takeOverLegacyUpdater: { previousTarget in
+            try expect(commands.isEmpty, "legacy updater takeover must finish before launchd registration changes")
+            takeoverTargets.append(previousTarget)
         }
     )
     try expectEqual(result, .completed, "bridge should complete after the old updater exits")
     try expectEqual(pauses, 2, "bridge must wait instead of booting out a running predecessor updater")
+    try expectEqual(takeoverTargets, ["releases/1.2.90"], "legacy bridge must take ownership from the exact predecessor")
     let mainBootout = commands.firstIndex(of: ["bootout", "gui/503/com.codex.traffic-light-mxp"])
     let updaterBootout = commands.firstIndex(of: ["bootout", "gui/503/com.codex.traffic-light-mxp-updater"])
     try expect(mainBootout != nil && updaterBootout != nil && mainBootout! < updaterBootout!, "main must be repaired before the updater registration")
-    try expect(FileManager.default.fileExists(atPath: appRoot.appendingPathComponent("launch-agent-bridge-1.2.92.done").path), "successful bridge should persist an idempotency marker")
+    try expect(FileManager.default.fileExists(atPath: appRoot.appendingPathComponent("launch-agent-bridge-1.2.93.done").path), "successful bridge should persist an idempotency marker")
 
     commands.removeAll()
     let repeated = try LaunchAgentUpdateBridge.run(
-        targetVersion: "1.2.92",
+        targetVersion: "1.2.93",
         previousTarget: "releases/1.2.90",
         home: home,
         userID: 503,
@@ -2623,15 +2661,18 @@ func testLaunchAgentBridgeRollsBackAndRejectsLateUnsafeCapture() throws {
     let home = root.appendingPathComponent("home")
     let appRoot = home.appendingPathComponent(".wanhe-codex-token/app")
     let previous = appRoot.appendingPathComponent("releases/1.2.90")
-    let target = appRoot.appendingPathComponent("releases/1.2.92")
+    let target = appRoot.appendingPathComponent("releases/1.2.93")
     let launchAgents = home.appendingPathComponent("Library/LaunchAgents")
     try FileManager.default.createDirectory(at: previous, withIntermediateDirectories: true)
     try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
     try FileManager.default.createDirectory(at: launchAgents, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: root) }
     let current = appRoot.appendingPathComponent("current")
-    try FileManager.default.createSymbolicLink(atPath: current.path, withDestinationPath: "releases/1.2.92")
-    try "1.2.92".write(to: target.appendingPathComponent("VERSION"), atomically: true, encoding: .utf8)
+    try FileManager.default.createSymbolicLink(atPath: current.path, withDestinationPath: "releases/1.2.93")
+    try "1.2.93".write(to: target.appendingPathComponent("VERSION"), atomically: true, encoding: .utf8)
+    try "1.2.90".write(to: previous.appendingPathComponent("VERSION"), atomically: true, encoding: .utf8)
+    try "old main".write(to: previous.appendingPathComponent("CodexTrafficLightApp"), atomically: true, encoding: .utf8)
+    try "old updater".write(to: previous.appendingPathComponent("wanhe-status-updater"), atomically: true, encoding: .utf8)
     try "__APP_PATH__".write(to: target.appendingPathComponent("com.codex.traffic-light-mxp.plist.template"), atomically: true, encoding: .utf8)
     try "__UPDATER_PATH__".write(to: target.appendingPathComponent("com.codex.traffic-light-mxp-updater.plist.template"), atomically: true, encoding: .utf8)
     try "stable main".write(to: launchAgents.appendingPathComponent("com.codex.traffic-light-mxp.plist"), atomically: true, encoding: .utf8)
@@ -2639,7 +2680,7 @@ func testLaunchAgentBridgeRollsBackAndRejectsLateUnsafeCapture() throws {
     var mainBootstrapCount = 0
     do {
         _ = try LaunchAgentUpdateBridge.run(
-            targetVersion: "1.2.92",
+            targetVersion: "1.2.93",
             previousTarget: "releases/1.2.90",
             home: home,
             userID: 504,
@@ -2649,7 +2690,8 @@ func testLaunchAgentBridgeRollsBackAndRejectsLateUnsafeCapture() throws {
                     if mainBootstrapCount == 1 { return MainAppLaunchctlResult(status: 5, output: "simulated rejection") }
                 }
                 return MainAppLaunchctlResult(status: 0)
-            }
+            },
+            takeOverLegacyUpdater: { _ in }
         )
         throw TestFailure(description: "failed new registration should not be reported as successful")
     } catch let error as LaunchAgentUpdateBridgeError {
@@ -2657,14 +2699,16 @@ func testLaunchAgentBridgeRollsBackAndRejectsLateUnsafeCapture() throws {
     }
     try expectEqual(try FileManager.default.destinationOfSymbolicLink(atPath: current.path), "releases/1.2.90", "bridge failure must atomically restore the previous release")
     try expectEqual(mainBootstrapCount, 2, "rollback must bootstrap the old main registration after the new one fails")
+    let failedAttempt = UpdateLedger(url: home.appendingPathComponent(".wanhe-codex-token/update-attempts.json")).load()
+    try expectEqual(failedAttempt?.version, "1.2.93", "bridge must persist target backoff before the rollback updater starts")
 
     try FileManager.default.removeItem(at: current)
-    try FileManager.default.createSymbolicLink(atPath: current.path, withDestinationPath: "releases/1.2.92")
+    try FileManager.default.createSymbolicLink(atPath: current.path, withDestinationPath: "releases/1.2.93")
     var updaterBootstrapCount = 0
     var rollbackMainBootstraps = 0
     do {
         _ = try LaunchAgentUpdateBridge.run(
-            targetVersion: "1.2.92",
+            targetVersion: "1.2.93",
             previousTarget: "releases/1.2.90",
             home: home,
             userID: 504,
@@ -2684,7 +2728,8 @@ func testLaunchAgentBridgeRollsBackAndRejectsLateUnsafeCapture() throws {
                     rollbackMainBootstraps += 1
                 }
                 return MainAppLaunchctlResult(status: 0)
-            }
+            },
+            takeOverLegacyUpdater: { _ in }
         )
         throw TestFailure(description: "updater bootstrap failure must roll the whole release back")
     } catch let error as LaunchAgentUpdateBridgeError {
@@ -2693,13 +2738,13 @@ func testLaunchAgentBridgeRollsBackAndRejectsLateUnsafeCapture() throws {
     try expectEqual(try FileManager.default.destinationOfSymbolicLink(atPath: current.path), "releases/1.2.90", "updater bootstrap failure must restore the old current target")
     try expectEqual(updaterBootstrapCount, 2, "rollback must rebootstrap the old updater after the new updater bootstrap fails")
     try expectEqual(rollbackMainBootstraps, 2, "main activation and rollback must each bootstrap once")
-    try expect(!FileManager.default.fileExists(atPath: appRoot.appendingPathComponent("launch-agent-bridge-1.2.92.done").path), "failed bridge must never write a completion marker")
+    try expect(!FileManager.default.fileExists(atPath: appRoot.appendingPathComponent("launch-agent-bridge-1.2.93.done").path), "failed bridge must never write a completion marker")
 
     var touchedLaunchd = false
     do {
         _ = try LaunchAgentUpdateBridge.run(
-            targetVersion: "1.2.92",
-            previousTarget: "releases/1.2.92",
+            targetVersion: "1.2.93",
+            previousTarget: "releases/1.2.93",
             home: home,
             userID: 504,
             runLaunchctl: { _ in touchedLaunchd = true; return MainAppLaunchctlResult(status: 0) }
@@ -2708,6 +2753,443 @@ func testLaunchAgentBridgeRollsBackAndRejectsLateUnsafeCapture() throws {
     } catch LaunchAgentUpdateBridgeError.unsafePreviousTarget {
         try expect(!touchedLaunchd, "unsafe late capture must not mutate launchd state")
     }
+}
+
+func testLaunchAgentBridgeRefusesMissingRollbackRelease() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("launch-agent-bridge-missing-rollback-\(UUID().uuidString)")
+    let home = root.appendingPathComponent("home")
+    let appRoot = home.appendingPathComponent(".wanhe-codex-token/app")
+    let previous = appRoot.appendingPathComponent("releases/1.2.84")
+    let target = appRoot.appendingPathComponent("releases/1.2.93")
+    let launchAgents = home.appendingPathComponent("Library/LaunchAgents")
+    try FileManager.default.createDirectory(at: previous, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: launchAgents, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let current = appRoot.appendingPathComponent("current")
+    try FileManager.default.createSymbolicLink(atPath: current.path, withDestinationPath: "releases/1.2.93")
+    try "1.2.93".write(to: target.appendingPathComponent("VERSION"), atomically: true, encoding: .utf8)
+    try "1.2.84".write(to: previous.appendingPathComponent("VERSION"), atomically: true, encoding: .utf8)
+    try "old main".write(to: previous.appendingPathComponent("CodexTrafficLightApp"), atomically: true, encoding: .utf8)
+    try "old updater".write(to: previous.appendingPathComponent("wanhe-status-updater"), atomically: true, encoding: .utf8)
+    try "__APP_PATH__".write(to: target.appendingPathComponent("com.codex.traffic-light-mxp.plist.template"), atomically: true, encoding: .utf8)
+    try "__UPDATER_PATH__".write(to: target.appendingPathComponent("com.codex.traffic-light-mxp-updater.plist.template"), atomically: true, encoding: .utf8)
+    try "stable main".write(to: launchAgents.appendingPathComponent("com.codex.traffic-light-mxp.plist"), atomically: true, encoding: .utf8)
+    try "stable updater".write(to: launchAgents.appendingPathComponent("com.codex.traffic-light-mxp-updater.plist"), atomically: true, encoding: .utf8)
+
+    var mainBootstrapCount = 0
+    do {
+        _ = try LaunchAgentUpdateBridge.run(
+            targetVersion: "1.2.93",
+            previousTarget: "releases/1.2.84",
+            home: home,
+            userID: 505,
+            runLaunchctl: { arguments in
+                if arguments.first == "bootstrap", arguments.last?.hasSuffix("com.codex.traffic-light-mxp.plist") == true {
+                    mainBootstrapCount += 1
+                    if mainBootstrapCount == 1 {
+                        // Model the real race where startup retention removed
+                        // the legacy updater's rollback release.
+                        try? FileManager.default.removeItem(at: previous)
+                        return MainAppLaunchctlResult(status: 5, output: "simulated target rejection")
+                    }
+                }
+                return MainAppLaunchctlResult(status: 0)
+            },
+            takeOverLegacyUpdater: { _ in }
+        )
+        throw TestFailure(description: "a vanished rollback release must not produce a dead current link")
+    } catch let error as LaunchAgentUpdateBridgeError {
+        try expect(error.description.contains("rollback failed"), "missing rollback release must be surfaced as a terminal rollback failure")
+    }
+    try expectEqual(try FileManager.default.destinationOfSymbolicLink(atPath: current.path), "releases/1.2.93", "bridge must leave current on the existing target instead of swapping to a missing release")
+    try expectEqual(mainBootstrapCount, 1, "bridge must revalidate rollback contents before any rollback launchd mutation")
+    try expect(!FileManager.default.fileExists(atPath: appRoot.appendingPathComponent("launch-agent-bridge-1.2.93.done").path), "failed rollback must never write a completion marker")
+}
+
+func testLaunchAgentBridgeDoesNotTakeOverSelfBridgingUpdater() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("launch-agent-bridge-self-bridging-\(UUID().uuidString)")
+    let home = root.appendingPathComponent("home")
+    let appRoot = home.appendingPathComponent(".wanhe-codex-token/app")
+    let previous = appRoot.appendingPathComponent("releases/1.2.91")
+    let target = appRoot.appendingPathComponent("releases/1.2.93")
+    let launchAgents = home.appendingPathComponent("Library/LaunchAgents")
+    try FileManager.default.createDirectory(at: previous, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: launchAgents, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try FileManager.default.createSymbolicLink(atPath: appRoot.appendingPathComponent("current").path, withDestinationPath: "releases/1.2.93")
+    try "1.2.93".write(to: target.appendingPathComponent("VERSION"), atomically: true, encoding: .utf8)
+    try "__APP_PATH__".write(to: target.appendingPathComponent("com.codex.traffic-light-mxp.plist.template"), atomically: true, encoding: .utf8)
+    try "__UPDATER_PATH__".write(to: target.appendingPathComponent("com.codex.traffic-light-mxp-updater.plist.template"), atomically: true, encoding: .utf8)
+    try "stable main".write(to: launchAgents.appendingPathComponent("com.codex.traffic-light-mxp.plist"), atomically: true, encoding: .utf8)
+    try "stable updater".write(to: launchAgents.appendingPathComponent("com.codex.traffic-light-mxp-updater.plist"), atomically: true, encoding: .utf8)
+
+    var takeoverCalled = false
+    var newUpdaterWasBootstrapped = false
+    var newUpdaterPolls = 0
+    let result = try LaunchAgentUpdateBridge.run(
+        targetVersion: "1.2.93",
+        previousTarget: "releases/1.2.91",
+        home: home,
+        userID: 506,
+        maximumUpdaterPolls: 0,
+        pause: {},
+        runLaunchctl: { arguments in
+            if arguments == ["print", "gui/506/com.codex.traffic-light-mxp"] {
+                return MainAppLaunchctlResult(status: 0, output: "state = running")
+            }
+            if arguments == ["print", "gui/506/com.codex.traffic-light-mxp-updater"] {
+                if !newUpdaterWasBootstrapped {
+                    return MainAppLaunchctlResult(status: 0, output: "state = exited\nlast exit code = 0")
+                }
+                newUpdaterPolls += 1
+                return MainAppLaunchctlResult(
+                    status: 0,
+                    output: newUpdaterPolls <= 20 ? "state = running" : "state = exited\nlast exit code = 0"
+                )
+            }
+            if arguments.first == "bootstrap", arguments.last?.hasSuffix("com.codex.traffic-light-mxp-updater.plist") == true {
+                newUpdaterWasBootstrapped = true
+            }
+            return MainAppLaunchctlResult(status: 0)
+        },
+        takeOverLegacyUpdater: { _ in takeoverCalled = true }
+    )
+    try expectEqual(result, .completed, "a self-bridging predecessor should complete through its normal handoff")
+    try expect(!takeoverCalled, "1.2.91 and newer updaters must never enter the legacy takeover path")
+    try expect(newUpdaterPolls > 13, "a legitimate updater run longer than the old three-second window must be allowed to finish")
+}
+
+func testLaunchAgentBridgeEnforcesWallClockDeadline() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("launch-agent-bridge-deadline-\(UUID().uuidString)")
+    let home = root.appendingPathComponent("home")
+    let appRoot = home.appendingPathComponent(".wanhe-codex-token/app")
+    let previous = appRoot.appendingPathComponent("releases/1.2.91")
+    let target = appRoot.appendingPathComponent("releases/1.2.93")
+    let launchAgents = home.appendingPathComponent("Library/LaunchAgents")
+    try FileManager.default.createDirectory(at: previous, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: launchAgents, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let current = appRoot.appendingPathComponent("current")
+    try FileManager.default.createSymbolicLink(atPath: current.path, withDestinationPath: "releases/1.2.93")
+    try "1.2.93".write(to: target.appendingPathComponent("VERSION"), atomically: true, encoding: .utf8)
+    try "1.2.91".write(to: previous.appendingPathComponent("VERSION"), atomically: true, encoding: .utf8)
+    try "old main".write(to: previous.appendingPathComponent("CodexTrafficLightApp"), atomically: true, encoding: .utf8)
+    try "old updater".write(to: previous.appendingPathComponent("wanhe-status-updater"), atomically: true, encoding: .utf8)
+    try "__APP_PATH__".write(to: target.appendingPathComponent("com.codex.traffic-light-mxp.plist.template"), atomically: true, encoding: .utf8)
+    try "__UPDATER_PATH__".write(to: target.appendingPathComponent("com.codex.traffic-light-mxp-updater.plist.template"), atomically: true, encoding: .utf8)
+    try "stable main".write(to: launchAgents.appendingPathComponent("com.codex.traffic-light-mxp.plist"), atomically: true, encoding: .utf8)
+    try "stable updater".write(to: launchAgents.appendingPathComponent("com.codex.traffic-light-mxp-updater.plist"), atomically: true, encoding: .utf8)
+
+    let started = Date()
+    do {
+        _ = try LaunchAgentUpdateBridge.run(
+            targetVersion: "1.2.93",
+            previousTarget: "releases/1.2.91",
+            home: home,
+            userID: 507,
+            maximumDuration: 0.1,
+            pause: { Thread.sleep(forTimeInterval: 0.55) },
+            runLaunchctl: { arguments in
+                if arguments == ["print", "gui/507/com.codex.traffic-light-mxp"] {
+                    return MainAppLaunchctlResult(status: 0, output: "state = waiting")
+                }
+                return MainAppLaunchctlResult(status: 0)
+            }
+        )
+        throw TestFailure(description: "bridge should not poll beyond its wall-clock deadline")
+    } catch let error as LaunchAgentUpdateBridgeError {
+        try expect(error.description.contains("hard deadline"), "deadline expiry must remain explicit in the bridge failure")
+    }
+    try expect(Date().timeIntervalSince(started) < 2, "deadline path must terminate promptly instead of exhausting its poll count")
+    try expectEqual(try FileManager.default.destinationOfSymbolicLink(atPath: current.path), "releases/1.2.91", "deadline failure should use the still-validated rollback release")
+    try expect(!FileManager.default.fileExists(atPath: appRoot.appendingPathComponent("launch-agent-bridge-1.2.93.done").path), "deadline failure must not write a completion marker")
+}
+
+func testLaunchAgentBridgeRollsBackWhenLegacyTakeoverFails() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("launch-agent-bridge-takeover-failure-\(UUID().uuidString)")
+    let home = root.appendingPathComponent("home")
+    let appRoot = home.appendingPathComponent(".wanhe-codex-token/app")
+    let previous = appRoot.appendingPathComponent("releases/1.2.84")
+    let target = appRoot.appendingPathComponent("releases/1.2.93")
+    let launchAgents = home.appendingPathComponent("Library/LaunchAgents")
+    try FileManager.default.createDirectory(at: previous, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: launchAgents, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let current = appRoot.appendingPathComponent("current")
+    try FileManager.default.createSymbolicLink(atPath: current.path, withDestinationPath: "releases/1.2.93")
+    try "1.2.93".write(to: target.appendingPathComponent("VERSION"), atomically: true, encoding: .utf8)
+    try "1.2.84".write(to: previous.appendingPathComponent("VERSION"), atomically: true, encoding: .utf8)
+    try "old main".write(to: previous.appendingPathComponent("CodexTrafficLightApp"), atomically: true, encoding: .utf8)
+    try "old updater".write(to: previous.appendingPathComponent("wanhe-status-updater"), atomically: true, encoding: .utf8)
+    try "__APP_PATH__".write(to: target.appendingPathComponent("com.codex.traffic-light-mxp.plist.template"), atomically: true, encoding: .utf8)
+    try "__UPDATER_PATH__".write(to: target.appendingPathComponent("com.codex.traffic-light-mxp-updater.plist.template"), atomically: true, encoding: .utf8)
+    try "stable main".write(to: launchAgents.appendingPathComponent("com.codex.traffic-light-mxp.plist"), atomically: true, encoding: .utf8)
+    try "stable updater".write(to: launchAgents.appendingPathComponent("com.codex.traffic-light-mxp-updater.plist"), atomically: true, encoding: .utf8)
+
+    var commands: [[String]] = []
+    do {
+        _ = try LaunchAgentUpdateBridge.run(
+            targetVersion: "1.2.93",
+            previousTarget: "releases/1.2.84",
+            home: home,
+            userID: 508,
+            runLaunchctl: { arguments in
+                commands.append(arguments)
+                return MainAppLaunchctlResult(status: 0)
+            },
+            takeOverLegacyUpdater: { _ in throw LaunchAgentUpdateBridgeError.legacyUpdaterTakeoverFailed }
+        )
+        throw TestFailure(description: "failed legacy ownership must enter the bridge failure transaction")
+    } catch let error as LaunchAgentUpdateBridgeError {
+        try expect(error.description.contains("activation failed"), "takeover failure should report a controlled rollback")
+    }
+    try expectEqual(commands.first, ["bootout", "gui/508/com.codex.traffic-light-mxp-updater"], "rollback must first stop the unowned predecessor updater job")
+    try expectEqual(try FileManager.default.destinationOfSymbolicLink(atPath: current.path), "releases/1.2.84", "takeover failure must restore the validated predecessor")
+    try expectEqual(UpdateLedger(url: home.appendingPathComponent(".wanhe-codex-token/update-attempts.json")).load()?.version, "1.2.93", "takeover failure must persist retry backoff")
+    try expect(!FileManager.default.fileExists(atPath: appRoot.appendingPathComponent("launch-agent-bridge-1.2.93.done").path), "takeover failure must never write done")
+
+    try FileManager.default.removeItem(at: current)
+    try FileManager.default.createSymbolicLink(atPath: current.path, withDestinationPath: "releases/1.2.93")
+    commands.removeAll()
+    do {
+        _ = try LaunchAgentUpdateBridge.run(
+            targetVersion: "1.2.93",
+            previousTarget: "releases/1.2.84",
+            home: home,
+            userID: 508,
+            runLaunchctl: { arguments in commands.append(arguments); return MainAppLaunchctlResult(status: 0) },
+            takeOverLegacyUpdater: { _ in
+                throw LaunchAgentUpdateBridgeError.legacyUpdaterProcessGroupStillRunning(700)
+            }
+        )
+        throw TestFailure(description: "a surviving legacy process group must require formal repair")
+    } catch let error as LaunchAgentUpdateBridgeError {
+        try expect(error.description.contains("process group 700 remained"), "partial takeover must preserve the terminal diagnostic")
+    }
+    try expect(commands.isEmpty, "partial takeover failure must not mutate current or either launchd job")
+    try expectEqual(try FileManager.default.destinationOfSymbolicLink(atPath: current.path), "releases/1.2.93", "partial takeover failure must leave current untouched")
+
+    do {
+        _ = try LaunchAgentUpdateBridge.run(
+            targetVersion: "1.2.93",
+            previousTarget: "releases/1.2.84",
+            home: home,
+            userID: 508,
+            runLaunchctl: { arguments in commands.append(arguments); return MainAppLaunchctlResult(status: 0) },
+            takeOverLegacyUpdater: { _ in throw LaunchAgentUpdateBridgeError.legacyUpdaterServiceStillRegistered }
+        )
+        throw TestFailure(description: "a registered predecessor service must require formal repair")
+    } catch LaunchAgentUpdateBridgeError.activationFailed(_) {
+        try expect(commands.isEmpty, "unremoved predecessor service must block every rollback mutation")
+        try expectEqual(try FileManager.default.destinationOfSymbolicLink(atPath: current.path), "releases/1.2.93", "unremoved predecessor service must leave current untouched")
+    }
+}
+
+func testLegacyUpdaterTakeoverWaitsForWholeProcessGroup() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("legacy-updater-process-group-\(UUID().uuidString)")
+    let release = root.appendingPathComponent("releases/1.2.84")
+    let executable = release.appendingPathComponent("wanhe-status-updater")
+    let plist = root.appendingPathComponent("com.codex.traffic-light-mxp-updater.plist")
+    try FileManager.default.createDirectory(at: release, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try "updater".write(to: executable, atomically: true, encoding: .utf8)
+    let validPlist: [String: Any] = [
+        "Label": UpdaterLaunchAgentInstaller.label,
+        "ProgramArguments": [executable.path],
+    ]
+    try PropertyListSerialization.data(fromPropertyList: validPlist, format: .xml, options: 0).write(to: plist)
+    let snapshot = RunningUpdaterProcess(pid: 700, executable: executable)
+    var groupChecks = 0
+    var checkedGroups: [pid_t] = []
+    var pauses = 0
+    var terminateCalls: [pid_t] = []
+    var commands: [[String]] = []
+    try LegacyUpdaterProcessGroupTakeover.run(
+        snapshot: snapshot,
+        expectedExecutable: executable,
+        installedPlist: plist,
+        service: "gui/510/\(UpdaterLaunchAgentInstaller.label)",
+        pause: { pauses += 1 },
+        revalidate: { snapshot },
+        processGroupID: { $0 },
+        processGroupExists: { processGroup in
+            checkedGroups.append(processGroup)
+            groupChecks += 1
+            return groupChecks <= 2
+        },
+        terminateProcessGroup: { processGroup in terminateCalls.append(processGroup); return true },
+        runLaunchctl: { arguments in
+            commands.append(arguments)
+            if arguments.first == "print" {
+                return MainAppLaunchctlResult(status: 3, output: "Could not find service")
+            }
+            return MainAppLaunchctlResult(status: 0)
+        }
+    )
+    try expect(checkedGroups.allSatisfy { $0 == 700 }, "takeover must monitor only the predecessor's process group")
+    try expectEqual(commands.map(\.first), ["bootout", "print"], "takeover must remove the whole launchd job and prove the service is absent")
+    try expectEqual(pauses, 2, "main activation must wait until every process in the legacy updater group has exited")
+    try expect(terminateCalls.isEmpty, "normal bootout drainage must not need an explicit group kill")
+
+    var timedOutBootoutChecks = 0
+    terminateCalls.removeAll()
+    commands.removeAll()
+    try LegacyUpdaterProcessGroupTakeover.run(
+        snapshot: snapshot,
+        expectedExecutable: executable,
+        installedPlist: plist,
+        service: "gui/510/\(UpdaterLaunchAgentInstaller.label)",
+        maximumPolls: 0,
+        revalidate: { snapshot },
+        processGroupID: { $0 },
+        processGroupExists: { _ in
+            timedOutBootoutChecks += 1
+            return timedOutBootoutChecks == 1
+        },
+        terminateProcessGroup: { processGroup in terminateCalls.append(processGroup); return true },
+        runLaunchctl: { arguments in
+            commands.append(arguments)
+            if arguments.first == "print" {
+                return MainAppLaunchctlResult(status: 3, output: "Could not find service")
+            }
+            return MainAppLaunchctlResult(status: -2, output: "process timed out")
+        }
+    )
+    try expectEqual(terminateCalls, [700], "a timed-out bootout must explicitly drain its still-live verified process group")
+
+    commands.removeAll()
+    do {
+        try LegacyUpdaterProcessGroupTakeover.run(
+            snapshot: snapshot,
+            expectedExecutable: executable,
+            installedPlist: plist,
+            service: "gui/510/\(UpdaterLaunchAgentInstaller.label)",
+            maximumPolls: 0,
+            revalidate: { snapshot },
+            processGroupID: { $0 },
+            processGroupExists: { _ in false },
+            terminateProcessGroup: { _ in true },
+            runLaunchctl: { arguments in
+                commands.append(arguments)
+                return arguments.first == "print"
+                    ? MainAppLaunchctlResult(status: 0, output: "state = not running")
+                    : MainAppLaunchctlResult(status: -2, output: "process timed out")
+            }
+        )
+        throw TestFailure(description: "a gone process with a still-loaded service must not complete takeover")
+    } catch LaunchAgentUpdateBridgeError.legacyUpdaterServiceStillRegistered {
+        try expectEqual(commands.map(\.first), ["bootout", "print", "bootout"], "indeterminate bootout must retry and require explicit service absence")
+    }
+
+    commands.removeAll()
+    do {
+        try LegacyUpdaterProcessGroupTakeover.run(
+            snapshot: snapshot,
+            expectedExecutable: executable,
+            installedPlist: plist,
+            service: "gui/510/\(UpdaterLaunchAgentInstaller.label)",
+            maximumPolls: 0,
+            revalidate: { snapshot },
+            processGroupID: { $0 },
+            processGroupExists: { _ in true },
+            terminateProcessGroup: { _ in true },
+            runLaunchctl: { arguments in
+                commands.append(arguments)
+                return MainAppLaunchctlResult(status: -2, output: "process timed out")
+            }
+        )
+        throw TestFailure(description: "a process group still alive after explicit kill must stop automatic repair")
+    } catch LaunchAgentUpdateBridgeError.legacyUpdaterProcessGroupStillRunning(let processGroup) {
+        try expectEqual(processGroup, 700, "terminal partial takeover must identify the unresolved process group")
+        try expectEqual(commands.count, 1, "timed-out bootout must not be retried as proof of process-group removal")
+    }
+
+    var unsafePlist = validPlist
+    unsafePlist["AbandonProcessGroup"] = true
+    try PropertyListSerialization.data(fromPropertyList: unsafePlist, format: .xml, options: 0).write(to: plist)
+    commands.removeAll()
+    do {
+        try LegacyUpdaterProcessGroupTakeover.run(
+            snapshot: snapshot,
+            expectedExecutable: executable,
+            installedPlist: plist,
+            service: "gui/510/\(UpdaterLaunchAgentInstaller.label)",
+            revalidate: { snapshot },
+            processGroupID: { $0 },
+            processGroupExists: { _ in false },
+            terminateProcessGroup: { _ in true },
+            runLaunchctl: { arguments in commands.append(arguments); return MainAppLaunchctlResult(status: 0) }
+        )
+        throw TestFailure(description: "a job that abandons descendants must not be auto-bridged")
+    } catch LaunchAgentUpdateBridgeError.legacyUpdaterTakeoverFailed {
+        try expect(commands.isEmpty, "unsafe process-group policy must be rejected before bootout")
+    }
+}
+
+func testLaunchAgentBridgeRequiresCleanFirstUpdaterRun() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("launch-agent-bridge-updater-first-run-\(UUID().uuidString)")
+    let home = root.appendingPathComponent("home")
+    let appRoot = home.appendingPathComponent(".wanhe-codex-token/app")
+    let previous = appRoot.appendingPathComponent("releases/1.2.91")
+    let target = appRoot.appendingPathComponent("releases/1.2.93")
+    let launchAgents = home.appendingPathComponent("Library/LaunchAgents")
+    try FileManager.default.createDirectory(at: previous, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: launchAgents, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let current = appRoot.appendingPathComponent("current")
+    try FileManager.default.createSymbolicLink(atPath: current.path, withDestinationPath: "releases/1.2.93")
+    try "1.2.93".write(to: target.appendingPathComponent("VERSION"), atomically: true, encoding: .utf8)
+    try "1.2.91".write(to: previous.appendingPathComponent("VERSION"), atomically: true, encoding: .utf8)
+    try "old main".write(to: previous.appendingPathComponent("CodexTrafficLightApp"), atomically: true, encoding: .utf8)
+    try "old updater".write(to: previous.appendingPathComponent("wanhe-status-updater"), atomically: true, encoding: .utf8)
+    try "__APP_PATH__".write(to: target.appendingPathComponent("com.codex.traffic-light-mxp.plist.template"), atomically: true, encoding: .utf8)
+    try "__UPDATER_PATH__".write(to: target.appendingPathComponent("com.codex.traffic-light-mxp-updater.plist.template"), atomically: true, encoding: .utf8)
+    try "stable main".write(to: launchAgents.appendingPathComponent("com.codex.traffic-light-mxp.plist"), atomically: true, encoding: .utf8)
+    try "stable updater".write(to: launchAgents.appendingPathComponent("com.codex.traffic-light-mxp-updater.plist"), atomically: true, encoding: .utf8)
+
+    var newUpdaterWasBootstrapped = false
+    var newUpdaterPolls = 0
+    do {
+        _ = try LaunchAgentUpdateBridge.run(
+            targetVersion: "1.2.93",
+            previousTarget: "releases/1.2.91",
+            home: home,
+            userID: 509,
+            maximumUpdaterPolls: 0,
+            pause: {},
+            runLaunchctl: { arguments in
+                if arguments == ["print", "gui/509/com.codex.traffic-light-mxp"] {
+                    return MainAppLaunchctlResult(status: 0, output: "state = running")
+                }
+                if arguments.first == "bootstrap", arguments.last?.hasSuffix("com.codex.traffic-light-mxp-updater.plist") == true {
+                    newUpdaterWasBootstrapped = true
+                    return MainAppLaunchctlResult(status: 0)
+                }
+                if arguments == ["print", "gui/509/com.codex.traffic-light-mxp-updater"] {
+                    if newUpdaterWasBootstrapped {
+                        newUpdaterPolls += 1
+                    }
+                    return MainAppLaunchctlResult(
+                        status: 0,
+                        output: !newUpdaterWasBootstrapped
+                            ? "state = exited\nlast exit code = 0"
+                            : (newUpdaterPolls == 1 ? "state = running" : "state = exited\nlast exit code = 78")
+                    )
+                }
+                return MainAppLaunchctlResult(status: 0)
+            }
+        )
+        throw TestFailure(description: "bootstrap success alone must not authorize a done marker")
+    } catch let error as LaunchAgentUpdateBridgeError {
+        try expect(error.description.contains("first RunAtLoad"), "failed first updater run must remain distinguishable from bootstrap failure")
+    }
+    try expectEqual(try FileManager.default.destinationOfSymbolicLink(atPath: current.path), "releases/1.2.91", "unclean updater first run must roll back the whole release")
+    try expect(!FileManager.default.fileExists(atPath: appRoot.appendingPathComponent("launch-agent-bridge-1.2.93.done").path), "unclean updater first run must not write done")
 }
 
 func testLegacyBridgeRequestPreSwapUsesActualCurrentRelease() throws {
@@ -2725,18 +3207,18 @@ func testLegacyBridgeRequestPreSwapUsesActualCurrentRelease() throws {
         return release
     }
     _ = try makeRelease("1.2.84")
-    _ = try makeRelease("1.2.92")
+    _ = try makeRelease("1.2.93")
     try FileManager.default.createSymbolicLink(atPath: appRoot.appendingPathComponent("current").path, withDestinationPath: "releases/1.2.84")
     var inspectedProcess = false
     let previous = try LegacyLaunchAgentBridgeRequest.prepare(
-        targetVersion: "1.2.92",
+        targetVersion: "1.2.93",
         home: home,
         runningUpdaterExecutable: { inspectedProcess = true; return nil }
     )
     try expectEqual(previous, "releases/1.2.84", "pre-swap preparation must preserve the actual current target")
     try expect(!inspectedProcess, "pre-swap preparation should not need process discovery")
     let request = try String(contentsOf: appRoot.appendingPathComponent("launch-agent-bridge.request"), encoding: .utf8)
-    try expectEqual(request, "1.2.92\nreleases/1.2.84\n", "pre-swap request should contain only target and rollback metadata")
+    try expectEqual(request, "1.2.93\nreleases/1.2.84\n", "pre-swap request should contain only target and rollback metadata")
     let permissions = try FileManager.default.attributesOfItem(atPath: appRoot.appendingPathComponent("launch-agent-bridge.request").path)[.posixPermissions] as? NSNumber
     try expectEqual(permissions?.intValue, 0o600, "bridge request must be private to the local user")
 }
@@ -2759,13 +3241,14 @@ func testLegacyBridgeRequestPostSwapUsesRunningUpdaterVnodeOnly() throws {
     _ = try makeRelease("1.2.85")
     _ = try makeRelease("1.2.90")
     _ = try makeRelease("1.2.92")
+    _ = try makeRelease("1.2.93")
     try FileManager.default.createDirectory(at: releases.appendingPathComponent("failed-1.2.91-123"), withIntermediateDirectories: true)
     try FileManager.default.createDirectory(at: releases.appendingPathComponent("replaced-1.2.91"), withIntermediateDirectories: true)
     try FileManager.default.createDirectory(at: releases.appendingPathComponent("staging-1.2.91"), withIntermediateDirectories: true)
-    try FileManager.default.createSymbolicLink(atPath: appRoot.appendingPathComponent("current").path, withDestinationPath: "releases/1.2.92")
+    try FileManager.default.createSymbolicLink(atPath: appRoot.appendingPathComponent("current").path, withDestinationPath: "releases/1.2.93")
 
     let previous = try LegacyLaunchAgentBridgeRequest.prepare(
-        targetVersion: "1.2.92",
+        targetVersion: "1.2.93",
         home: home,
         runningUpdaterExecutable: { actualOld.appendingPathComponent("wanhe-status-updater") }
     )
@@ -2774,7 +3257,7 @@ func testLegacyBridgeRequestPostSwapUsesRunningUpdaterVnodeOnly() throws {
     try FileManager.default.removeItem(at: appRoot.appendingPathComponent("launch-agent-bridge.request"))
     do {
         _ = try LegacyLaunchAgentBridgeRequest.prepare(
-            targetVersion: "1.2.92",
+            targetVersion: "1.2.93",
             home: home,
             runningUpdaterExecutable: { nil }
         )
@@ -2799,12 +3282,12 @@ func testLegacyBridgeRequestSkipsSelfBridgingUpdater() throws {
         return release
     }
     let selfBridging = try makeRelease("1.2.91")
-    _ = try makeRelease("1.2.92")
+    _ = try makeRelease("1.2.93")
     let current = appRoot.appendingPathComponent("current")
     try FileManager.default.createSymbolicLink(atPath: current.path, withDestinationPath: "releases/1.2.91")
     var inspectedProcess = false
     let preSwap = try LegacyLaunchAgentBridgeRequest.prepare(
-        targetVersion: "1.2.92",
+        targetVersion: "1.2.93",
         home: home,
         runningUpdaterExecutable: { inspectedProcess = true; return selfBridging.appendingPathComponent("wanhe-status-updater") }
     )
@@ -2813,9 +3296,9 @@ func testLegacyBridgeRequestSkipsSelfBridgingUpdater() throws {
     try expect(!FileManager.default.fileExists(atPath: appRoot.appendingPathComponent("launch-agent-bridge.request").path), "1.2.91 skip must not prebuild a competing request")
 
     try FileManager.default.removeItem(at: current)
-    try FileManager.default.createSymbolicLink(atPath: current.path, withDestinationPath: "releases/1.2.92")
+    try FileManager.default.createSymbolicLink(atPath: current.path, withDestinationPath: "releases/1.2.93")
     let postSwap = try LegacyLaunchAgentBridgeRequest.prepare(
-        targetVersion: "1.2.92",
+        targetVersion: "1.2.93",
         home: home,
         runningUpdaterExecutable: { selfBridging.appendingPathComponent("wanhe-status-updater") }
     )
@@ -2948,6 +3431,12 @@ let tests: [(String, () throws -> Void)] = [
     ("main launch agent repairs missing jobs", testMainAppLaunchAgentRepairsMissingJobAndSurfacesBootstrapFailure),
     ("launch agent bridge waits and refreshes both jobs", testLaunchAgentBridgeWaitsForOldUpdaterAndRefreshesBothJobs),
     ("launch agent bridge rolls back safely", testLaunchAgentBridgeRollsBackAndRejectsLateUnsafeCapture),
+    ("launch agent bridge refuses missing rollback", testLaunchAgentBridgeRefusesMissingRollbackRelease),
+    ("launch agent bridge avoids self-bridging takeover", testLaunchAgentBridgeDoesNotTakeOverSelfBridgingUpdater),
+    ("launch agent bridge enforces wall-clock deadline", testLaunchAgentBridgeEnforcesWallClockDeadline),
+    ("launch agent bridge rolls back failed takeover", testLaunchAgentBridgeRollsBackWhenLegacyTakeoverFails),
+    ("legacy updater takeover drains process group", testLegacyUpdaterTakeoverWaitsForWholeProcessGroup),
+    ("launch agent bridge checks updater first run", testLaunchAgentBridgeRequiresCleanFirstUpdaterRun),
     ("legacy bridge request handles pre-swap startup", testLegacyBridgeRequestPreSwapUsesActualCurrentRelease),
     ("legacy bridge request handles post-swap startup", testLegacyBridgeRequestPostSwapUsesRunningUpdaterVnodeOnly),
     ("legacy bridge skips self-bridging updater", testLegacyBridgeRequestSkipsSelfBridgingUpdater),
@@ -2958,6 +3447,7 @@ let tests: [(String, () throws -> Void)] = [
     ("update ledger backs off a failing version", testUpdateLedgerBacksOffFailingVersion),
     ("client release retention cleans on launch", testClientReleaseRetentionCleansOnFirstNewAppLaunch),
     ("client release retention preserves recovery", testClientReleaseRetentionPreservesOnlyRecoveryCopy),
+    ("client release retention pins bridge rollback", testClientReleaseRetentionPinsActiveBridgeRollback),
     ("bounded logs rotate", testBoundedLogRotatesBeforeExceedingLimit),
     ("bounded logs cap and serialize", testBoundedLogCapsOversizedAndSerializesConcurrentWrites)
 ]

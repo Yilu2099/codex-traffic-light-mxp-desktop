@@ -8,6 +8,11 @@ public enum LaunchAgentUpdateBridgeError: Error, CustomStringConvertible {
     case packagedVersionMismatch
     case mainDidNotStayRunning
     case updaterDidNotExit
+    case updaterDidNotRunCleanly
+    case legacyUpdaterTakeoverFailed
+    case legacyUpdaterProcessGroupStillRunning(pid_t)
+    case legacyUpdaterServiceStillRegistered
+    case bridgeTimedOut
     case activationFailed(String)
     case rollbackFailed(activation: String, rollback: String)
 
@@ -19,6 +24,13 @@ public enum LaunchAgentUpdateBridgeError: Error, CustomStringConvertible {
         case .packagedVersionMismatch: return "launch agent bridge packaged version mismatch"
         case .mainDidNotStayRunning: return "new main app did not stay running during launch agent bridge"
         case .updaterDidNotExit: return "previous updater did not exit before bridge timeout"
+        case .updaterDidNotRunCleanly: return "new updater did not complete its first RunAtLoad launch"
+        case .legacyUpdaterTakeoverFailed: return "legacy updater could not be safely handed over"
+        case .legacyUpdaterProcessGroupStillRunning(let group):
+            return "legacy updater process group \(group) remained after job removal"
+        case .legacyUpdaterServiceStillRegistered:
+            return "legacy updater launchd service remained registered after job removal"
+        case .bridgeTimedOut: return "launch agent bridge exceeded its hard deadline"
         case .activationFailed(let detail): return "launch agent bridge activation failed: \(detail)"
         case .rollbackFailed(let activation, let rollback):
             return "launch agent bridge activation failed: \(activation); rollback failed: \(rollback)"
@@ -29,6 +41,84 @@ public enum LaunchAgentUpdateBridgeError: Error, CustomStringConvertible {
 public enum LaunchAgentUpdateBridgeResult: Equatable, Sendable {
     case completed
     case alreadyCompleted
+}
+
+public struct RunningUpdaterProcess: Equatable, Sendable {
+    public var pid: pid_t
+    public var executable: URL
+
+    public init(pid: pid_t, executable: URL) {
+        self.pid = pid
+        self.executable = executable
+    }
+}
+
+public enum LegacyUpdaterProcessGroupTakeover {
+    public static func run(
+        snapshot: RunningUpdaterProcess,
+        expectedExecutable: URL,
+        installedPlist: URL,
+        service: String,
+        maximumPolls: Int = 40,
+        pause: () -> Void = { Thread.sleep(forTimeInterval: 0.05) },
+        revalidate: () -> RunningUpdaterProcess?,
+        processGroupID: (pid_t) -> pid_t,
+        processGroupExists: (pid_t) -> Bool,
+        terminateProcessGroup: (pid_t) -> Bool,
+        runLaunchctl: ([String]) -> MainAppLaunchctlResult
+    ) throws {
+        guard snapshot.executable.standardizedFileURL == expectedExecutable.standardizedFileURL,
+              let plistData = try? Data(contentsOf: installedPlist),
+              let plistObject = try? PropertyListSerialization.propertyList(from: plistData, options: [], format: nil),
+              let plistDictionary = plistObject as? [String: Any],
+              plistDictionary["Label"] as? String == UpdaterLaunchAgentInstaller.label,
+              plistDictionary["AbandonProcessGroup"] as? Bool != true,
+              processGroupID(snapshot.pid) == snapshot.pid,
+              revalidate() == snapshot else {
+            throw LaunchAgentUpdateBridgeError.legacyUpdaterTakeoverFailed
+        }
+
+        // With the updater as its process-group leader and launchd retaining
+        // the default group ownership, bootout asks launchd to terminate both
+        // the parent and any already-spawned child. The CLI itself may time out
+        // while launchd is still draining, so only the verified PGID below is
+        // authoritative for completion.
+        _ = runLaunchctl(["bootout", service])
+        var processGroupIsGone = false
+        for poll in 0...max(0, maximumPolls) {
+            if !processGroupExists(snapshot.pid) {
+                processGroupIsGone = true
+                break
+            }
+            if poll < maximumPolls { pause() }
+        }
+        if !processGroupIsGone {
+            guard terminateProcessGroup(snapshot.pid) else {
+                throw LaunchAgentUpdateBridgeError.legacyUpdaterProcessGroupStillRunning(snapshot.pid)
+            }
+            for poll in 0...max(0, maximumPolls) {
+                if !processGroupExists(snapshot.pid) {
+                    processGroupIsGone = true
+                    break
+                }
+                if poll < maximumPolls { pause() }
+            }
+        }
+        guard processGroupIsGone else {
+            throw LaunchAgentUpdateBridgeError.legacyUpdaterProcessGroupStillRunning(snapshot.pid)
+        }
+
+        // Process exit alone is insufficient: a loaded StartInterval job can
+        // start the old executable again. Require launchd to say the service is
+        // absent, retrying bootout when it is still registered or indeterminate.
+        for poll in 0...max(0, maximumPolls) {
+            let state = runLaunchctl(["print", service])
+            if state.status != 0, launchctlSaysServiceIsAbsent(state.output) { return }
+            _ = runLaunchctl(["bootout", service])
+            if poll < maximumPolls { pause() }
+        }
+        throw LaunchAgentUpdateBridgeError.legacyUpdaterServiceStillRegistered
+    }
 }
 
 public enum LegacyLaunchAgentBridgeRequest {
@@ -82,7 +172,7 @@ public enum LegacyLaunchAgentBridgeRequest {
             if let runningUpdaterExecutable {
                 executable = runningUpdaterExecutable()
             } else {
-                executable = defaultRunningUpdaterExecutable(userID: userID)
+                executable = runningUpdaterProcess(userID: userID)?.executable
             }
             guard let executable,
                   executable.lastPathComponent == "wanhe-status-updater" else {
@@ -144,7 +234,7 @@ public enum LegacyLaunchAgentBridgeRequest {
         return components
     }
 
-    private static func defaultRunningUpdaterExecutable(userID: uid_t) -> URL? {
+    public static func runningUpdaterProcess(userID: uid_t = getuid()) -> RunningUpdaterProcess? {
         let service = "gui/\(userID)/\(UpdaterLaunchAgentInstaller.label)"
         let state = run("/bin/launchctl", ["print", service])
         guard state.status == 0 else { return nil }
@@ -160,29 +250,19 @@ public enum LegacyLaunchAgentBridgeRequest {
         // needed after the symlink has already changed.
         let opened = run("/usr/sbin/lsof", ["-a", "-p", String(pid), "-d", "txt", "-Fn"])
         guard opened.status == 0 else { return nil }
-        return opened.output.split(separator: "\n").compactMap { line -> URL? in
+        let executable = opened.output.split(separator: "\n").compactMap { line -> URL? in
             guard line.first == "n" else { return nil }
             let path = String(line.dropFirst())
             guard (path as NSString).lastPathComponent == "wanhe-status-updater" else { return nil }
             return URL(fileURLWithPath: path).standardizedFileURL
         }.first
+        guard let executable else { return nil }
+        return RunningUpdaterProcess(pid: pid_t(pid), executable: executable)
     }
 
     private static func run(_ executable: String, _ arguments: [String]) -> (status: Int32, output: String) {
-        let process = Process()
-        let pipe = Pipe()
-        process.executableURL = URL(fileURLWithPath: executable)
-        process.arguments = arguments
-        process.standardOutput = pipe
-        process.standardError = pipe
-        do {
-            try process.run()
-            process.waitUntilExit()
-            let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-            return (process.terminationStatus, output)
-        } catch {
-            return (-1, String(describing: error))
-        }
+        let result = boundedProcessResult(executable: executable, arguments: arguments)
+        return (result.status, result.output)
     }
 }
 
@@ -204,8 +284,10 @@ public enum LaunchAgentUpdateBridge {
         home: URL = FileManager.default.homeDirectoryForCurrentUser,
         userID: uid_t = getuid(),
         maximumUpdaterPolls: Int = 240,
+        maximumDuration: TimeInterval = 75,
         pause: () -> Void = { Thread.sleep(forTimeInterval: 0.25) },
-        runLaunchctl: (([String]) -> MainAppLaunchctlResult)? = nil
+        runLaunchctl: (([String]) -> MainAppLaunchctlResult)? = nil,
+        takeOverLegacyUpdater: ((String) throws -> Void)? = nil
     ) throws -> LaunchAgentUpdateBridgeResult {
         guard targetVersion == ClientVersion.current else {
             throw LaunchAgentUpdateBridgeError.targetVersionNotAllowed
@@ -236,8 +318,37 @@ public enum LaunchAgentUpdateBridge {
         let marker = appRoot.appendingPathComponent("launch-agent-bridge-\(targetVersion).done")
         if fileManager.fileExists(atPath: marker.path) { return .alreadyCompleted }
 
-        let runner = runLaunchctl ?? defaultRunLaunchctl
+        let overallDeadline = Date().addingTimeInterval(max(1, maximumDuration))
+        let activationDeadline = Date().addingTimeInterval(max(0.5, maximumDuration - 15))
+        let runner = runLaunchctl ?? { arguments in
+            let remaining = max(0.1, overallDeadline.timeIntervalSinceNow)
+            return boundedProcessResult(
+                executable: "/bin/launchctl",
+                arguments: arguments,
+                timeout: min(5, remaining)
+            )
+        }
+        let previousVersion = rollbackVersion(previousTarget)
+        let legacyUpdaterTakeoverRequired = ClientVersion.compare(previousVersion, "1.2.91") == .orderedAscending
+        var legacyUpdaterWasTakenOver = false
         do {
+            try ensureBefore(activationDeadline)
+            if legacyUpdaterTakeoverRequired {
+                if let takeOverLegacyUpdater {
+                    try takeOverLegacyUpdater(previousTarget)
+                } else {
+                    try defaultTakeOverLegacyUpdater(
+                        previousTarget: previousTarget,
+                        home: home,
+                        userID: userID,
+                        runLaunchctl: runner
+                    )
+                }
+                legacyUpdaterWasTakenOver = true
+            }
+            if legacyUpdaterWasTakenOver {
+                try assertCurrentTarget(current, expectedTarget: expectedTarget, targetVersion: targetVersion)
+            }
             try MainAppLaunchAgentInstaller.install(
                 from: current,
                 home: home,
@@ -245,10 +356,12 @@ public enum LaunchAgentUpdateBridge {
                 forceRebootstrap: true,
                 runLaunchctl: runner
             )
+            try ensureBefore(activationDeadline)
 
             let mainService = "gui/\(userID)/\(MainAppLaunchAgentInstaller.label)"
             var mainRunning = false
             for poll in 0...12 {
+                try ensureBefore(activationDeadline)
                 try assertCurrentTarget(current, expectedTarget: expectedTarget, targetVersion: targetVersion)
                 let state = runner(["print", mainService])
                 if state.status == 0, state.output.contains("state = running") {
@@ -262,6 +375,7 @@ public enum LaunchAgentUpdateBridge {
             let updaterService = "gui/\(userID)/\(UpdaterLaunchAgentInstaller.label)"
             var updaterExited = false
             for poll in 0...max(0, maximumUpdaterPolls) {
+                try ensureBefore(activationDeadline)
                 try assertCurrentTarget(current, expectedTarget: expectedTarget, targetVersion: targetVersion)
                 let mainState = runner(["print", mainService])
                 guard mainState.status == 0, mainState.output.contains("state = running") else {
@@ -276,6 +390,7 @@ public enum LaunchAgentUpdateBridge {
             }
             guard updaterExited else { throw LaunchAgentUpdateBridgeError.updaterDidNotExit }
 
+            try ensureBefore(activationDeadline)
             try assertCurrentTarget(current, expectedTarget: expectedTarget, targetVersion: targetVersion)
             try UpdaterLaunchAgentInstaller.install(
                 from: current,
@@ -284,6 +399,19 @@ public enum LaunchAgentUpdateBridge {
                 forceRebootstrap: true,
                 runLaunchctl: runner
             )
+            var updaterStartedCleanly = false
+            while !updaterStartedCleanly {
+                try ensureBefore(activationDeadline)
+                try assertCurrentTarget(current, expectedTarget: expectedTarget, targetVersion: targetVersion)
+                switch updaterLaunchState(runner(["print", updaterService])) {
+                case .completedSuccessfully:
+                    updaterStartedCleanly = true
+                case .completedWithFailure:
+                    throw LaunchAgentUpdateBridgeError.updaterDidNotRunCleanly
+                case .pending:
+                    pause()
+                }
+            }
             try assertCurrentTarget(current, expectedTarget: expectedTarget, targetVersion: targetVersion)
             let finalMainState = runner(["print", mainService])
             guard finalMainState.status == 0, finalMainState.output.contains("state = running") else {
@@ -294,20 +422,58 @@ public enum LaunchAgentUpdateBridge {
             return .completed
         } catch {
             let activation = String(describing: error)
+            // Persist backoff before bootstrapping the rollback updater. Its
+            // RunAtLoad process must observe the failed target immediately and
+            // must not start a second overlapping download/install attempt.
+            UpdateLedger(
+                url: home.appendingPathComponent(".wanhe-codex-token/update-attempts.json")
+            ).recordFailure(version: targetVersion)
+            if let bridgeError = error as? LaunchAgentUpdateBridgeError,
+               takeoverFailureRequiresFormalRepair(bridgeError) {
+                // A surviving child may still carry the predecessor's queued
+                // kickstart. Never change current or either launch agent until
+                // a formal repair can prove that process group is gone.
+                throw LaunchAgentUpdateBridgeError.activationFailed(activation)
+            }
             do {
+                try ensureBefore(overallDeadline)
+                if legacyUpdaterTakeoverRequired && !legacyUpdaterWasTakenOver {
+                    // A failed identity takeover must not race the predecessor's
+                    // own kickstart/rollback while this transaction restores it.
+                    try ExistingLaunchAgentRegistration.forceBootout(
+                        label: UpdaterLaunchAgentInstaller.label,
+                        userID: userID,
+                        runLaunchctl: runner
+                    )
+                }
+                let rollbackRelease = appRoot.appendingPathComponent(previousTarget, isDirectory: true)
+                let rollbackVersion = Self.rollbackVersion(previousTarget)
+                let rollbackPackagedVersion = (try? String(
+                    contentsOf: rollbackRelease.appendingPathComponent("VERSION"),
+                    encoding: .utf8
+                ))?.trimmingCharacters(in: .whitespacesAndNewlines)
+                let rollbackValues = try? rollbackRelease.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+                guard rollbackValues?.isDirectory == true,
+                      rollbackValues?.isSymbolicLink != true,
+                      rollbackPackagedVersion == rollbackVersion,
+                      fileManager.fileExists(atPath: rollbackRelease.appendingPathComponent("CodexTrafficLightApp").path),
+                      fileManager.fileExists(atPath: rollbackRelease.appendingPathComponent("wanhe-status-updater").path) else {
+                    throw LaunchAgentUpdateBridgeError.unsafePreviousTarget
+                }
                 try swapCurrentLink(current: current, target: previousTarget)
-                try ExistingLaunchAgentRegistration.forceRebootstrap(
-                    label: MainAppLaunchAgentInstaller.label,
-                    home: home,
-                    userID: userID,
-                    runLaunchctl: runner
-                )
                 try ExistingLaunchAgentRegistration.forceRebootstrap(
                     label: UpdaterLaunchAgentInstaller.label,
                     home: home,
                     userID: userID,
                     runLaunchctl: runner
                 )
+                try ExistingLaunchAgentRegistration.forceRebootstrap(
+                    label: MainAppLaunchAgentInstaller.label,
+                    home: home,
+                    userID: userID,
+                    runLaunchctl: runner
+                )
+                try ensureBefore(overallDeadline)
             } catch {
                 throw LaunchAgentUpdateBridgeError.rollbackFailed(
                     activation: activation,
@@ -345,20 +511,68 @@ public enum LaunchAgentUpdateBridge {
         }
     }
 
-    private static func defaultRunLaunchctl(_ arguments: [String]) -> MainAppLaunchctlResult {
-        let process = Process()
-        let pipe = Pipe()
-        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-        process.arguments = arguments
-        process.standardOutput = pipe
-        process.standardError = pipe
-        do {
-            try process.run()
-            process.waitUntilExit()
-            let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-            return MainAppLaunchctlResult(status: process.terminationStatus, output: output)
-        } catch {
-            return MainAppLaunchctlResult(status: -1, output: String(describing: error))
+    private static func ensureBefore(_ deadline: Date) throws {
+        guard Date() < deadline else { throw LaunchAgentUpdateBridgeError.bridgeTimedOut }
+    }
+
+    private static func takeoverFailureRequiresFormalRepair(_ error: LaunchAgentUpdateBridgeError) -> Bool {
+        switch error {
+        case .legacyUpdaterProcessGroupStillRunning, .legacyUpdaterServiceStillRegistered:
+            return true
+        default:
+            return false
         }
+    }
+
+    private enum UpdaterLaunchState {
+        case pending
+        case completedSuccessfully
+        case completedWithFailure
+    }
+
+    private static func updaterLaunchState(_ result: MainAppLaunchctlResult) -> UpdaterLaunchState {
+        guard result.status == 0 else { return .pending }
+        let output = result.output.lowercased()
+        let completed = output.contains("state = exited") || output.contains("state = not running")
+        guard completed else { return .pending }
+        if output.contains("last exit code = 0") || output.contains("last exit status = 0") {
+            return .completedSuccessfully
+        }
+        let hasExitCode = output.contains("last exit code =") || output.contains("last exit status =")
+        return hasExitCode ? .completedWithFailure : .pending
+    }
+
+    private static func defaultTakeOverLegacyUpdater(
+        previousTarget: String,
+        home: URL,
+        userID: uid_t,
+        runLaunchctl: ([String]) -> MainAppLaunchctlResult
+    ) throws {
+        guard let snapshot = LegacyLaunchAgentBridgeRequest.runningUpdaterProcess(userID: userID) else {
+            throw LaunchAgentUpdateBridgeError.legacyUpdaterTakeoverFailed
+        }
+        let expected = home.appendingPathComponent(".wanhe-codex-token/app")
+            .appendingPathComponent(previousTarget)
+            .appendingPathComponent("wanhe-status-updater")
+            .standardizedFileURL
+        let plist = home.appendingPathComponent("Library/LaunchAgents/\(UpdaterLaunchAgentInstaller.label).plist")
+        let service = "gui/\(userID)/\(UpdaterLaunchAgentInstaller.label)"
+        try LegacyUpdaterProcessGroupTakeover.run(
+            snapshot: snapshot,
+            expectedExecutable: expected,
+            installedPlist: plist,
+            service: service,
+            revalidate: { LegacyLaunchAgentBridgeRequest.runningUpdaterProcess(userID: userID) },
+            processGroupID: { getpgid($0) },
+            processGroupExists: { processGroup in
+                if kill(-processGroup, 0) == 0 { return true }
+                return errno != ESRCH
+            },
+            terminateProcessGroup: { processGroup in
+                if kill(-processGroup, SIGKILL) == 0 { return true }
+                return errno == ESRCH
+            },
+            runLaunchctl: runLaunchctl
+        )
     }
 }

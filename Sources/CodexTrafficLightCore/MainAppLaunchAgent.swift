@@ -1,4 +1,5 @@
 import Darwin
+import Dispatch
 import Foundation
 
 public enum MainAppLaunchAgentError: Error, CustomStringConvertible {
@@ -91,28 +92,14 @@ public enum MainAppLaunchAgentInstaller {
         guard bootstrap.status == 0 else {
             throw MainAppLaunchAgentError.bootstrapFailed(bootstrap.output)
         }
-        let kickstart = runner(["kickstart", "-k", service])
-        guard kickstart.status == 0 else {
-            throw MainAppLaunchAgentError.kickstartFailed(kickstart.output)
-        }
+        // RunAtLoad starts the freshly bootstrapped job. An immediate
+        // `kickstart -k` kills that valid first process and causes launchd's
+        // crash throttle to leave the old updater's health check in a gap.
         return true
     }
 
     private static func defaultRunLaunchctl(_ arguments: [String]) -> MainAppLaunchctlResult {
-        let process = Process()
-        let pipe = Pipe()
-        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-        process.arguments = arguments
-        process.standardOutput = pipe
-        process.standardError = pipe
-        do {
-            try process.run()
-            process.waitUntilExit()
-            let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-            return MainAppLaunchctlResult(status: process.terminationStatus, output: output)
-        } catch {
-            return MainAppLaunchctlResult(status: -1, output: String(describing: error))
-        }
+        boundedProcessResult(executable: "/bin/launchctl", arguments: arguments)
     }
 }
 
@@ -163,32 +150,28 @@ public enum UpdaterLaunchAgentInstaller {
         guard bootstrap.status == 0 else {
             throw UpdaterLaunchAgentError.bootstrapFailed(bootstrap.output)
         }
-        let kickstart = runner(["kickstart", "-k", service])
-        guard kickstart.status == 0 else {
-            throw UpdaterLaunchAgentError.kickstartFailed(kickstart.output)
-        }
+        // RunAtLoad is sufficient; do not kill the just-started updater.
         return true
     }
 
     private static func defaultRunLaunchctl(_ arguments: [String]) -> MainAppLaunchctlResult {
-        let process = Process()
-        let pipe = Pipe()
-        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-        process.arguments = arguments
-        process.standardOutput = pipe
-        process.standardError = pipe
-        do {
-            try process.run()
-            process.waitUntilExit()
-            let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-            return MainAppLaunchctlResult(status: process.terminationStatus, output: output)
-        } catch {
-            return MainAppLaunchctlResult(status: -1, output: String(describing: error))
-        }
+        boundedProcessResult(executable: "/bin/launchctl", arguments: arguments)
     }
 }
 
 public enum ExistingLaunchAgentRegistration {
+    public static func forceBootout(
+        label: String,
+        userID: uid_t = getuid(),
+        runLaunchctl: ([String]) -> MainAppLaunchctlResult
+    ) throws {
+        let service = "gui/\(userID)/\(label)"
+        let bootout = runLaunchctl(["bootout", service])
+        guard bootout.status == 0 || launchctlSaysServiceIsAbsent(bootout.output) else {
+            throw MainAppLaunchAgentError.bootoutFailed(bootout.output)
+        }
+    }
+
     public static func forceRebootstrap(
         label: String,
         home: URL = FileManager.default.homeDirectoryForCurrentUser,
@@ -200,39 +183,49 @@ public enum ExistingLaunchAgentRegistration {
             throw MainAppLaunchAgentError.templateMissing(plist.lastPathComponent)
         }
         let runner = runLaunchctl ?? { arguments in
-            let process = Process()
-            let pipe = Pipe()
-            process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-            process.arguments = arguments
-            process.standardOutput = pipe
-            process.standardError = pipe
-            do {
-                try process.run()
-                process.waitUntilExit()
-                let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-                return MainAppLaunchctlResult(status: process.terminationStatus, output: output)
-            } catch {
-                return MainAppLaunchctlResult(status: -1, output: String(describing: error))
-            }
+            boundedProcessResult(executable: "/bin/launchctl", arguments: arguments)
         }
         let domain = "gui/\(userID)"
-        let service = "\(domain)/\(label)"
-        let bootout = runner(["bootout", service])
-        guard bootout.status == 0 || launchctlSaysServiceIsAbsent(bootout.output) else {
-            throw MainAppLaunchAgentError.bootoutFailed(bootout.output)
-        }
+        try forceBootout(label: label, userID: userID, runLaunchctl: runner)
         let bootstrap = runner(["bootstrap", domain, plist.path])
         guard bootstrap.status == 0 else {
             throw MainAppLaunchAgentError.bootstrapFailed(bootstrap.output)
         }
-        let kickstart = runner(["kickstart", "-k", service])
-        guard kickstart.status == 0 else {
-            throw MainAppLaunchAgentError.kickstartFailed(kickstart.output)
-        }
+        // RunAtLoad is sufficient; rollback must not self-induce throttling.
     }
 }
 
-private func launchctlSaysServiceIsAbsent(_ output: String) -> Bool {
+/// launchctl and lsof are local, but a wedged child must not retain the bridge
+/// lock forever. On timeout no blocking pipe read or wait is performed after
+/// SIGKILL; the monitor can atomically move the request to its failed marker.
+func boundedProcessResult(
+    executable: String,
+    arguments: [String],
+    timeout: TimeInterval = 5
+) -> MainAppLaunchctlResult {
+    let process = Process()
+    let pipe = Pipe()
+    let finished = DispatchSemaphore(value: 0)
+    process.executableURL = URL(fileURLWithPath: executable)
+    process.arguments = arguments
+    process.standardOutput = pipe
+    process.standardError = pipe
+    process.terminationHandler = { _ in finished.signal() }
+    do {
+        try process.run()
+    } catch {
+        return MainAppLaunchctlResult(status: -1, output: String(describing: error))
+    }
+    if finished.wait(timeout: .now() + max(0.1, timeout)) == .timedOut {
+        process.terminate()
+        if process.isRunning { _ = kill(process.processIdentifier, SIGKILL) }
+        return MainAppLaunchctlResult(status: -2, output: "process timed out")
+    }
+    let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+    return MainAppLaunchctlResult(status: process.terminationStatus, output: output)
+}
+
+func launchctlSaysServiceIsAbsent(_ output: String) -> Bool {
     let normalized = output.lowercased()
     return normalized.contains("could not find service")
         || normalized.contains("could not find specified service")

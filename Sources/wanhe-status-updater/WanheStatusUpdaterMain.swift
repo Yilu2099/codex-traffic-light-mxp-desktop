@@ -70,7 +70,6 @@ struct WanheStatusUpdater {
                 return
             } catch {
                 appendLog("launch agent bridge failed: \(error)")
-                UpdateLedger().recordFailure(version: targetVersion)
                 if let configuration = ClientUpdateConfiguration.load() {
                     let actualVersion = installedVersion() ?? ClientVersion.current
                     await report(

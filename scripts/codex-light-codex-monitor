@@ -5,7 +5,7 @@ APP_ROOT="$HOME/.wanhe-codex-token/app"
 CURRENT_RELEASE="$APP_ROOT/current"
 BRIDGE_REQUEST="$APP_ROOT/launch-agent-bridge.request"
 BRIDGE_LOCK="$APP_ROOT/launch-agent-bridge.lock"
-LEGACY_BRIDGE_VERSION="1.2.92"
+LEGACY_BRIDGE_VERSION="1.2.93"
 LEGACY_BRIDGE_HELPER="$APP_ROOT/releases/$LEGACY_BRIDGE_VERSION/wanhe-status-updater"
 
 bridge_target_is_safe() {
@@ -84,9 +84,8 @@ run_launch_agent_bridge() (
   fi
 )
 
-# Give the legacy updater up to 60 seconds to complete its verified download,
-# swap and activation. Later requests from the fixed updater are already on the
-# target release and are checked without blocking normal monitoring.
+# Bound the handoff wait. Legacy jobs are safely taken over after the verified
+# swap; later self-bridging updater requests wait only for their owner to exit.
 run_launch_agent_bridge 240
 
 CODEX_HOME_DIR="${CODEX_HOME:-$HOME/.codex}"
