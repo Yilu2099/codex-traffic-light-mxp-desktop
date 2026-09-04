@@ -2434,6 +2434,282 @@ func testDesktopMonitorInstallerMigratesPackagedMonitor() throws {
     try expect(!unchanged, "unchanged monitor installation should not restart or rewrite")
 }
 
+func testMainAppLaunchAgentForceRebootstrapsUnchangedSignedTarget() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("main-launch-agent-\(UUID().uuidString)")
+    let home = root.appendingPathComponent("home")
+    let release = home.appendingPathComponent(".wanhe-codex-token/app/current")
+    try FileManager.default.createDirectory(at: release, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let template = """
+    <?xml version="1.0"?><plist><dict>
+    <key>Label</key><string>com.codex.traffic-light-mxp</string>
+    <key>ProgramArguments</key><array><string>__APP_PATH__</string></array>
+    <key>EnvironmentVariables</key><dict><key>HOME</key><string>__HOME__</string></dict>
+    </dict></plist>
+    """
+    try template.write(
+        to: release.appendingPathComponent("com.codex.traffic-light-mxp.plist.template"),
+        atomically: true,
+        encoding: .utf8
+    )
+    var commands: [[String]] = []
+    let runner: ([String]) -> MainAppLaunchctlResult = { arguments in
+        commands.append(arguments)
+        return MainAppLaunchctlResult(
+            status: arguments.first == "bootout" ? 3 : 0,
+            output: arguments.first == "bootout" ? "Could not find service" : ""
+        )
+    }
+
+    let installed = try MainAppLaunchAgentInstaller.install(
+        from: release,
+        home: home,
+        userID: 501,
+        forceRebootstrap: true,
+        runLaunchctl: runner
+    )
+    try expect(installed, "a new signed target must force a fresh launchd registration")
+    let service = "gui/501/com.codex.traffic-light-mxp"
+    try expectEqual(commands, [
+        ["print", service],
+        ["bootout", service],
+        ["bootstrap", "gui/501", home.appendingPathComponent("Library/LaunchAgents/com.codex.traffic-light-mxp.plist").path],
+        ["kickstart", "-k", service],
+    ], "forced activation must bootout, bootstrap and kickstart even when bootout reports an absent job")
+    let rendered = try String(
+        contentsOf: home.appendingPathComponent("Library/LaunchAgents/com.codex.traffic-light-mxp.plist"),
+        encoding: .utf8
+    )
+    try expect(rendered.contains(home.appendingPathComponent(".wanhe-codex-token/app/current/CodexTrafficLightApp").path), "launch agent must retain the stable current path")
+
+    commands.removeAll()
+    let repeated = try MainAppLaunchAgentInstaller.install(
+        from: release,
+        home: home,
+        userID: 501,
+        forceRebootstrap: true,
+        runLaunchctl: runner
+    )
+    try expect(repeated, "an unchanged plist still needs a rebootstrap after a cdhash change")
+    try expectEqual(commands.map(\.first), ["print", "bootout", "bootstrap", "kickstart"], "repeated signed activation must not collapse to kickstart only")
+}
+
+func testMainAppLaunchAgentRepairsMissingJobAndSurfacesBootstrapFailure() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("missing-main-launch-agent-\(UUID().uuidString)")
+    let home = root.appendingPathComponent("home")
+    let release = home.appendingPathComponent(".wanhe-codex-token/app/current")
+    try FileManager.default.createDirectory(at: release, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try "__APP_PATH__\n__HOME__\n".write(
+        to: release.appendingPathComponent("com.codex.traffic-light-mxp.plist.template"),
+        atomically: true,
+        encoding: .utf8
+    )
+    var commands: [[String]] = []
+    let repaired = try MainAppLaunchAgentInstaller.install(
+        from: release,
+        home: home,
+        userID: 502,
+        runLaunchctl: { arguments in
+            commands.append(arguments)
+            if arguments.first == "print" { return MainAppLaunchctlResult(status: 113) }
+            return MainAppLaunchctlResult(status: 0)
+        }
+    )
+    try expect(repaired, "a missing registered job should be restored")
+    try expectEqual(commands.map(\.first), ["print", "bootout", "bootstrap", "kickstart"], "missing-job repair must complete a full registration")
+
+    do {
+        _ = try MainAppLaunchAgentInstaller.install(
+            from: release,
+            home: home,
+            userID: 502,
+            forceRebootstrap: true,
+            runLaunchctl: { arguments in
+                if arguments.first == "bootstrap" {
+                    return MainAppLaunchctlResult(status: 5, output: "simulated bootstrap rejection")
+                }
+                return MainAppLaunchctlResult(status: 0)
+            }
+        )
+        throw TestFailure(description: "bootstrap failure should abort activation and trigger updater rollback")
+    } catch let error as MainAppLaunchAgentError {
+        try expect(error.description.contains("bootstrap"), "bootstrap failures should remain diagnosable")
+    }
+
+    var reachedBootstrap = false
+    do {
+        _ = try MainAppLaunchAgentInstaller.install(
+            from: release,
+            home: home,
+            userID: 502,
+            forceRebootstrap: true,
+            runLaunchctl: { arguments in
+                if arguments.first == "bootout" {
+                    return MainAppLaunchctlResult(status: 5, output: "operation not permitted")
+                }
+                if arguments.first == "bootstrap" { reachedBootstrap = true }
+                return MainAppLaunchctlResult(status: 0)
+            }
+        )
+        throw TestFailure(description: "non-absence bootout errors must stop activation")
+    } catch let error as MainAppLaunchAgentError {
+        try expect(error.description.contains("bootout"), "non-absence bootout failure should remain diagnosable")
+        try expect(!reachedBootstrap, "bootstrap must not run after a real bootout failure")
+    }
+}
+
+func testLaunchAgentBridgeWaitsForOldUpdaterAndRefreshesBothJobs() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("launch-agent-bridge-\(UUID().uuidString)")
+    let home = root.appendingPathComponent("home")
+    let appRoot = home.appendingPathComponent(".wanhe-codex-token/app")
+    let previous = appRoot.appendingPathComponent("releases/1.2.90")
+    let target = appRoot.appendingPathComponent("releases/1.2.91")
+    let launchAgents = home.appendingPathComponent("Library/LaunchAgents")
+    try FileManager.default.createDirectory(at: previous, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: launchAgents, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try FileManager.default.createSymbolicLink(atPath: appRoot.appendingPathComponent("current").path, withDestinationPath: "releases/1.2.91")
+    try "1.2.91\n".write(to: target.appendingPathComponent("VERSION"), atomically: true, encoding: .utf8)
+    try "__APP_PATH__\n__HOME__\n".write(to: target.appendingPathComponent("com.codex.traffic-light-mxp.plist.template"), atomically: true, encoding: .utf8)
+    try "__UPDATER_PATH__\n__HOME__\n".write(to: target.appendingPathComponent("com.codex.traffic-light-mxp-updater.plist.template"), atomically: true, encoding: .utf8)
+    try "old main".write(to: launchAgents.appendingPathComponent("com.codex.traffic-light-mxp.plist"), atomically: true, encoding: .utf8)
+    try "old updater".write(to: launchAgents.appendingPathComponent("com.codex.traffic-light-mxp-updater.plist"), atomically: true, encoding: .utf8)
+
+    var commands: [[String]] = []
+    var updaterPolls = 0
+    var pauses = 0
+    let result = try LaunchAgentUpdateBridge.run(
+        targetVersion: "1.2.91",
+        previousTarget: "releases/1.2.90",
+        home: home,
+        userID: 503,
+        maximumUpdaterPolls: 4,
+        pause: { pauses += 1 },
+        runLaunchctl: { arguments in
+            commands.append(arguments)
+            if arguments == ["print", "gui/503/com.codex.traffic-light-mxp"] {
+                return MainAppLaunchctlResult(status: 0, output: "state = running")
+            }
+            if arguments == ["print", "gui/503/com.codex.traffic-light-mxp-updater"] {
+                updaterPolls += 1
+                return MainAppLaunchctlResult(status: 0, output: updaterPolls <= 2 ? "state = running" : "state = exited")
+            }
+            return MainAppLaunchctlResult(status: 0)
+        }
+    )
+    try expectEqual(result, .completed, "bridge should complete after the old updater exits")
+    try expectEqual(pauses, 2, "bridge must wait instead of booting out a running predecessor updater")
+    let mainBootout = commands.firstIndex(of: ["bootout", "gui/503/com.codex.traffic-light-mxp"])
+    let updaterBootout = commands.firstIndex(of: ["bootout", "gui/503/com.codex.traffic-light-mxp-updater"])
+    try expect(mainBootout != nil && updaterBootout != nil && mainBootout! < updaterBootout!, "main must be repaired before the updater registration")
+    try expect(FileManager.default.fileExists(atPath: appRoot.appendingPathComponent("launch-agent-bridge-1.2.91.done").path), "successful bridge should persist an idempotency marker")
+
+    commands.removeAll()
+    let repeated = try LaunchAgentUpdateBridge.run(
+        targetVersion: "1.2.91",
+        previousTarget: "releases/1.2.90",
+        home: home,
+        userID: 503,
+        runLaunchctl: { arguments in commands.append(arguments); return MainAppLaunchctlResult(status: 0) }
+    )
+    try expectEqual(repeated, .alreadyCompleted, "completed bridge should be idempotent")
+    try expect(commands.isEmpty, "completed bridge must not touch launchd again")
+}
+
+func testLaunchAgentBridgeRollsBackAndRejectsLateUnsafeCapture() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("launch-agent-bridge-rollback-\(UUID().uuidString)")
+    let home = root.appendingPathComponent("home")
+    let appRoot = home.appendingPathComponent(".wanhe-codex-token/app")
+    let previous = appRoot.appendingPathComponent("releases/1.2.90")
+    let target = appRoot.appendingPathComponent("releases/1.2.91")
+    let launchAgents = home.appendingPathComponent("Library/LaunchAgents")
+    try FileManager.default.createDirectory(at: previous, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: launchAgents, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let current = appRoot.appendingPathComponent("current")
+    try FileManager.default.createSymbolicLink(atPath: current.path, withDestinationPath: "releases/1.2.91")
+    try "1.2.91".write(to: target.appendingPathComponent("VERSION"), atomically: true, encoding: .utf8)
+    try "__APP_PATH__".write(to: target.appendingPathComponent("com.codex.traffic-light-mxp.plist.template"), atomically: true, encoding: .utf8)
+    try "__UPDATER_PATH__".write(to: target.appendingPathComponent("com.codex.traffic-light-mxp-updater.plist.template"), atomically: true, encoding: .utf8)
+    try "stable main".write(to: launchAgents.appendingPathComponent("com.codex.traffic-light-mxp.plist"), atomically: true, encoding: .utf8)
+    try "stable updater".write(to: launchAgents.appendingPathComponent("com.codex.traffic-light-mxp-updater.plist"), atomically: true, encoding: .utf8)
+    var mainBootstrapCount = 0
+    do {
+        _ = try LaunchAgentUpdateBridge.run(
+            targetVersion: "1.2.91",
+            previousTarget: "releases/1.2.90",
+            home: home,
+            userID: 504,
+            runLaunchctl: { arguments in
+                if arguments.first == "bootstrap", arguments.last?.hasSuffix("com.codex.traffic-light-mxp.plist") == true {
+                    mainBootstrapCount += 1
+                    if mainBootstrapCount == 1 { return MainAppLaunchctlResult(status: 5, output: "simulated rejection") }
+                }
+                return MainAppLaunchctlResult(status: 0)
+            }
+        )
+        throw TestFailure(description: "failed new registration should not be reported as successful")
+    } catch let error as LaunchAgentUpdateBridgeError {
+        try expect(error.description.contains("activation failed"), "bridge should report activation failure after successful rollback")
+    }
+    try expectEqual(try FileManager.default.destinationOfSymbolicLink(atPath: current.path), "releases/1.2.90", "bridge failure must atomically restore the previous release")
+    try expectEqual(mainBootstrapCount, 2, "rollback must bootstrap the old main registration after the new one fails")
+
+    try FileManager.default.removeItem(at: current)
+    try FileManager.default.createSymbolicLink(atPath: current.path, withDestinationPath: "releases/1.2.91")
+    var updaterBootstrapCount = 0
+    var rollbackMainBootstraps = 0
+    do {
+        _ = try LaunchAgentUpdateBridge.run(
+            targetVersion: "1.2.91",
+            previousTarget: "releases/1.2.90",
+            home: home,
+            userID: 504,
+            maximumUpdaterPolls: 0,
+            runLaunchctl: { arguments in
+                if arguments == ["print", "gui/504/com.codex.traffic-light-mxp"] {
+                    return MainAppLaunchctlResult(status: 0, output: "state = running")
+                }
+                if arguments == ["print", "gui/504/com.codex.traffic-light-mxp-updater"] {
+                    return MainAppLaunchctlResult(status: 0, output: "state = exited")
+                }
+                if arguments.first == "bootstrap", arguments.last?.hasSuffix("com.codex.traffic-light-mxp-updater.plist") == true {
+                    updaterBootstrapCount += 1
+                    if updaterBootstrapCount == 1 { return MainAppLaunchctlResult(status: 5, output: "simulated updater rejection") }
+                }
+                if arguments.first == "bootstrap", arguments.last?.hasSuffix("com.codex.traffic-light-mxp.plist") == true {
+                    rollbackMainBootstraps += 1
+                }
+                return MainAppLaunchctlResult(status: 0)
+            }
+        )
+        throw TestFailure(description: "updater bootstrap failure must roll the whole release back")
+    } catch let error as LaunchAgentUpdateBridgeError {
+        try expect(error.description.contains("activation failed"), "updater activation failure should report a completed rollback")
+    }
+    try expectEqual(try FileManager.default.destinationOfSymbolicLink(atPath: current.path), "releases/1.2.90", "updater bootstrap failure must restore the old current target")
+    try expectEqual(updaterBootstrapCount, 2, "rollback must rebootstrap the old updater after the new updater bootstrap fails")
+    try expectEqual(rollbackMainBootstraps, 2, "main activation and rollback must each bootstrap once")
+    try expect(!FileManager.default.fileExists(atPath: appRoot.appendingPathComponent("launch-agent-bridge-1.2.91.done").path), "failed bridge must never write a completion marker")
+
+    var touchedLaunchd = false
+    do {
+        _ = try LaunchAgentUpdateBridge.run(
+            targetVersion: "1.2.91",
+            previousTarget: "releases/1.2.91",
+            home: home,
+            userID: 504,
+            runLaunchctl: { _ in touchedLaunchd = true; return MainAppLaunchctlResult(status: 0) }
+        )
+        throw TestFailure(description: "late capture of the new target must be rejected")
+    } catch LaunchAgentUpdateBridgeError.unsafePreviousTarget {
+        try expect(!touchedLaunchd, "unsafe late capture must not mutate launchd state")
+    }
+}
+
 func testOfficialUsageRefreshPolicyTracksUTCSettlement() throws {
     let formatter = ISO8601DateFormatter()
     let now = formatter.date(from: "2026-08-23T00:05:00Z")!
@@ -2555,6 +2831,10 @@ let tests: [(String, () throws -> Void)] = [
     ("project audit uses neutral property purpose", testProjectActivityUsesNeutralPropertyPurpose),
     ("project input baseline is metadata-only and bounded", testProjectActivityBaselineIsMetadataOnlyAndBounded),
     ("desktop monitor installer migrates packaged monitor", testDesktopMonitorInstallerMigratesPackagedMonitor),
+    ("main launch agent force rebootstrap", testMainAppLaunchAgentForceRebootstrapsUnchangedSignedTarget),
+    ("main launch agent repairs missing jobs", testMainAppLaunchAgentRepairsMissingJobAndSurfacesBootstrapFailure),
+    ("launch agent bridge waits and refreshes both jobs", testLaunchAgentBridgeWaitsForOldUpdaterAndRefreshesBothJobs),
+    ("launch agent bridge rolls back safely", testLaunchAgentBridgeRollsBackAndRejectsLateUnsafeCapture),
     ("client version comparison", testClientVersionComparison),
     ("client update signature verification", testClientUpdateVerifierAcceptsReleaseSignature),
     ("client update defaults to five minutes", testClientUpdateManifestDefaultsToFiveMinutes),

@@ -30,6 +30,10 @@ trap '/bin/rm -rf -- "$STAGING"' EXIT
 /bin/cp "$DIR/.build/release/codex-light-mxp" "$STAGING/codex-light-mxp"
 /bin/cp "$DIR/.build/release/codex-light-hook-mxp" "$STAGING/codex-light-hook-mxp"
 /bin/cp "$DIR/.build/release/wanhe-status-updater" "$STAGING/wanhe-status-updater"
+/bin/cp "$DIR/scripts/codex-light-codex-monitor" "$STAGING/codex-light-codex-monitor"
+/bin/cp "$DIR/com.codex.traffic-light-codex-monitor.plist.template" "$STAGING/com.codex.traffic-light-codex-monitor.plist.template"
+/bin/cp "$DIR/com.codex.traffic-light-mxp.plist.template" "$STAGING/com.codex.traffic-light-mxp.plist.template"
+/bin/cp "$DIR/com.codex.traffic-light-mxp-updater.plist.template" "$STAGING/com.codex.traffic-light-mxp-updater.plist.template"
 /bin/cp "$DIR/VERSION" "$STAGING/VERSION"
 /usr/bin/rsync -a --delete \
   "$DIR/.build/release/CodexTrafficLightMXP_CodexTrafficLightApp.bundle/" \
@@ -86,6 +90,8 @@ if [[ "$NO_LAUNCH" != "1" ]]; then
   /bin/launchctl bootout "$DOMAIN" "$MONITOR_PLIST" >/dev/null 2>&1 || true
   /bin/launchctl bootstrap "$DOMAIN" "$MONITOR_PLIST"
 fi
+/bin/rm -f "$APP_ROOT/launch-agent-bridge.request" "$APP_ROOT/launch-agent-bridge-$VERSION.failed"
+(umask 077; printf '%s\n' "$VERSION" > "$APP_ROOT/launch-agent-bridge-$VERSION.done")
 
 echo "状态栏已安装：$VERSION"
 echo "自动更新：已启用，每 5 分钟检查"

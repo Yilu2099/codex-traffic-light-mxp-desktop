@@ -37,6 +37,35 @@ struct WanheStatusUpdater {
     static let appLabel = "com.codex.traffic-light-mxp"
 
     static func main() async {
+        if CommandLine.arguments.count == 4,
+           CommandLine.arguments[1] == "--bridge-launch-agents" {
+            let targetVersion = CommandLine.arguments[2]
+            do {
+                let result = try LaunchAgentUpdateBridge.run(
+                    targetVersion: targetVersion,
+                    previousTarget: CommandLine.arguments[3]
+                )
+                appendLog("launch agent bridge: \(result == .completed ? "completed" : "already completed")")
+                UpdateLedger().clear()
+                if let configuration = ClientUpdateConfiguration.load() {
+                    await report(configuration, version: targetVersion, status: "installed", error: nil)
+                }
+                return
+            } catch {
+                appendLog("launch agent bridge failed: \(error)")
+                UpdateLedger().recordFailure(version: targetVersion)
+                if let configuration = ClientUpdateConfiguration.load() {
+                    let actualVersion = installedVersion() ?? ClientVersion.current
+                    await report(
+                        configuration,
+                        version: actualVersion,
+                        status: "failed",
+                        error: "launch_agent_bridge_failed"
+                    )
+                }
+                Darwin.exit(73)
+            }
+        }
         guard let configuration = ClientUpdateConfiguration.load() else {
             appendLog("skip: configuration missing")
             return
@@ -130,18 +159,43 @@ struct WanheStatusUpdater {
         let current = appRoot.appendingPathComponent("current")
         let previousTarget = try? fileManager.destinationOfSymbolicLink(atPath: current.path)
         _ = run("/bin/launchctl", ["kill", "SIGTERM", "gui/\(getuid())/\(appLabel)"])
-        try swapCurrentLink(current: current, target: "releases/\(version)")
-        ensureCommandLinks(home: home)
-        _ = run("/bin/launchctl", ["kickstart", "-k", "gui/\(getuid())/\(appLabel)"])
+        do {
+            try swapCurrentLink(current: current, target: "releases/\(version)")
+            ensureCommandLinks(home: home)
+            // The plist path does not change, but the symlink now resolves to
+            // a binary with a new cdhash. Force a fresh registration so macOS
+            // launch constraints bind the new signed executable.
+            try MainAppLaunchAgentInstaller.install(
+                from: current,
+                home: home,
+                forceRebootstrap: true
+            )
+        } catch {
+            if let previousTarget {
+                restorePreviousRelease(current: current, target: previousTarget, home: home)
+            }
+            throw error
+        }
         try await Task.sleep(for: .seconds(3))
 
         let launchState = run("/bin/launchctl", ["print", "gui/\(getuid())/\(appLabel)"])
         guard launchState.status == 0, launchState.output.contains("state = running") else {
             if let previousTarget {
-                try? swapCurrentLink(current: current, target: previousTarget)
-                _ = run("/bin/launchctl", ["kickstart", "-k", "gui/\(getuid())/\(appLabel)"])
+                restorePreviousRelease(current: current, target: previousTarget, home: home)
             }
             throw UpdateFailure.launchFailed
+        }
+
+        // The updater cannot bootout its own launchd job while this process is
+        // still running. Ask the already-running monitor to invoke the newly
+        // installed binary after this process exits; that binary then refreshes
+        // the updater registration without a self-termination race.
+        if let previousTarget {
+            try writeLaunchAgentBridgeRequest(
+                appRoot: appRoot,
+                targetVersion: version,
+                previousTarget: previousTarget
+            )
         }
 
         appendLog("installed: \(ClientVersion.current) -> \(version) mandatory=\(manifest.mandatory)")
@@ -171,7 +225,7 @@ struct WanheStatusUpdater {
         let required = [
             "CodexTrafficLightApp", "codex-light-mxp", "codex-light-hook-mxp", "wanhe-status-updater",
             "codex-light-codex-monitor", "com.codex.traffic-light-codex-monitor.plist.template",
-            "com.codex.traffic-light-mxp.plist.template",
+            "com.codex.traffic-light-mxp.plist.template", "com.codex.traffic-light-mxp-updater.plist.template",
             "CodexTrafficLightMXP_CodexTrafficLightApp.bundle", "VERSION",
         ]
         for name in required where !fileManager.fileExists(atPath: payload.appendingPathComponent(name).path) {
@@ -203,39 +257,40 @@ struct WanheStatusUpdater {
         }
     }
 
+    static func writeLaunchAgentBridgeRequest(appRoot: URL, targetVersion: String, previousTarget: String) throws {
+        let request = appRoot.appendingPathComponent("launch-agent-bridge.request")
+        let body = "\(targetVersion)\n\(previousTarget)\n"
+        try body.write(to: request, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: request.path)
+    }
+
+    static func installedVersion(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> String? {
+        let version = home.appendingPathComponent(".wanhe-codex-token/app/current/VERSION")
+        return (try? String(contentsOf: version, encoding: .utf8))?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    static func restorePreviousRelease(current: URL, target: String, home: URL) {
+        do {
+            try swapCurrentLink(current: current, target: target)
+            ensureCommandLinks(home: home)
+            try MainAppLaunchAgentInstaller.install(
+                from: current,
+                home: home,
+                forceRebootstrap: true
+            )
+            appendLog("rollback: restored and re-registered \(rollbackVersion(target))")
+        } catch {
+            appendLog("rollback: launch agent restore failed \(error)")
+        }
+    }
+
     static func ensureMainAppLaunchAgent(home: URL = FileManager.default.homeDirectoryForCurrentUser) throws {
         let current = home.appendingPathComponent(".wanhe-codex-token/app/current", isDirectory: true)
         let templateURL = current.appendingPathComponent("com.codex.traffic-light-mxp.plist.template")
         guard FileManager.default.fileExists(atPath: templateURL.path) else { return }
-
-        let launchAgents = home.appendingPathComponent("Library/LaunchAgents", isDirectory: true)
-        try FileManager.default.createDirectory(at: launchAgents, withIntermediateDirectories: true)
-        let plistURL = launchAgents.appendingPathComponent("\(appLabel).plist")
-        let template = try String(contentsOf: templateURL, encoding: .utf8)
-        let rendered = template
-            .replacingOccurrences(of: "__APP_PATH__", with: current.appendingPathComponent("CodexTrafficLightApp").path)
-            .replacingOccurrences(of: "__HOME__", with: home.path)
-        let existing = try? String(contentsOf: plistURL, encoding: .utf8)
-        let domain = "gui/\(getuid())"
-
-        if existing != rendered {
-            try rendered.write(to: plistURL, atomically: true, encoding: .utf8)
-            _ = run("/bin/launchctl", ["bootout", "\(domain)/\(appLabel)"])
-            let bootstrap = run("/bin/launchctl", ["bootstrap", domain, plistURL.path])
-            guard bootstrap.status == 0 else {
-                throw UpdateFailure.commandFailed("launchctl bootstrap \(bootstrap.output)")
-            }
-            appendLog("repaired: main app launch agent KeepAlive enabled")
-            return
-        }
-
-        let state = run("/bin/launchctl", ["print", "\(domain)/\(appLabel)"])
-        if state.status != 0 {
-            let bootstrap = run("/bin/launchctl", ["bootstrap", domain, plistURL.path])
-            guard bootstrap.status == 0 else {
-                throw UpdateFailure.commandFailed("launchctl bootstrap \(bootstrap.output)")
-            }
-            appendLog("repaired: main app launch agent was missing and has been restored")
+        if try MainAppLaunchAgentInstaller.install(from: current, home: home) {
+            appendLog("repaired: main app launch agent registration refreshed")
         }
     }
 

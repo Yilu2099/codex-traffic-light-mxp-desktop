@@ -30,6 +30,7 @@ trap '/bin/rm -rf -- "$STAGING"' EXIT
 /bin/cp "$DIR/scripts/codex-light-codex-monitor" "$STAGING/codex-light-codex-monitor"
 /bin/cp "$DIR/com.codex.traffic-light-codex-monitor.plist.template" "$STAGING/com.codex.traffic-light-codex-monitor.plist.template"
 /bin/cp "$DIR/com.codex.traffic-light-mxp.plist.template" "$STAGING/com.codex.traffic-light-mxp.plist.template"
+/bin/cp "$DIR/com.codex.traffic-light-mxp-updater.plist.template" "$STAGING/com.codex.traffic-light-mxp-updater.plist.template"
 /bin/cp "$DIR/VERSION" "$STAGING/VERSION"
 /usr/bin/rsync -a --delete \
   "$DIR/.build/release/CodexTrafficLightMXP_CodexTrafficLightApp.bundle/" \

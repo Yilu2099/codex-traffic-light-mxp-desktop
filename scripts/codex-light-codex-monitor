@@ -1,6 +1,103 @@
 #!/bin/zsh
 set -euo pipefail
 
+APP_ROOT="$HOME/.wanhe-codex-token/app"
+CURRENT_RELEASE="$APP_ROOT/current"
+BRIDGE_REQUEST="$APP_ROOT/launch-agent-bridge.request"
+BRIDGE_LOCK="$APP_ROOT/launch-agent-bridge.lock"
+LEGACY_BRIDGE_VERSION="1.2.91"
+
+bridge_target_is_safe() {
+  local value="$1"
+  [[ "$value" =~ '^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$' ]]
+}
+
+bridge_previous_is_safe() {
+  local value="$1"
+  local version="${value#releases/}"
+  [[ "$value" == releases/* && "$version" != */* && "$version" != *..* && "$version" =~ '^[0-9A-Za-z.-]+$' ]]
+}
+
+write_bridge_request() {
+  local target_version="$1"
+  local previous_target="$2"
+  local next="$BRIDGE_REQUEST.next.$$"
+  /bin/mkdir -p "$APP_ROOT"
+  /bin/chmod 700 "$APP_ROOT" 2>/dev/null || true
+  (umask 077; printf '%s\n%s\n' "$target_version" "$previous_target" > "$next")
+  /bin/mv -f "$next" "$BRIDGE_REQUEST"
+}
+
+# 1.2.84/85 cannot write a handoff request. This new monitor is installed and
+# bootstrapped synchronously before their updater swaps `current`, so snapshot
+# the old release here. If scheduling happens too late, refuse to guess and let
+# the old updater roll back; a signed repair install is then required.
+if [[ ! -f "$BRIDGE_REQUEST"
+   && ! -f "$APP_ROOT/launch-agent-bridge-$LEGACY_BRIDGE_VERSION.done"
+   && ! -f "$APP_ROOT/launch-agent-bridge-$LEGACY_BRIDGE_VERSION.failed" ]]; then
+  legacy_previous="$(/usr/bin/readlink "$CURRENT_RELEASE" 2>/dev/null || true)"
+  legacy_current_version="$(/usr/bin/tr -d '[:space:]' < "$CURRENT_RELEASE/VERSION" 2>/dev/null || true)"
+  if [[ "$legacy_current_version" != "$LEGACY_BRIDGE_VERSION" ]] && bridge_previous_is_safe "$legacy_previous"; then
+    write_bridge_request "$LEGACY_BRIDGE_VERSION" "$legacy_previous"
+  fi
+fi
+
+run_launch_agent_bridge() (
+  local wait_polls="${1:-0}"
+  [[ -f "$BRIDGE_REQUEST" ]] || return 0
+  if ! /bin/mkdir "$BRIDGE_LOCK" 2>/dev/null; then
+    local lock_pid="$(/bin/cat "$BRIDGE_LOCK/pid" 2>/dev/null || true)"
+    if [[ "$lock_pid" == <-> ]] && /bin/kill -0 "$lock_pid" 2>/dev/null; then
+      return 0
+    fi
+    /bin/rm -f "$BRIDGE_LOCK/pid"
+    /bin/rmdir "$BRIDGE_LOCK" 2>/dev/null || return 0
+    /bin/mkdir "$BRIDGE_LOCK" 2>/dev/null || return 0
+  fi
+  (umask 077; printf '%s\n' "$$" > "$BRIDGE_LOCK/pid")
+  bridge_unlock() {
+    /bin/rm -f "$BRIDGE_LOCK/pid"
+    /bin/rmdir "$BRIDGE_LOCK" 2>/dev/null || true
+  }
+  trap bridge_unlock EXIT INT TERM
+
+  local target_version=""
+  local previous_target=""
+  {
+    IFS= read -r target_version
+    IFS= read -r previous_target
+  } < "$BRIDGE_REQUEST" || true
+  if ! bridge_target_is_safe "$target_version" || ! bridge_previous_is_safe "$previous_target"; then
+    /bin/mv -f "$BRIDGE_REQUEST" "$APP_ROOT/launch-agent-bridge.invalid.failed"
+    return 0
+  fi
+
+  local poll=0
+  local current_version=""
+  while (( poll <= wait_polls )); do
+    current_version="$(/usr/bin/tr -d '[:space:]' < "$CURRENT_RELEASE/VERSION" 2>/dev/null || true)"
+    [[ "$current_version" == "$target_version" ]] && break
+    (( poll == wait_polls )) && break
+    /bin/sleep 0.25
+    (( poll += 1 ))
+  done
+
+  if [[ "$current_version" == "$target_version" && -x "$CURRENT_RELEASE/wanhe-status-updater" ]]; then
+    if "$CURRENT_RELEASE/wanhe-status-updater" --bridge-launch-agents "$target_version" "$previous_target" >/dev/null 2>&1; then
+      /bin/rm -f "$BRIDGE_REQUEST"
+    else
+      # Activation already attempted a bounded rollback. Preserve one terminal
+      # marker for repair diagnostics and never enter a two-second reboot loop.
+      /bin/mv -f "$BRIDGE_REQUEST" "$APP_ROOT/launch-agent-bridge-$target_version.failed"
+    fi
+  fi
+)
+
+# Give the legacy updater up to 60 seconds to complete its verified download,
+# swap and activation. Later requests from the fixed updater are already on the
+# target release and are checked without blocking normal monitoring.
+run_launch_agent_bridge 240
+
 CODEX_HOME_DIR="${CODEX_HOME:-$HOME/.codex}"
 LOG_DB="${CODEX_LIGHT_LOG_DB:-$CODEX_HOME_DIR/logs_2.sqlite}"
 STATE_DB="${CODEX_LIGHT_STATE_DB:-$CODEX_HOME_DIR/state_5.sqlite}"
@@ -18,6 +115,7 @@ last_presence_event_ts=0
 last_task_event_ts=0
 
 while true; do
+  run_launch_agent_bridge 0
   now="$(date +%s)"
   if [[ -r "$LOG_DB" && -r "$STATE_DB" && -x "$STATE_CMD" ]]; then
     activity_row="$(
