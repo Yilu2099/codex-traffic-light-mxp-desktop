@@ -2564,14 +2564,14 @@ func testLaunchAgentBridgeWaitsForOldUpdaterAndRefreshesBothJobs() throws {
     let home = root.appendingPathComponent("home")
     let appRoot = home.appendingPathComponent(".wanhe-codex-token/app")
     let previous = appRoot.appendingPathComponent("releases/1.2.90")
-    let target = appRoot.appendingPathComponent("releases/1.2.91")
+    let target = appRoot.appendingPathComponent("releases/1.2.92")
     let launchAgents = home.appendingPathComponent("Library/LaunchAgents")
     try FileManager.default.createDirectory(at: previous, withIntermediateDirectories: true)
     try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
     try FileManager.default.createDirectory(at: launchAgents, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: root) }
-    try FileManager.default.createSymbolicLink(atPath: appRoot.appendingPathComponent("current").path, withDestinationPath: "releases/1.2.91")
-    try "1.2.91\n".write(to: target.appendingPathComponent("VERSION"), atomically: true, encoding: .utf8)
+    try FileManager.default.createSymbolicLink(atPath: appRoot.appendingPathComponent("current").path, withDestinationPath: "releases/1.2.92")
+    try "1.2.92\n".write(to: target.appendingPathComponent("VERSION"), atomically: true, encoding: .utf8)
     try "__APP_PATH__\n__HOME__\n".write(to: target.appendingPathComponent("com.codex.traffic-light-mxp.plist.template"), atomically: true, encoding: .utf8)
     try "__UPDATER_PATH__\n__HOME__\n".write(to: target.appendingPathComponent("com.codex.traffic-light-mxp-updater.plist.template"), atomically: true, encoding: .utf8)
     try "old main".write(to: launchAgents.appendingPathComponent("com.codex.traffic-light-mxp.plist"), atomically: true, encoding: .utf8)
@@ -2581,7 +2581,7 @@ func testLaunchAgentBridgeWaitsForOldUpdaterAndRefreshesBothJobs() throws {
     var updaterPolls = 0
     var pauses = 0
     let result = try LaunchAgentUpdateBridge.run(
-        targetVersion: "1.2.91",
+        targetVersion: "1.2.92",
         previousTarget: "releases/1.2.90",
         home: home,
         userID: 503,
@@ -2604,11 +2604,11 @@ func testLaunchAgentBridgeWaitsForOldUpdaterAndRefreshesBothJobs() throws {
     let mainBootout = commands.firstIndex(of: ["bootout", "gui/503/com.codex.traffic-light-mxp"])
     let updaterBootout = commands.firstIndex(of: ["bootout", "gui/503/com.codex.traffic-light-mxp-updater"])
     try expect(mainBootout != nil && updaterBootout != nil && mainBootout! < updaterBootout!, "main must be repaired before the updater registration")
-    try expect(FileManager.default.fileExists(atPath: appRoot.appendingPathComponent("launch-agent-bridge-1.2.91.done").path), "successful bridge should persist an idempotency marker")
+    try expect(FileManager.default.fileExists(atPath: appRoot.appendingPathComponent("launch-agent-bridge-1.2.92.done").path), "successful bridge should persist an idempotency marker")
 
     commands.removeAll()
     let repeated = try LaunchAgentUpdateBridge.run(
-        targetVersion: "1.2.91",
+        targetVersion: "1.2.92",
         previousTarget: "releases/1.2.90",
         home: home,
         userID: 503,
@@ -2623,15 +2623,15 @@ func testLaunchAgentBridgeRollsBackAndRejectsLateUnsafeCapture() throws {
     let home = root.appendingPathComponent("home")
     let appRoot = home.appendingPathComponent(".wanhe-codex-token/app")
     let previous = appRoot.appendingPathComponent("releases/1.2.90")
-    let target = appRoot.appendingPathComponent("releases/1.2.91")
+    let target = appRoot.appendingPathComponent("releases/1.2.92")
     let launchAgents = home.appendingPathComponent("Library/LaunchAgents")
     try FileManager.default.createDirectory(at: previous, withIntermediateDirectories: true)
     try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
     try FileManager.default.createDirectory(at: launchAgents, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: root) }
     let current = appRoot.appendingPathComponent("current")
-    try FileManager.default.createSymbolicLink(atPath: current.path, withDestinationPath: "releases/1.2.91")
-    try "1.2.91".write(to: target.appendingPathComponent("VERSION"), atomically: true, encoding: .utf8)
+    try FileManager.default.createSymbolicLink(atPath: current.path, withDestinationPath: "releases/1.2.92")
+    try "1.2.92".write(to: target.appendingPathComponent("VERSION"), atomically: true, encoding: .utf8)
     try "__APP_PATH__".write(to: target.appendingPathComponent("com.codex.traffic-light-mxp.plist.template"), atomically: true, encoding: .utf8)
     try "__UPDATER_PATH__".write(to: target.appendingPathComponent("com.codex.traffic-light-mxp-updater.plist.template"), atomically: true, encoding: .utf8)
     try "stable main".write(to: launchAgents.appendingPathComponent("com.codex.traffic-light-mxp.plist"), atomically: true, encoding: .utf8)
@@ -2639,7 +2639,7 @@ func testLaunchAgentBridgeRollsBackAndRejectsLateUnsafeCapture() throws {
     var mainBootstrapCount = 0
     do {
         _ = try LaunchAgentUpdateBridge.run(
-            targetVersion: "1.2.91",
+            targetVersion: "1.2.92",
             previousTarget: "releases/1.2.90",
             home: home,
             userID: 504,
@@ -2659,12 +2659,12 @@ func testLaunchAgentBridgeRollsBackAndRejectsLateUnsafeCapture() throws {
     try expectEqual(mainBootstrapCount, 2, "rollback must bootstrap the old main registration after the new one fails")
 
     try FileManager.default.removeItem(at: current)
-    try FileManager.default.createSymbolicLink(atPath: current.path, withDestinationPath: "releases/1.2.91")
+    try FileManager.default.createSymbolicLink(atPath: current.path, withDestinationPath: "releases/1.2.92")
     var updaterBootstrapCount = 0
     var rollbackMainBootstraps = 0
     do {
         _ = try LaunchAgentUpdateBridge.run(
-            targetVersion: "1.2.91",
+            targetVersion: "1.2.92",
             previousTarget: "releases/1.2.90",
             home: home,
             userID: 504,
@@ -2693,13 +2693,13 @@ func testLaunchAgentBridgeRollsBackAndRejectsLateUnsafeCapture() throws {
     try expectEqual(try FileManager.default.destinationOfSymbolicLink(atPath: current.path), "releases/1.2.90", "updater bootstrap failure must restore the old current target")
     try expectEqual(updaterBootstrapCount, 2, "rollback must rebootstrap the old updater after the new updater bootstrap fails")
     try expectEqual(rollbackMainBootstraps, 2, "main activation and rollback must each bootstrap once")
-    try expect(!FileManager.default.fileExists(atPath: appRoot.appendingPathComponent("launch-agent-bridge-1.2.91.done").path), "failed bridge must never write a completion marker")
+    try expect(!FileManager.default.fileExists(atPath: appRoot.appendingPathComponent("launch-agent-bridge-1.2.92.done").path), "failed bridge must never write a completion marker")
 
     var touchedLaunchd = false
     do {
         _ = try LaunchAgentUpdateBridge.run(
-            targetVersion: "1.2.91",
-            previousTarget: "releases/1.2.91",
+            targetVersion: "1.2.92",
+            previousTarget: "releases/1.2.92",
             home: home,
             userID: 504,
             runLaunchctl: { _ in touchedLaunchd = true; return MainAppLaunchctlResult(status: 0) }
@@ -2708,6 +2708,119 @@ func testLaunchAgentBridgeRollsBackAndRejectsLateUnsafeCapture() throws {
     } catch LaunchAgentUpdateBridgeError.unsafePreviousTarget {
         try expect(!touchedLaunchd, "unsafe late capture must not mutate launchd state")
     }
+}
+
+func testLegacyBridgeRequestPreSwapUsesActualCurrentRelease() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("legacy-bridge-pre-swap-\(UUID().uuidString)")
+    let home = root.appendingPathComponent("home")
+    let appRoot = home.appendingPathComponent(".wanhe-codex-token/app")
+    let releases = appRoot.appendingPathComponent("releases")
+    defer { try? FileManager.default.removeItem(at: root) }
+    func makeRelease(_ version: String) throws -> URL {
+        let release = releases.appendingPathComponent(version)
+        try FileManager.default.createDirectory(at: release, withIntermediateDirectories: true)
+        try version.write(to: release.appendingPathComponent("VERSION"), atomically: true, encoding: .utf8)
+        try "main".write(to: release.appendingPathComponent("CodexTrafficLightApp"), atomically: true, encoding: .utf8)
+        try "updater".write(to: release.appendingPathComponent("wanhe-status-updater"), atomically: true, encoding: .utf8)
+        return release
+    }
+    _ = try makeRelease("1.2.84")
+    _ = try makeRelease("1.2.92")
+    try FileManager.default.createSymbolicLink(atPath: appRoot.appendingPathComponent("current").path, withDestinationPath: "releases/1.2.84")
+    var inspectedProcess = false
+    let previous = try LegacyLaunchAgentBridgeRequest.prepare(
+        targetVersion: "1.2.92",
+        home: home,
+        runningUpdaterExecutable: { inspectedProcess = true; return nil }
+    )
+    try expectEqual(previous, "releases/1.2.84", "pre-swap preparation must preserve the actual current target")
+    try expect(!inspectedProcess, "pre-swap preparation should not need process discovery")
+    let request = try String(contentsOf: appRoot.appendingPathComponent("launch-agent-bridge.request"), encoding: .utf8)
+    try expectEqual(request, "1.2.92\nreleases/1.2.84\n", "pre-swap request should contain only target and rollback metadata")
+    let permissions = try FileManager.default.attributesOfItem(atPath: appRoot.appendingPathComponent("launch-agent-bridge.request").path)[.posixPermissions] as? NSNumber
+    try expectEqual(permissions?.intValue, 0o600, "bridge request must be private to the local user")
+}
+
+func testLegacyBridgeRequestPostSwapUsesRunningUpdaterVnodeOnly() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("legacy-bridge-post-swap-\(UUID().uuidString)")
+    let home = root.appendingPathComponent("home")
+    let appRoot = home.appendingPathComponent(".wanhe-codex-token/app")
+    let releases = appRoot.appendingPathComponent("releases")
+    defer { try? FileManager.default.removeItem(at: root) }
+    func makeRelease(_ version: String) throws -> URL {
+        let release = releases.appendingPathComponent(version)
+        try FileManager.default.createDirectory(at: release, withIntermediateDirectories: true)
+        try version.write(to: release.appendingPathComponent("VERSION"), atomically: true, encoding: .utf8)
+        try "main".write(to: release.appendingPathComponent("CodexTrafficLightApp"), atomically: true, encoding: .utf8)
+        try "updater".write(to: release.appendingPathComponent("wanhe-status-updater"), atomically: true, encoding: .utf8)
+        return release
+    }
+    let actualOld = try makeRelease("1.2.84")
+    _ = try makeRelease("1.2.85")
+    _ = try makeRelease("1.2.90")
+    _ = try makeRelease("1.2.92")
+    try FileManager.default.createDirectory(at: releases.appendingPathComponent("failed-1.2.91-123"), withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: releases.appendingPathComponent("replaced-1.2.91"), withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: releases.appendingPathComponent("staging-1.2.91"), withIntermediateDirectories: true)
+    try FileManager.default.createSymbolicLink(atPath: appRoot.appendingPathComponent("current").path, withDestinationPath: "releases/1.2.92")
+
+    let previous = try LegacyLaunchAgentBridgeRequest.prepare(
+        targetVersion: "1.2.92",
+        home: home,
+        runningUpdaterExecutable: { actualOld.appendingPathComponent("wanhe-status-updater") }
+    )
+    try expectEqual(previous, "releases/1.2.84", "post-swap preparation must use the running 1.2.84 updater vnode, not newer disk leftovers")
+
+    try FileManager.default.removeItem(at: appRoot.appendingPathComponent("launch-agent-bridge.request"))
+    do {
+        _ = try LegacyLaunchAgentBridgeRequest.prepare(
+            targetVersion: "1.2.92",
+            home: home,
+            runningUpdaterExecutable: { nil }
+        )
+        throw TestFailure(description: "post-swap preparation without an authoritative process path must fail")
+    } catch LaunchAgentUpdateBridgeError.unsafePreviousTarget {
+        try expect(!FileManager.default.fileExists(atPath: appRoot.appendingPathComponent("launch-agent-bridge.request").path), "failed discovery must not create a guessed request")
+    }
+}
+
+func testLegacyBridgeRequestSkipsSelfBridgingUpdater() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("legacy-bridge-self-bridging-\(UUID().uuidString)")
+    let home = root.appendingPathComponent("home")
+    let appRoot = home.appendingPathComponent(".wanhe-codex-token/app")
+    let releases = appRoot.appendingPathComponent("releases")
+    defer { try? FileManager.default.removeItem(at: root) }
+    func makeRelease(_ version: String) throws -> URL {
+        let release = releases.appendingPathComponent(version)
+        try FileManager.default.createDirectory(at: release, withIntermediateDirectories: true)
+        try version.write(to: release.appendingPathComponent("VERSION"), atomically: true, encoding: .utf8)
+        try "main".write(to: release.appendingPathComponent("CodexTrafficLightApp"), atomically: true, encoding: .utf8)
+        try "updater".write(to: release.appendingPathComponent("wanhe-status-updater"), atomically: true, encoding: .utf8)
+        return release
+    }
+    let selfBridging = try makeRelease("1.2.91")
+    _ = try makeRelease("1.2.92")
+    let current = appRoot.appendingPathComponent("current")
+    try FileManager.default.createSymbolicLink(atPath: current.path, withDestinationPath: "releases/1.2.91")
+    var inspectedProcess = false
+    let preSwap = try LegacyLaunchAgentBridgeRequest.prepare(
+        targetVersion: "1.2.92",
+        home: home,
+        runningUpdaterExecutable: { inspectedProcess = true; return selfBridging.appendingPathComponent("wanhe-status-updater") }
+    )
+    try expectEqual(preSwap, nil, "1.2.91 predecessor must use its own request path instead of the legacy bridge")
+    try expect(!inspectedProcess, "pre-swap 1.2.91 skip should not inspect process state")
+    try expect(!FileManager.default.fileExists(atPath: appRoot.appendingPathComponent("launch-agent-bridge.request").path), "1.2.91 skip must not prebuild a competing request")
+
+    try FileManager.default.removeItem(at: current)
+    try FileManager.default.createSymbolicLink(atPath: current.path, withDestinationPath: "releases/1.2.92")
+    let postSwap = try LegacyLaunchAgentBridgeRequest.prepare(
+        targetVersion: "1.2.92",
+        home: home,
+        runningUpdaterExecutable: { selfBridging.appendingPathComponent("wanhe-status-updater") }
+    )
+    try expectEqual(postSwap, nil, "post-swap 1.2.91 vnode must still defer to the fixed updater")
+    try expect(!FileManager.default.fileExists(atPath: appRoot.appendingPathComponent("launch-agent-bridge.request").path), "post-swap skip must not race the fixed updater's request")
 }
 
 func testOfficialUsageRefreshPolicyTracksUTCSettlement() throws {
@@ -2835,6 +2948,9 @@ let tests: [(String, () throws -> Void)] = [
     ("main launch agent repairs missing jobs", testMainAppLaunchAgentRepairsMissingJobAndSurfacesBootstrapFailure),
     ("launch agent bridge waits and refreshes both jobs", testLaunchAgentBridgeWaitsForOldUpdaterAndRefreshesBothJobs),
     ("launch agent bridge rolls back safely", testLaunchAgentBridgeRollsBackAndRejectsLateUnsafeCapture),
+    ("legacy bridge request handles pre-swap startup", testLegacyBridgeRequestPreSwapUsesActualCurrentRelease),
+    ("legacy bridge request handles post-swap startup", testLegacyBridgeRequestPostSwapUsesRunningUpdaterVnodeOnly),
+    ("legacy bridge skips self-bridging updater", testLegacyBridgeRequestSkipsSelfBridgingUpdater),
     ("client version comparison", testClientVersionComparison),
     ("client update signature verification", testClientUpdateVerifierAcceptsReleaseSignature),
     ("client update defaults to five minutes", testClientUpdateManifestDefaultsToFiveMinutes),

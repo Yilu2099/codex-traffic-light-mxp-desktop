@@ -5,7 +5,8 @@ APP_ROOT="$HOME/.wanhe-codex-token/app"
 CURRENT_RELEASE="$APP_ROOT/current"
 BRIDGE_REQUEST="$APP_ROOT/launch-agent-bridge.request"
 BRIDGE_LOCK="$APP_ROOT/launch-agent-bridge.lock"
-LEGACY_BRIDGE_VERSION="1.2.91"
+LEGACY_BRIDGE_VERSION="1.2.92"
+LEGACY_BRIDGE_HELPER="$APP_ROOT/releases/$LEGACY_BRIDGE_VERSION/wanhe-status-updater"
 
 bridge_target_is_safe() {
   local value="$1"
@@ -18,27 +19,17 @@ bridge_previous_is_safe() {
   [[ "$value" == releases/* && "$version" != */* && "$version" != *..* && "$version" =~ '^[0-9A-Za-z.-]+$' ]]
 }
 
-write_bridge_request() {
-  local target_version="$1"
-  local previous_target="$2"
-  local next="$BRIDGE_REQUEST.next.$$"
-  /bin/mkdir -p "$APP_ROOT"
-  /bin/chmod 700 "$APP_ROOT" 2>/dev/null || true
-  (umask 077; printf '%s\n%s\n' "$target_version" "$previous_target" > "$next")
-  /bin/mv -f "$next" "$BRIDGE_REQUEST"
-}
-
-# 1.2.84/85 cannot write a handoff request. This new monitor is installed and
-# bootstrapped synchronously before their updater swaps `current`, so snapshot
-# the old release here. If scheduling happens too late, refuse to guess and let
-# the old updater roll back; a signed repair install is then required.
+# 1.2.84/85 cannot write a handoff request. Invoke the helper from the verified
+# target release itself, so this works whether the monitor starts before or
+# after `current` changes. Post-swap discovery accepts only the executable vnode
+# of the still-running predecessor updater; it never guesses from disk entries.
 if [[ ! -f "$BRIDGE_REQUEST"
    && ! -f "$APP_ROOT/launch-agent-bridge-$LEGACY_BRIDGE_VERSION.done"
    && ! -f "$APP_ROOT/launch-agent-bridge-$LEGACY_BRIDGE_VERSION.failed" ]]; then
-  legacy_previous="$(/usr/bin/readlink "$CURRENT_RELEASE" 2>/dev/null || true)"
-  legacy_current_version="$(/usr/bin/tr -d '[:space:]' < "$CURRENT_RELEASE/VERSION" 2>/dev/null || true)"
-  if [[ "$legacy_current_version" != "$LEGACY_BRIDGE_VERSION" ]] && bridge_previous_is_safe "$legacy_previous"; then
-    write_bridge_request "$LEGACY_BRIDGE_VERSION" "$legacy_previous"
+  if [[ -x "$LEGACY_BRIDGE_HELPER" ]]; then
+    if ! "$LEGACY_BRIDGE_HELPER" --prepare-legacy-launch-agent-bridge "$LEGACY_BRIDGE_VERSION" >/dev/null 2>&1; then
+      (umask 077; printf '%s\n' "$LEGACY_BRIDGE_VERSION" > "$APP_ROOT/launch-agent-bridge-$LEGACY_BRIDGE_VERSION.failed")
+    fi
   fi
 fi
 

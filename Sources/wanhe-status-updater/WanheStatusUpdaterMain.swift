@@ -37,6 +37,23 @@ struct WanheStatusUpdater {
     static let appLabel = "com.codex.traffic-light-mxp"
 
     static func main() async {
+        if CommandLine.arguments.count == 3,
+           CommandLine.arguments[1] == "--prepare-legacy-launch-agent-bridge" {
+            do {
+                let previous = try LegacyLaunchAgentBridgeRequest.prepare(
+                    targetVersion: CommandLine.arguments[2]
+                )
+                if let previous {
+                    appendLog("legacy launch agent bridge prepared from \(LaunchAgentUpdateBridge.rollbackVersion(previous))")
+                } else {
+                    appendLog("legacy launch agent bridge skipped for self-bridging predecessor")
+                }
+                return
+            } catch {
+                appendLog("legacy launch agent bridge preparation failed: \(error)")
+                Darwin.exit(74)
+            }
+        }
         if CommandLine.arguments.count == 4,
            CommandLine.arguments[1] == "--bridge-launch-agents" {
             let targetVersion = CommandLine.arguments[2]
