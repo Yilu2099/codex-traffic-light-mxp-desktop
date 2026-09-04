@@ -5,7 +5,7 @@ APP_ROOT="$HOME/.wanhe-codex-token/app"
 CURRENT_RELEASE="$APP_ROOT/current"
 BRIDGE_REQUEST="$APP_ROOT/launch-agent-bridge.request"
 BRIDGE_LOCK="$APP_ROOT/launch-agent-bridge.lock"
-LEGACY_BRIDGE_VERSION="1.2.93"
+LEGACY_BRIDGE_VERSION="1.2.94"
 LEGACY_BRIDGE_HELPER="$APP_ROOT/releases/$LEGACY_BRIDGE_VERSION/wanhe-status-updater"
 
 bridge_target_is_safe() {
@@ -19,22 +19,35 @@ bridge_previous_is_safe() {
   [[ "$value" == releases/* && "$version" != */* && "$version" != *..* && "$version" =~ '^[0-9A-Za-z.-]+$' ]]
 }
 
-# 1.2.84/85 cannot write a handoff request. Invoke the helper from the verified
-# target release itself, so this works whether the monitor starts before or
-# after `current` changes. Post-swap discovery accepts only the executable vnode
-# of the still-running predecessor updater; it never guesses from disk entries.
-if [[ ! -f "$BRIDGE_REQUEST"
-   && ! -f "$APP_ROOT/launch-agent-bridge-$LEGACY_BRIDGE_VERSION.done"
-   && ! -f "$APP_ROOT/launch-agent-bridge-$LEGACY_BRIDGE_VERSION.failed" ]]; then
-  if [[ -x "$LEGACY_BRIDGE_HELPER" ]]; then
+prepare_legacy_bridge_request() {
+  # A failed prior release can leave the generic request behind. Never feed it
+  # to a different embedded helper; archive it, then prepare this release in the
+  # same pass. The per-version done/failed markers remain terminal and are not
+  # overwritten by the loop.
+  if [[ -f "$BRIDGE_REQUEST" ]]; then
+    local existing_target=""
+    IFS= read -r existing_target < "$BRIDGE_REQUEST" || true
+    if ! bridge_target_is_safe "$existing_target" || [[ "$existing_target" != "$LEGACY_BRIDGE_VERSION" ]]; then
+      /bin/mv -f "$BRIDGE_REQUEST" "$APP_ROOT/launch-agent-bridge-stale.failed"
+    fi
+  fi
+
+  # 1.2.84/85 cannot write a handoff request. Invoke the helper from the
+  # verified target release itself. If the release has not appeared yet, the
+  # monitor loop retries without creating a false terminal marker.
+  if [[ ! -f "$BRIDGE_REQUEST"
+     && ! -f "$APP_ROOT/launch-agent-bridge-$LEGACY_BRIDGE_VERSION.done"
+     && ! -f "$APP_ROOT/launch-agent-bridge-$LEGACY_BRIDGE_VERSION.failed"
+     && -x "$LEGACY_BRIDGE_HELPER" ]]; then
     if ! "$LEGACY_BRIDGE_HELPER" --prepare-legacy-launch-agent-bridge "$LEGACY_BRIDGE_VERSION" >/dev/null 2>&1; then
       (umask 077; printf '%s\n' "$LEGACY_BRIDGE_VERSION" > "$APP_ROOT/launch-agent-bridge-$LEGACY_BRIDGE_VERSION.failed")
     fi
   fi
-fi
+}
+
+prepare_legacy_bridge_request
 
 run_launch_agent_bridge() (
-  local wait_polls="${1:-0}"
   [[ -f "$BRIDGE_REQUEST" ]] || return 0
   if ! /bin/mkdir "$BRIDGE_LOCK" 2>/dev/null; then
     local lock_pid="$(/bin/cat "$BRIDGE_LOCK/pid" 2>/dev/null || true)"
@@ -63,18 +76,11 @@ run_launch_agent_bridge() (
     return 0
   fi
 
-  local poll=0
-  local current_version=""
-  while (( poll <= wait_polls )); do
-    current_version="$(/usr/bin/tr -d '[:space:]' < "$CURRENT_RELEASE/VERSION" 2>/dev/null || true)"
-    [[ "$current_version" == "$target_version" ]] && break
-    (( poll == wait_polls )) && break
-    /bin/sleep 0.25
-    (( poll += 1 ))
-  done
-
-  if [[ "$current_version" == "$target_version" && -x "$CURRENT_RELEASE/wanhe-status-updater" ]]; then
-    if "$CURRENT_RELEASE/wanhe-status-updater" --bridge-launch-agents "$target_version" "$previous_target" >/dev/null 2>&1; then
+  # Always invoke the signed helper from the target release. It can safely
+  # finish from either side of the legacy updater's short swap/rollback window,
+  # so a late-scheduled monitor cannot permanently miss the target symlink.
+  if [[ -x "$LEGACY_BRIDGE_HELPER" ]]; then
+    if "$LEGACY_BRIDGE_HELPER" --bridge-launch-agents "$target_version" "$previous_target" >/dev/null 2>&1; then
       /bin/rm -f "$BRIDGE_REQUEST"
     else
       # Activation already attempted a bounded rollback. Preserve one terminal
@@ -84,9 +90,8 @@ run_launch_agent_bridge() (
   fi
 )
 
-# Bound the handoff wait. Legacy jobs are safely taken over after the verified
-# swap; later self-bridging updater requests wait only for their owner to exit.
-run_launch_agent_bridge 240
+# The helper owns its own launchctl and overall deadlines.
+run_launch_agent_bridge
 
 CODEX_HOME_DIR="${CODEX_HOME:-$HOME/.codex}"
 LOG_DB="${CODEX_LIGHT_LOG_DB:-$CODEX_HOME_DIR/logs_2.sqlite}"
@@ -105,7 +110,8 @@ last_presence_event_ts=0
 last_task_event_ts=0
 
 while true; do
-  run_launch_agent_bridge 0
+  prepare_legacy_bridge_request
+  run_launch_agent_bridge
   now="$(date +%s)"
   if [[ -r "$LOG_DB" && -r "$STATE_DB" && -x "$STATE_CMD" ]]; then
     activity_row="$(

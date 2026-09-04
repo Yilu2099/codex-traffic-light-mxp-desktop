@@ -121,6 +121,34 @@ public enum LegacyUpdaterProcessGroupTakeover {
     }
 }
 
+public enum LegacyIdleUpdaterServiceRemoval {
+    public static func run(
+        installedPlist: URL,
+        service: String,
+        maximumPolls: Int = 40,
+        pause: () -> Void = { Thread.sleep(forTimeInterval: 0.05) },
+        runLaunchctl: ([String]) -> MainAppLaunchctlResult
+    ) throws {
+        guard let plistData = try? Data(contentsOf: installedPlist),
+              let plistObject = try? PropertyListSerialization.propertyList(from: plistData, options: [], format: nil),
+              let plistDictionary = plistObject as? [String: Any],
+              plistDictionary["Label"] as? String == UpdaterLaunchAgentInstaller.label,
+              plistDictionary["AbandonProcessGroup"] as? Bool != true else {
+            throw LaunchAgentUpdateBridgeError.legacyUpdaterTakeoverFailed
+        }
+        for poll in 0...max(0, maximumPolls) {
+            let state = runLaunchctl(["print", service])
+            if state.status != 0, launchctlSaysServiceIsAbsent(state.output) { return }
+            guard state.status == 0, !state.output.contains("state = running") else {
+                throw LaunchAgentUpdateBridgeError.legacyUpdaterServiceStillRegistered
+            }
+            _ = runLaunchctl(["bootout", service])
+            if poll < maximumPolls { pause() }
+        }
+        throw LaunchAgentUpdateBridgeError.legacyUpdaterServiceStillRegistered
+    }
+}
+
 public enum LegacyLaunchAgentBridgeRequest {
     private static let firstSelfBridgingUpdaterVersion = "1.2.91"
 
@@ -174,8 +202,8 @@ public enum LegacyLaunchAgentBridgeRequest {
             } else {
                 executable = runningUpdaterProcess(userID: userID)?.executable
             }
-            guard let executable,
-                  executable.lastPathComponent == "wanhe-status-updater" else {
+            guard let executable else { return nil }
+            guard executable.lastPathComponent == "wanhe-status-updater" else {
                 throw LaunchAgentUpdateBridgeError.unsafePreviousTarget
             }
             let predecessorRelease = executable.deletingLastPathComponent().standardizedFileURL
@@ -277,6 +305,96 @@ public enum LaunchAgentUpdateBridge {
         (symlinkTarget as NSString).lastPathComponent
     }
 
+    /// Repairs the target updater registration when the legacy updater has
+    /// already exited successfully before the monitor was scheduled. No
+    /// predecessor is guessed and `current` is never changed on this path.
+    @discardableResult
+    public static func repairCurrentUpdaterIfIdle(
+        targetVersion: String,
+        home: URL = FileManager.default.homeDirectoryForCurrentUser,
+        userID: uid_t = getuid(),
+        maximumDuration: TimeInterval = 45,
+        pause: () -> Void = { Thread.sleep(forTimeInterval: 0.25) },
+        runLaunchctl: (([String]) -> MainAppLaunchctlResult)? = nil
+    ) throws -> Bool {
+        guard targetVersion == ClientVersion.current else {
+            throw LaunchAgentUpdateBridgeError.targetVersionNotAllowed
+        }
+        let appRoot = home.appendingPathComponent(".wanhe-codex-token/app", isDirectory: true)
+        let current = appRoot.appendingPathComponent("current", isDirectory: true)
+        let expectedTarget = "releases/\(targetVersion)"
+        guard (try? FileManager.default.destinationOfSymbolicLink(atPath: current.path)) == expectedTarget else {
+            return false
+        }
+        let targetRelease = appRoot.appendingPathComponent(expectedTarget, isDirectory: true)
+        let targetValues = try? targetRelease.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+        guard targetValues?.isDirectory == true,
+              targetValues?.isSymbolicLink != true,
+              FileManager.default.fileExists(atPath: targetRelease.appendingPathComponent("CodexTrafficLightApp").path),
+              FileManager.default.fileExists(atPath: targetRelease.appendingPathComponent("wanhe-status-updater").path) else {
+            throw LaunchAgentUpdateBridgeError.packagedVersionMismatch
+        }
+        try assertCurrentTarget(current, expectedTarget: expectedTarget, targetVersion: targetVersion)
+        let deadline = Date().addingTimeInterval(max(1, maximumDuration))
+        let runner = runLaunchctl ?? { arguments in
+            boundedProcessResult(
+                executable: "/bin/launchctl",
+                arguments: arguments,
+                timeout: min(5, max(0.1, deadline.timeIntervalSinceNow))
+            )
+        }
+        let mainService = "gui/\(userID)/\(MainAppLaunchAgentInstaller.label)"
+        let updaterService = "gui/\(userID)/\(UpdaterLaunchAgentInstaller.label)"
+        let mainState = runner(["print", mainService])
+        guard mainState.status == 0, mainState.output.contains("state = running") else {
+            throw LaunchAgentUpdateBridgeError.mainDidNotStayRunning
+        }
+
+        let initialUpdaterState = runner(["print", updaterService])
+        if initialUpdaterState.status == 0, initialUpdaterState.output.contains("state = running") {
+            return false
+        }
+        if !(initialUpdaterState.status != 0 && launchctlSaysServiceIsAbsent(initialUpdaterState.output)) {
+            guard initialUpdaterState.status == 0 else {
+                throw LaunchAgentUpdateBridgeError.legacyUpdaterServiceStillRegistered
+            }
+            try LegacyIdleUpdaterServiceRemoval.run(
+                installedPlist: home.appendingPathComponent("Library/LaunchAgents/\(UpdaterLaunchAgentInstaller.label).plist"),
+                service: updaterService,
+                pause: pause,
+                runLaunchctl: runner
+            )
+        }
+
+        try ensureBefore(deadline)
+        try UpdaterLaunchAgentInstaller.install(
+            from: current,
+            home: home,
+            userID: userID,
+            forceRebootstrap: true,
+            runLaunchctl: runner
+        )
+        while true {
+            try ensureBefore(deadline)
+            try assertCurrentTarget(current, expectedTarget: expectedTarget, targetVersion: targetVersion)
+            switch updaterLaunchState(runner(["print", updaterService])) {
+            case .completedSuccessfully:
+                let finalMainState = runner(["print", mainService])
+                guard finalMainState.status == 0, finalMainState.output.contains("state = running") else {
+                    throw LaunchAgentUpdateBridgeError.mainDidNotStayRunning
+                }
+                let marker = appRoot.appendingPathComponent("launch-agent-bridge-\(targetVersion).done")
+                try targetVersion.write(to: marker, atomically: true, encoding: .utf8)
+                try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: marker.path)
+                return true
+            case .completedWithFailure:
+                throw LaunchAgentUpdateBridgeError.updaterDidNotRunCleanly
+            case .pending:
+                pause()
+            }
+        }
+    }
+
     @discardableResult
     public static func run(
         targetVersion: String,
@@ -285,6 +403,7 @@ public enum LaunchAgentUpdateBridge {
         userID: uid_t = getuid(),
         maximumUpdaterPolls: Int = 240,
         maximumDuration: TimeInterval = 75,
+        allowActivationFromPrevious: Bool = false,
         pause: () -> Void = { Thread.sleep(forTimeInterval: 0.25) },
         runLaunchctl: (([String]) -> MainAppLaunchctlResult)? = nil,
         takeOverLegacyUpdater: ((String) throws -> Void)? = nil
@@ -300,12 +419,22 @@ public enum LaunchAgentUpdateBridge {
         let appRoot = home.appendingPathComponent(".wanhe-codex-token/app", isDirectory: true)
         let current = appRoot.appendingPathComponent("current")
         let expectedTarget = "releases/\(targetVersion)"
-        guard (try? fileManager.destinationOfSymbolicLink(atPath: current.path)) == expectedTarget else {
+        let previousVersion = rollbackVersion(previousTarget)
+        let legacyUpdaterTakeoverRequired = ClientVersion.compare(previousVersion, "1.2.91") == .orderedAscending
+        let initialCurrentTarget = try? fileManager.destinationOfSymbolicLink(atPath: current.path)
+        guard initialCurrentTarget == expectedTarget
+                || (allowActivationFromPrevious && legacyUpdaterTakeoverRequired && initialCurrentTarget == previousTarget) else {
             throw LaunchAgentUpdateBridgeError.currentTargetMismatch
         }
-        let packagedVersion = (try? String(contentsOf: current.appendingPathComponent("VERSION"), encoding: .utf8))?
+        let targetRelease = appRoot.appendingPathComponent(expectedTarget, isDirectory: true)
+        let targetValues = try? targetRelease.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+        let packagedVersion = (try? String(contentsOf: targetRelease.appendingPathComponent("VERSION"), encoding: .utf8))?
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard packagedVersion == targetVersion else {
+        guard targetValues?.isDirectory == true,
+              targetValues?.isSymbolicLink != true,
+              packagedVersion == targetVersion,
+              fileManager.fileExists(atPath: targetRelease.appendingPathComponent("CodexTrafficLightApp").path),
+              fileManager.fileExists(atPath: targetRelease.appendingPathComponent("wanhe-status-updater").path) else {
             throw LaunchAgentUpdateBridgeError.packagedVersionMismatch
         }
         let previousRelease = appRoot.appendingPathComponent(previousTarget, isDirectory: true).standardizedFileURL
@@ -328,8 +457,6 @@ public enum LaunchAgentUpdateBridge {
                 timeout: min(5, remaining)
             )
         }
-        let previousVersion = rollbackVersion(previousTarget)
-        let legacyUpdaterTakeoverRequired = ClientVersion.compare(previousVersion, "1.2.91") == .orderedAscending
         var legacyUpdaterWasTakenOver = false
         do {
             try ensureBefore(activationDeadline)
@@ -347,8 +474,14 @@ public enum LaunchAgentUpdateBridge {
                 legacyUpdaterWasTakenOver = true
             }
             if legacyUpdaterWasTakenOver {
-                try assertCurrentTarget(current, expectedTarget: expectedTarget, targetVersion: targetVersion)
+                let targetAfterTakeover = try? fileManager.destinationOfSymbolicLink(atPath: current.path)
+                if targetAfterTakeover == previousTarget {
+                    try swapCurrentLink(current: current, target: expectedTarget)
+                } else if targetAfterTakeover != expectedTarget {
+                    throw LaunchAgentUpdateBridgeError.currentTargetMismatch
+                }
             }
+            try assertCurrentTarget(current, expectedTarget: expectedTarget, targetVersion: targetVersion)
             try MainAppLaunchAgentInstaller.install(
                 from: current,
                 home: home,
@@ -548,15 +681,20 @@ public enum LaunchAgentUpdateBridge {
         userID: uid_t,
         runLaunchctl: ([String]) -> MainAppLaunchctlResult
     ) throws {
-        guard let snapshot = LegacyLaunchAgentBridgeRequest.runningUpdaterProcess(userID: userID) else {
-            throw LaunchAgentUpdateBridgeError.legacyUpdaterTakeoverFailed
-        }
         let expected = home.appendingPathComponent(".wanhe-codex-token/app")
             .appendingPathComponent(previousTarget)
             .appendingPathComponent("wanhe-status-updater")
             .standardizedFileURL
         let plist = home.appendingPathComponent("Library/LaunchAgents/\(UpdaterLaunchAgentInstaller.label).plist")
         let service = "gui/\(userID)/\(UpdaterLaunchAgentInstaller.label)"
+        guard let snapshot = LegacyLaunchAgentBridgeRequest.runningUpdaterProcess(userID: userID) else {
+            try LegacyIdleUpdaterServiceRemoval.run(
+                installedPlist: plist,
+                service: service,
+                runLaunchctl: runLaunchctl
+            )
+            return
+        }
         try LegacyUpdaterProcessGroupTakeover.run(
             snapshot: snapshot,
             expectedExecutable: expected,

@@ -46,11 +46,38 @@ struct WanheStatusUpdater {
                 if let previous {
                     appendLog("legacy launch agent bridge prepared from \(LaunchAgentUpdateBridge.rollbackVersion(previous))")
                 } else {
-                    appendLog("legacy launch agent bridge skipped for self-bridging predecessor")
+                    let repaired = try LaunchAgentUpdateBridge.repairCurrentUpdaterIfIdle(
+                        targetVersion: CommandLine.arguments[2]
+                    )
+                    if repaired {
+                        appendLog("legacy launch agent bridge repaired updater after predecessor exit")
+                        UpdateLedger().clear()
+                        if let configuration = ClientUpdateConfiguration.load() {
+                            await report(
+                                configuration,
+                                version: CommandLine.arguments[2],
+                                status: "installed",
+                                error: nil
+                            )
+                        }
+                    } else {
+                        appendLog("legacy launch agent bridge deferred to running or self-bridging predecessor")
+                    }
                 }
                 return
             } catch {
                 appendLog("legacy launch agent bridge preparation failed: \(error)")
+                let targetVersion = CommandLine.arguments[2]
+                UpdateLedger().recordFailure(version: targetVersion)
+                if let configuration = ClientUpdateConfiguration.load() {
+                    let actualVersion = installedVersion() ?? ClientVersion.current
+                    await report(
+                        configuration,
+                        version: actualVersion,
+                        status: "failed",
+                        error: "launch_agent_bridge_prepare_failed"
+                    )
+                }
                 Darwin.exit(74)
             }
         }
@@ -60,7 +87,8 @@ struct WanheStatusUpdater {
             do {
                 let result = try LaunchAgentUpdateBridge.run(
                     targetVersion: targetVersion,
-                    previousTarget: CommandLine.arguments[3]
+                    previousTarget: CommandLine.arguments[3],
+                    allowActivationFromPrevious: true
                 )
                 appendLog("launch agent bridge: \(result == .completed ? "completed" : "already completed")")
                 UpdateLedger().clear()
