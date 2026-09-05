@@ -4,6 +4,9 @@ import Foundation
 import SwiftUI
 
 enum BundledAvatarStore {
+    // Member rows re-evaluate on every refresh, so decode each bundled avatar once per process.
+    private static let imageCache = AvatarImageCache()
+
     static func url(for filename: String) -> URL? {
         let parts = filename.split(separator: ".", maxSplits: 1).map(String.init)
         guard parts.count == 2 else { return nil }
@@ -12,7 +15,21 @@ enum BundledAvatarStore {
     }
 
     static func image(for filename: String) -> NSImage? {
-        url(for: filename).flatMap(NSImage.init(contentsOf:))
+        imageCache.image(for: filename)
+    }
+}
+
+private final class AvatarImageCache: @unchecked Sendable {
+    private let lock = NSLock()
+    private var images: [String: NSImage?] = [:]
+
+    func image(for filename: String) -> NSImage? {
+        lock.lock()
+        defer { lock.unlock() }
+        if let cached = images[filename] { return cached }
+        let image = BundledAvatarStore.url(for: filename).flatMap(NSImage.init(contentsOf:))
+        images[filename] = image
+        return image
     }
 }
 

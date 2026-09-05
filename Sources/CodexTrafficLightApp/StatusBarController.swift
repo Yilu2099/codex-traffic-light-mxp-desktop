@@ -11,7 +11,7 @@ protocol StatusBarControllerDelegate: AnyObject {
 @MainActor
 final class StatusBarController {
     private static let breathingFrameCount = 12
-    private static let breathingFrameInterval: TimeInterval = 0.25
+    private static let breathingFrameInterval: TimeInterval = 0.5
     private let healthyGreen = NSColor(
         srgbRed: 0x35 / 255,
         green: 0xD2 / 255,
@@ -220,6 +220,7 @@ final class StatusBarController {
                 userInfo: nil,
                 repeats: true
             )
+            timer.tolerance = 0.15
             RunLoop.main.add(timer, forMode: .common)
             breathingTimer = timer
         }

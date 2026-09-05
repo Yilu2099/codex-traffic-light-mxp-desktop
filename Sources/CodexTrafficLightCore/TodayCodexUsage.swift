@@ -536,9 +536,7 @@ public struct TodayCodexUsageCollector: Sendable {
 
     private func date(_ value: Any?) -> Date? {
         guard let text = value as? String else { return nil }
-        let fractional = ISO8601DateFormatter()
-        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return fractional.date(from: text) ?? ISO8601DateFormatter().date(from: text)
+        return SharedDateFormatters.shared.iso8601Date(from: text)
     }
 
     private func isoDate(_ value: String) -> Date? {
@@ -546,12 +544,15 @@ public struct TodayCodexUsageCollector: Sendable {
     }
 
     private func isoString(_ date: Date) -> String {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter.string(from: date)
+        SharedDateFormatters.shared.iso8601Fractional.string(from: date)
     }
 
     private func dayString(_ date: Date) -> String {
+        // The shared formatter covers the default collector configuration; custom
+        // timezones keep the per-call behavior.
+        guard timeZone.identifier != "Asia/Shanghai" else {
+            return SharedDateFormatters.shared.shanghaiDay.string(from: date)
+        }
         let formatter = DateFormatter()
         formatter.calendar = Calendar(identifier: .gregorian)
         formatter.locale = Locale(identifier: "en_CA")
@@ -561,11 +562,6 @@ public struct TodayCodexUsageCollector: Sendable {
     }
 
     private func utcDayString(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.calendar = Calendar(identifier: .gregorian)
-        formatter.locale = Locale(identifier: "en_CA")
-        formatter.timeZone = TimeZone(secondsFromGMT: 0)
-        formatter.dateFormat = "yyyy-MM-dd"
-        return formatter.string(from: date)
+        SharedDateFormatters.shared.utcDay.string(from: date)
     }
 }

@@ -298,9 +298,7 @@ public final class ProjectActivityStore {
     }
 
     private static func isoDate(_ value: String) -> Date? {
-        let precise = ISO8601DateFormatter()
-        precise.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return precise.date(from: value) ?? ISO8601DateFormatter().date(from: value)
+        SharedDateFormatters.shared.iso8601Date(from: value)
     }
 }
 
@@ -657,14 +655,10 @@ private struct ProjectConversationCollector {
     }
 
     private static func isoDate(_ value: String) -> Date? {
-        let precise = ISO8601DateFormatter()
-        precise.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return precise.date(from: value) ?? ISO8601DateFormatter().date(from: value)
+        SharedDateFormatters.shared.iso8601Date(from: value)
     }
 
     private static func isoString(_ date: Date) -> String {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter.string(from: date)
+        SharedDateFormatters.shared.iso8601Fractional.string(from: date)
     }
 }

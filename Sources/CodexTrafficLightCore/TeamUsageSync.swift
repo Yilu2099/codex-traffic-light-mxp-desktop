@@ -317,16 +317,12 @@ public struct TeamQuotaReport: Codable, Equatable, Sendable {
     }
 
     private static func isoString(_ date: Date) -> String {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter.string(from: date)
+        SharedDateFormatters.shared.iso8601Fractional.string(from: date)
     }
 
     private static func isoDate(_ value: String?) -> Date? {
         guard let value else { return nil }
-        let precise = ISO8601DateFormatter()
-        precise.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return precise.date(from: value) ?? ISO8601DateFormatter().date(from: value)
+        return SharedDateFormatters.shared.iso8601Date(from: value)
     }
 }
 
@@ -626,8 +622,9 @@ public struct CodexTeamUsageCollector: Sendable {
         var buffer = Data()
         while let chunk = try? handle.read(upToCount: 64 * 1024), !chunk.isEmpty {
             buffer.append(chunk)
-            while let newline = buffer.firstIndex(of: 0x0A) {
-                let line = buffer.subdata(in: buffer.startIndex..<newline)
+            var cursor = buffer.startIndex
+            while let newline = buffer[cursor...].firstIndex(of: 0x0A) {
+                let line = buffer.subdata(in: cursor..<newline)
                 autoreleasepool {
                     processLine(
                         line,
@@ -640,7 +637,10 @@ public struct CodexTeamUsageCollector: Sendable {
                         daily: &daily
                     )
                 }
-                buffer.removeSubrange(buffer.startIndex...newline)
+                cursor = buffer.index(after: newline)
+            }
+            if cursor > buffer.startIndex {
+                buffer.removeSubrange(buffer.startIndex..<cursor)
             }
         }
         if !buffer.isEmpty {
@@ -807,33 +807,19 @@ public struct CodexTeamUsageCollector: Sendable {
 
     private func date(from value: Any?) -> Date? {
         guard let text = value as? String else { return nil }
-        let fractional = ISO8601DateFormatter()
-        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return fractional.date(from: text) ?? ISO8601DateFormatter().date(from: text)
+        return SharedDateFormatters.shared.iso8601Date(from: text)
     }
 
     private func isoString(_ date: Date) -> String {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter.string(from: date)
+        SharedDateFormatters.shared.iso8601Fractional.string(from: date)
     }
 
     private func dayString(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.calendar = Calendar(identifier: .gregorian)
-        formatter.locale = Locale(identifier: "en_CA")
-        formatter.timeZone = TimeZone(identifier: "Asia/Shanghai")
-        formatter.dateFormat = "yyyy-MM-dd"
-        return formatter.string(from: date)
+        SharedDateFormatters.shared.shanghaiDay.string(from: date)
     }
 
     private func utcDayString(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.calendar = Calendar(identifier: .gregorian)
-        formatter.locale = Locale(identifier: "en_CA")
-        formatter.timeZone = TimeZone(secondsFromGMT: 0)
-        formatter.dateFormat = "yyyy-MM-dd"
-        return formatter.string(from: date)
+        SharedDateFormatters.shared.utcDay.string(from: date)
     }
 }
 
