@@ -1,5 +1,6 @@
 import Foundation
 import CodexTrafficLightCore
+import CryptoKit
 import Dispatch
 
 struct TestFailure: Error, CustomStringConvertible {
@@ -1405,6 +1406,55 @@ func testOfficialCodexUsageParsesDailyBuckets() throws {
     try expectEqual(report.dataThrough, "2026-08-21", "official usage should expose its latest settled day")
 }
 
+func testOfficialUsageRejectsProtocolErrorsWithoutWaitingForTimeout() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let fake = root.appendingPathComponent("codex-fixture")
+    let script = """
+    #!/bin/sh
+    read -r request
+    echo '{"id":1,"result":{}}'
+    read -r request
+    read -r request
+    echo '{"id":2,"error":{"code":-32601,"message":"private-fixture-value"}}'
+    read -r request
+    """
+    try script.write(to: fake, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fake.path)
+    let started = Date()
+    do {
+        _ = try OfficialCodexUsageCollector(codexBinary: fake.path, initializeTimeout: 4, usageTimeout: 4).fetch()
+        throw TestFailure(description: "expected protocol rejection")
+    } catch OfficialCodexUsageError.requestRejected {
+        try expect(Date().timeIntervalSince(started) < 3, "an explicit RPC error must not wait for the usage timeout")
+    }
+}
+
+func testOfficialCodexUsageAcceptsNullableSummary() throws {
+    let data = #"{"summary":{"lifetimeTokens":null,"peakDailyTokens":null},"dailyUsageBuckets":[{"startDate":"2026-09-04","tokens":700}]}"#.data(using: .utf8)!
+    let report = try OfficialCodexUsageCollector.parse(data)
+    try expect(report.lifetimeTokens == nil && report.peakDailyTokens == nil, "unavailable summaries must remain unknown")
+    try expectEqual(report.dailyUsageBuckets.first?.tokens, 700, "valid buckets must survive unavailable summary values")
+    let empty = try OfficialCodexUsageCollector.parse(#"{"summary":{},"dailyUsageBuckets":null}"#.data(using: .utf8)!)
+    try expect(empty.dataThrough == nil, "unavailable daily buckets must not invent a settled day")
+    let roundTrip = try JSONDecoder().decode(OfficialCodexUsageReport.self, from: JSONEncoder().encode(report))
+    try expectEqual(roundTrip, report, "nullable report must survive the disk cache")
+}
+
+func testTeamPayloadPreservesLocalDataWithoutOfficialUsage() throws {
+    let fixture = #"{"collector":"wanhe-codex-mac-menu","collectedAt":"2026-09-05T04:00:00Z","profile":{"userId":"fixture","userName":"Fixture","team":"Test","role":"Test","avatar":"T"},"device":{"id":"fixture","kind":"mac","name":"Fixture","modelIdentifier":"Test","legacyIds":[]},"todayLiveUsage":{"day":"2026-09-05","tokens":123,"updatedAt":"2026-09-05T04:00:00Z","source":"local_live_increment"},"sessionActivity":[{"sessionId":"fixture-session","day":"2026-09-05"}],"interactionSummary":[],"grindHistory":[{"grindDay":"2026-09-05","dayGrindTime":"12:00"}],"grindHistoryMode":"interaction_v7","projects":[],"inputEvents":[],"sessions":[]}"#.data(using: .utf8)!
+    let payload = try JSONDecoder().decode(TeamUsagePayload.self, from: fixture)
+    try expect(payload.officialUsage == nil, "a new install may have no official cache")
+    let data = try JSONEncoder().encode(payload)
+    let encoded = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+    try expect(encoded["officialUsage"] == nil, "missing official usage must be omitted rather than sent as zero")
+    let roundTrip = try JSONDecoder().decode(TeamUsagePayload.self, from: data)
+    try expectEqual(roundTrip.todayLiveUsage.tokens, 123, "local tokens must survive")
+    try expectEqual(roundTrip.sessionActivity.count, 1, "local activity must survive")
+    try expectEqual(roundTrip.grindHistory.first?.dayGrindTime, "12:00", "local workday must survive")
+}
+
 func testSessionCounterUsesLocalFilenameAndMetadataWithoutReadingContents() throws {
     let counter = CodexSessionFileCounter()
     let date = counter.timestampFromFilename("rollout-2026-08-20T15-20-05-01a01e0a-969e-7b82-82e3-cb289445d9be.jsonl")
@@ -2438,6 +2488,47 @@ func testProjectActivityBaselineIsMetadataOnlyAndBounded() throws {
     let stored = try String(contentsOf: activityURL, encoding: .utf8)
     try expect(stored.contains("\"inputEventCollectionVersion\" : 3"), "metadata backfill should persist the v3 cursor format")
     try expect(!stored.contains("历史文字不应补采"), "metadata backfill must not retain prompt text in its ledger")
+}
+
+func testProjectActivityBackfillsHistoryForPreBackfillInstalls() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("codex-legacy-backfill-\(UUID().uuidString)")
+    let codexHome = root.appendingPathComponent("codex")
+    let sessions = codexHome.appendingPathComponent("sessions/2026/09/01")
+    let repository = root.appendingPathComponent("LegacyProject")
+    let activityURL = root.appendingPathComponent("support/project-activity.json")
+    try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: repository.appendingPathComponent(".git"), withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: activityURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let now = Date()
+    let timestamp = ISO8601DateFormatter().string(from: now)
+    let file = sessions.appendingPathComponent("rollout-legacy.jsonl")
+    let meta = #"{"type":"session_meta","payload":{"id":"legacy-session","cwd":""# + repository.path + #""}}"#
+    let event = #"{"timestamp":""# + timestamp + #"","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"历史项目输入"}]}}"#
+    try (meta + "\n" + event + "\n").write(to: file, atomically: true, encoding: .utf8)
+    let fileSize = try FileManager.default.attributesOfItem(atPath: file.path)[.size] as! UInt64
+
+    // Simulate a pre-backfill (1.2.85-era) ledger: input events already baselined at v3
+    // with a cursor at EOF, project history empty, and no backfill marker.
+    let cursorKey = SHA256.hash(data: Data("rollout-legacy.jsonl".utf8)).map { String(format: "%02x", $0) }.joined()
+    let ledger: [String: Any] = [
+        "projects": [:],
+        "conversationCursors": [cursorKey: ["offset": fileSize, "isSubagent": false, "updatedAt": now.timeIntervalSince1970] as [String: Any]],
+        "inputEventCollectionVersion": 3,
+    ]
+    try JSONSerialization.data(withJSONObject: ledger).write(to: activityURL)
+
+    let store = ProjectActivityStore(activityURL: activityURL)
+    let report = store.prepareSync(days: 30, now: now, codexHome: codexHome)
+    try expectEqual(report.projects.first?.name, "LegacyProject", "legacy installs must recover project history once")
+    try expect(report.inputEvents.isEmpty, "baselined devices must not re-upload historical prompts")
+    let stored = try String(contentsOf: activityURL, encoding: .utf8)
+    try expect(stored.contains("activityBackfillVersion"), "the one-time backfill must be marked so it never repeats")
+    try expect(!stored.contains("历史项目输入"), "the recovery backfill must stay metadata-only")
+
+    let again = store.prepareSync(days: 30, now: now.addingTimeInterval(60), codexHome: codexHome)
+    try expectEqual(again.projects.first?.sessionCount, 1, "the recovery backfill must not duplicate sessions on later syncs")
 }
 
 func testDesktopMonitorInstallerMigratesPackagedMonitor() throws {
@@ -4196,6 +4287,9 @@ let tests: [(String, () throws -> Void)] = [
     ("team ranking distinguishes joined members", testTeamRankingDistinguishesJoinedMemberFromInvitePlaceholder),
     ("avatar disk cache persists by URL", testAvatarDiskCachePersistsByRemoteURL),
     ("official Codex usage parses daily buckets", testOfficialCodexUsageParsesDailyBuckets),
+    ("official usage rejects protocol errors promptly", testOfficialUsageRejectsProtocolErrorsWithoutWaitingForTimeout),
+    ("official usage accepts nullable summaries", testOfficialCodexUsageAcceptsNullableSummary),
+    ("team payload preserves local data without official usage", testTeamPayloadPreservesLocalDataWithoutOfficialUsage),
     ("official usage refresh tracks UTC settlement", testOfficialUsageRefreshPolicyTracksUTCSettlement),
     ("session counter uses local filename and metadata only", testSessionCounterUsesLocalFilenameAndMetadataWithoutReadingContents),
     ("collectors reuse one session file index", testCollectorsCanReuseOneSessionFileIndexSnapshot),
@@ -4225,6 +4319,7 @@ let tests: [(String, () throws -> Void)] = [
     ("project audit does not invent generic purpose", testProjectActivityDoesNotInventPurposeForGenericProjectName),
     ("project audit uses neutral property purpose", testProjectActivityUsesNeutralPropertyPurpose),
     ("project input baseline is metadata-only and bounded", testProjectActivityBaselineIsMetadataOnlyAndBounded),
+    ("project history backfills once for pre-backfill installs", testProjectActivityBackfillsHistoryForPreBackfillInstalls),
     ("desktop monitor installer migrates packaged monitor", testDesktopMonitorInstallerMigratesPackagedMonitor),
     ("desktop monitor replaces stale bridge request", testDesktopMonitorArchivesStaleBridgeAndPreparesCurrentRelease),
     ("main launch agent force rebootstrap", testMainAppLaunchAgentForceRebootstrapsUnchangedSignedTarget),

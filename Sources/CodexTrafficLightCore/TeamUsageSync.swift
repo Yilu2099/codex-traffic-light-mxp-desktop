@@ -382,7 +382,7 @@ public struct TeamUsagePayload: Codable, Equatable, Sendable {
     public var device: TeamDeviceIdentity
     public var quota: TeamQuotaReport?
     public var quotaDiagnostic: TeamQuotaDiagnostic?
-    public var officialUsage: OfficialCodexUsageReport
+    public var officialUsage: OfficialCodexUsageReport?
     public var todayLiveUsage: TodayLiveUsageReport
     public var sessionActivity: [TeamSessionActivity]
     public var sessionActivityMode: String?
@@ -961,7 +961,8 @@ public struct TeamUsageSyncService: Sendable {
     ) throws -> TeamUsagePayload {
         let now = Date()
         let device = TeamDeviceIdentity.current()
-        let officialUsage = try cachedOfficialUsage()
+        // Official account availability must not gate reliable local metadata.
+        let officialUsage = try? cachedOfficialUsage()
         let sessionFileIndex = CodexSessionFileIndex(codexHome: configuration.codexHome)
         let todayLiveUsage = TodayCodexUsageCollector().collect(
             codexHome: configuration.codexHome,

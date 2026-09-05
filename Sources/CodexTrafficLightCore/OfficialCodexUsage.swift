@@ -5,6 +5,7 @@ public enum OfficialCodexUsageError: Error, CustomStringConvertible {
     case initializeTimedOut
     case usageTimedOut
     case invalidResponse
+    case requestRejected
     case processFailed(String)
 
     public var description: String {
@@ -13,6 +14,7 @@ public enum OfficialCodexUsageError: Error, CustomStringConvertible {
         case .initializeTimedOut: return "Codex app-server initialization timed out"
         case .usageTimedOut: return "Codex official usage request timed out"
         case .invalidResponse: return "Codex official usage response was invalid"
+        case .requestRejected: return "Codex official usage request was rejected"
         case .processFailed(let message): return "Codex app-server failed: \(message)"
         }
     }
@@ -29,12 +31,12 @@ public struct OfficialDailyUsageBucket: Codable, Equatable, Sendable {
 }
 
 public struct OfficialCodexUsageReport: Codable, Equatable, Sendable {
-    public var lifetimeTokens: Int
-    public var peakDailyTokens: Int
+    public var lifetimeTokens: Int?
+    public var peakDailyTokens: Int?
     public var dailyUsageBuckets: [OfficialDailyUsageBucket]
     public var updatedAt: String
 
-    public init(lifetimeTokens: Int, peakDailyTokens: Int, dailyUsageBuckets: [OfficialDailyUsageBucket], updatedAt: String) {
+    public init(lifetimeTokens: Int?, peakDailyTokens: Int?, dailyUsageBuckets: [OfficialDailyUsageBucket], updatedAt: String) {
         self.lifetimeTokens = lifetimeTokens
         self.peakDailyTokens = peakDailyTokens
         self.dailyUsageBuckets = dailyUsageBuckets
@@ -138,8 +140,8 @@ public struct OfficialCodexUsageCollector: Sendable {
     public static func parse(_ data: Data, now: Date = Date()) throws -> OfficialCodexUsageReport {
         struct Response: Decodable {
             struct Summary: Decodable {
-                var lifetimeTokens: Int
-                var peakDailyTokens: Int
+                var lifetimeTokens: Int?
+                var peakDailyTokens: Int?
             }
             var summary: Summary
             var dailyUsageBuckets: [OfficialDailyUsageBucket]?
@@ -155,6 +157,19 @@ public struct OfficialCodexUsageCollector: Sendable {
             dailyUsageBuckets: decoded.dailyUsageBuckets ?? [],
             updatedAt: formatter.string(from: now)
         )
+    }
+
+    private func response(forID id: Int, in data: Data) throws -> Data? {
+        guard let messages = try? CodexAppServerJSONRPCLineCodec.decodeMessages(from: data) else { return nil }
+        do {
+            return try CodexAppServerJSONRPCLineCodec.resultData(forID: id, in: messages)
+        } catch CodexAppServerQuotaError.appServerReturnedError {
+            // A complete error response is terminal, not an incomplete frame.
+            // Keep remote error text out of sync logs; it may contain private data.
+            throw OfficialCodexUsageError.requestRejected
+        } catch {
+            return nil
+        }
     }
 
     private func readAppServerMethod(_ method: String) throws -> Data {
@@ -200,8 +215,7 @@ public struct OfficialCodexUsageCollector: Sendable {
         let initializeDeadline = Date().addingTimeInterval(initializeTimeout)
         var initialized = false
         while Date() < initializeDeadline {
-            if let messages = try? CodexAppServerJSONRPCLineCodec.decodeMessages(from: responseBuffer.snapshot()),
-               (try? CodexAppServerJSONRPCLineCodec.resultData(forID: 1, in: messages)) != nil {
+            if try response(forID: 1, in: responseBuffer.snapshot()) != nil {
                 initialized = true
                 break
             }
@@ -215,8 +229,7 @@ public struct OfficialCodexUsageCollector: Sendable {
         try input.fileHandleForWriting.write(contentsOf: request)
         let usageDeadline = Date().addingTimeInterval(usageTimeout)
         while Date() < usageDeadline {
-            if let messages = try? CodexAppServerJSONRPCLineCodec.decodeMessages(from: responseBuffer.snapshot()),
-               let result = try? CodexAppServerJSONRPCLineCodec.resultData(forID: 2, in: messages) {
+            if let result = try response(forID: 2, in: responseBuffer.snapshot()) {
                 return result
             }
             Thread.sleep(forTimeInterval: 0.15)

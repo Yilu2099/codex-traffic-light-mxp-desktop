@@ -40,6 +40,7 @@ private struct ProjectActivityLedger: Codable {
     var conversationCursors: [String: ProjectConversationCursor]? = nil
     var pendingInputEvents: [TeamInputEvent]? = nil
     var inputEventCollectionVersion: Int? = nil
+    var activityBackfillVersion: Int? = nil
 }
 
 private struct ProjectConversationCursor: Codable, Equatable {
@@ -90,6 +91,10 @@ public final class ProjectActivityStore {
         var ledger = read()
         var conversationCursors = ledger.inputEventCollectionVersion == 3 ? (ledger.conversationCursors ?? [:]) : [:]
         let previousConversationCursors = conversationCursors
+        // Devices installed before the backfill existed (e.g. 1.2.85) already carry a
+        // version-3 input-event ledger, so gating the backfill on inputEventCollectionVersion
+        // would never let them recover project history. Track the backfill separately.
+        let needsActivityBackfill = ledger.activityBackfillVersion != 1
         let collection: ProjectConversationCollection
         if let codexHome {
             let fileIndex = sessionFileIndex ?? CodexSessionFileIndex(codexHome: codexHome)
@@ -104,18 +109,25 @@ public final class ProjectActivityStore {
                 )
                 collection = ProjectConversationCollection(events: [], activities: activities)
             } else {
-                collection = ProjectConversationCollector().collect(
+                var incremental = ProjectConversationCollector().collect(
                     sessionFileIndex: fileIndex,
                     days: days,
                     now: now,
                     cursors: &conversationCursors
                 )
+                if needsActivityBackfill {
+                    incremental.activities += ProjectConversationCollector().backfillActivities(
+                        sessionFileIndex: fileIndex, days: min(30, days), now: now
+                    )
+                }
+                collection = incremental
             }
         } else {
             collection = ProjectConversationCollection(events: [], activities: [])
         }
         ledger.conversationCursors = conversationCursors
-        var ledgerChanged = previousConversationCursors != conversationCursors || ledger.inputEventCollectionVersion != 3
+        if needsActivityBackfill { ledger.activityBackfillVersion = 1 }
+        var ledgerChanged = previousConversationCursors != conversationCursors || ledger.inputEventCollectionVersion != 3 || needsActivityBackfill
         ledger.inputEventCollectionVersion = 3
         var pendingByID = Dictionary(uniqueKeysWithValues: (ledger.pendingInputEvents ?? []).map { ($0.id, $0) })
         for activity in collection.activities {
