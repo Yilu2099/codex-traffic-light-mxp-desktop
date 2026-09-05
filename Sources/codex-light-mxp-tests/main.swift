@@ -1442,6 +1442,23 @@ func testOfficialCodexUsageAcceptsNullableSummary() throws {
     try expectEqual(roundTrip, report, "nullable report must survive the disk cache")
 }
 
+func testOfficialUsageDerivesStableAccountFingerprint() throws {
+    let nested = #"{"account":{"email":"  Team@Example.com "},"planType":"team"}"#.data(using: .utf8)!
+    let fingerprint = OfficialCodexUsageCollector.accountFingerprint(fromAccountRead: nested)
+    try expectEqual(fingerprint?.count, 16, "fingerprint should be a truncated salted hash")
+    let flat = OfficialCodexUsageCollector.accountFingerprint(fromAccountRead: #"{"email":"team@example.com"}"#.data(using: .utf8)!)
+    try expectEqual(flat, fingerprint, "normalization must keep one account on one fingerprint")
+    let other = OfficialCodexUsageCollector.accountFingerprint(fromAccountRead: #"{"email":"other@example.com"}"#.data(using: .utf8)!)
+    try expect(other != fingerprint && other != nil, "different accounts must produce different fingerprints")
+    try expect(OfficialCodexUsageCollector.accountFingerprint(fromAccountRead: Data("not json".utf8)) == nil, "invalid payloads must not fail usage sync")
+    try expect(OfficialCodexUsageCollector.accountFingerprint(fromAccountRead: #"{"planType":"team"}"#.data(using: .utf8)!) == nil, "missing identifiers must stay unknown")
+    let raw = String(data: try JSONEncoder().encode(OfficialCodexUsageReport(
+        lifetimeTokens: 1, peakDailyTokens: 1, dailyUsageBuckets: [], updatedAt: "2026-09-05T00:00:00Z", accountFingerprint: fingerprint
+    )), encoding: .utf8)!
+    try expect(raw.contains("accountFingerprint"), "the fingerprint must ride along to the server")
+    try expect(!raw.contains("team@example.com"), "the raw account identifier must never leave the device")
+}
+
 func testTeamPayloadPreservesLocalDataWithoutOfficialUsage() throws {
     let fixture = #"{"collector":"wanhe-codex-mac-menu","collectedAt":"2026-09-05T04:00:00Z","profile":{"userId":"fixture","userName":"Fixture","team":"Test","role":"Test","avatar":"T"},"device":{"id":"fixture","kind":"mac","name":"Fixture","modelIdentifier":"Test","legacyIds":[]},"todayLiveUsage":{"day":"2026-09-05","tokens":123,"updatedAt":"2026-09-05T04:00:00Z","source":"local_live_increment"},"sessionActivity":[{"sessionId":"fixture-session","day":"2026-09-05"}],"interactionSummary":[],"grindHistory":[{"grindDay":"2026-09-05","dayGrindTime":"12:00"}],"grindHistoryMode":"interaction_v7","projects":[],"inputEvents":[],"sessions":[]}"#.data(using: .utf8)!
     let payload = try JSONDecoder().decode(TeamUsagePayload.self, from: fixture)
@@ -4289,6 +4306,7 @@ let tests: [(String, () throws -> Void)] = [
     ("official Codex usage parses daily buckets", testOfficialCodexUsageParsesDailyBuckets),
     ("official usage rejects protocol errors promptly", testOfficialUsageRejectsProtocolErrorsWithoutWaitingForTimeout),
     ("official usage accepts nullable summaries", testOfficialCodexUsageAcceptsNullableSummary),
+    ("official usage derives a stable account fingerprint", testOfficialUsageDerivesStableAccountFingerprint),
     ("team payload preserves local data without official usage", testTeamPayloadPreservesLocalDataWithoutOfficialUsage),
     ("official usage refresh tracks UTC settlement", testOfficialUsageRefreshPolicyTracksUTCSettlement),
     ("session counter uses local filename and metadata only", testSessionCounterUsesLocalFilenameAndMetadataWithoutReadingContents),

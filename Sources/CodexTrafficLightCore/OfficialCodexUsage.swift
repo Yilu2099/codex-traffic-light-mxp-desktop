@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 public enum OfficialCodexUsageError: Error, CustomStringConvertible {
@@ -35,12 +36,14 @@ public struct OfficialCodexUsageReport: Codable, Equatable, Sendable {
     public var peakDailyTokens: Int?
     public var dailyUsageBuckets: [OfficialDailyUsageBucket]
     public var updatedAt: String
+    public var accountFingerprint: String?
 
-    public init(lifetimeTokens: Int?, peakDailyTokens: Int?, dailyUsageBuckets: [OfficialDailyUsageBucket], updatedAt: String) {
+    public init(lifetimeTokens: Int?, peakDailyTokens: Int?, dailyUsageBuckets: [OfficialDailyUsageBucket], updatedAt: String, accountFingerprint: String? = nil) {
         self.lifetimeTokens = lifetimeTokens
         self.peakDailyTokens = peakDailyTokens
         self.dailyUsageBuckets = dailyUsageBuckets
         self.updatedAt = updatedAt
+        self.accountFingerprint = accountFingerprint
     }
 
     public var dataThrough: String? {
@@ -134,7 +137,38 @@ public struct OfficialCodexUsageCollector: Sendable {
 
     public func fetch(now: Date = Date()) throws -> OfficialCodexUsageReport {
         let result = try readAppServerMethod("account/usage/read")
-        return try Self.parse(result, now: now)
+        var report = try Self.parse(result, now: now)
+        // The fingerprint lets the server keep accounts apart when a device
+        // switches or borrows a Codex account. It is best-effort: usage
+        // collection must still succeed when account/read is unavailable.
+        report.accountFingerprint = fetchAccountFingerprint()
+        return report
+    }
+
+    private func fetchAccountFingerprint() -> String? {
+        guard let data = try? readAppServerMethod("account/read") else { return nil }
+        return Self.accountFingerprint(fromAccountRead: data)
+    }
+
+    public static func accountFingerprint(fromAccountRead data: Data) -> String? {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        let nested = ["account", "user", "profile"].compactMap { object[$0] as? [String: Any] }
+        var candidates: [String] = []
+        for key in ["email", "accountId", "userId", "id"] {
+            if let value = object[key] as? String { candidates.append(value) }
+        }
+        for container in nested {
+            for key in ["email", "accountId", "userId", "id"] {
+                if let value = container[key] as? String { candidates.append(value) }
+            }
+        }
+        guard let identifier = candidates
+            .map({ $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() })
+            .first(where: { !$0.isEmpty && !$0.contains(" ") })
+        else { return nil }
+        // A truncated salted hash identifies an account without exposing it.
+        let digest = SHA256.hash(data: Data(("wanhe-account-v1|" + identifier).utf8))
+        return digest.prefix(8).map { String(format: "%02x", $0) }.joined()
     }
 
     public static func parse(_ data: Data, now: Date = Date()) throws -> OfficialCodexUsageReport {
