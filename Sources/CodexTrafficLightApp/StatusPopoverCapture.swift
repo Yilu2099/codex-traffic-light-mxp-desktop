@@ -71,6 +71,7 @@ enum StatusPopoverCapture {
         }
         model.websiteURL = URL(string: "https://c.wanhe.cn")
         model.selectedRange = previewRange
+        model.inspirationUnreadCount = Int(ProcessInfo.processInfo.environment["CODEX_LIGHT_CAPTURE_UNREAD"] ?? "0") ?? 0
 
         let view = NSHostingView(rootView: StatusPopoverView(
             model: model,

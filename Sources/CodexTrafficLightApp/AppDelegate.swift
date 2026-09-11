@@ -34,6 +34,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
             }
         }
         statusBar.delegate = self
+        statusBar.onPopoverOpen = { [weak self] in self?.refreshInspirationUnread() }
         currentSnapshot = store.read()
         statusBar.apply(snapshot: currentSnapshot)
         DispatchQueue.global(qos: .utility).async {
@@ -162,7 +163,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
         }
     }
 
+    private func refreshInspirationUnread() {
+        guard let configuration = teamSyncConfiguration else { return }
+        let service = TeamUsageSyncService(configuration: configuration)
+        Task { [weak self] in
+            if let count = try? await service.fetchInspirationUnreadCount() {
+                self?.statusBar.setInspirationUnreadCount(count)
+            }
+        }
+    }
+
     private func syncTeamData() {
+        refreshInspirationUnread()
         guard let configuration = teamSyncConfiguration, !isTeamSyncing else { return }
         isTeamSyncing = true
         teamSyncStartedAt = Date()
@@ -201,6 +213,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
     }
 
     private func refreshTeamRanking(range: StatusRankingRange? = nil, force: Bool = false) {
+        refreshInspirationUnread()
         guard let configuration = teamSyncConfiguration else { return }
         if !force && (isTeamRankingRefreshing || isTeamSyncing) { return }
         let requestedRange = range ?? selectedRankingRange

@@ -1135,6 +1135,20 @@ public struct TeamUsageSyncService: Sendable {
         return result
     }
 
+    public func fetchInspirationUnreadCount() async throws -> Int {
+        let url = websiteURL.appendingPathComponent("api/inspiration/unread")
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 20
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.setValue("Bearer \(configuration.token)", forHTTPHeaderField: "Authorization")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            throw TeamUsageSyncError.invalidResponse
+        }
+        struct Unread: Decodable { let count: Int }
+        return max(0, try JSONDecoder().decode(Unread.self, from: data).count)
+    }
+
     public func fetchRanking(range: String = "today") async throws -> TeamRankingSnapshot {
         var request = URLRequest(url: rankingsURL(range: range))
         request.timeoutInterval = 20

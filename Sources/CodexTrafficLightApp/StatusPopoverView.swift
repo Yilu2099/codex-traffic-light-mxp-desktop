@@ -35,6 +35,7 @@ enum StatusRankingRange: String, CaseIterable, Equatable {
 @MainActor
 final class StatusPopoverModel: ObservableObject {
     @Published var snapshot: StateSnapshot?
+    @Published var inspirationUnreadCount = 0
     @Published var ranking: TeamRankingSnapshot?
     @Published var syncedQuota: TeamQuotaReport?
     @Published var syncDetail: String = "正在读取团队数据…"
@@ -421,6 +422,18 @@ struct StatusPopoverView: View {
                     }
             }
             .buttonStyle(.plain)
+            .overlay(alignment: .topTrailing) {
+                if model.inspirationUnreadCount > 0 {
+                    Text(model.inspirationUnreadCount > 99 ? "99+" : "\(model.inspirationUnreadCount)")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.white)
+                        .frame(width: 26, height: 26)
+                        .background(Color(red: 1, green: 0.23, blue: 0.19), in: Circle())
+                        .offset(x: 5, y: -7)
+                        .accessibilityLabel("\(model.inspirationUnreadCount) 篇未查看灵感")
+                        .allowsHitTesting(false)
+                }
+            }
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 9)

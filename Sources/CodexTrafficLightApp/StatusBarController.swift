@@ -39,6 +39,7 @@ final class StatusBarController {
     private let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let popover = NSPopover()
     private let popoverModel = StatusPopoverModel()
+    var onPopoverOpen: (() -> Void)?
     weak var delegate: StatusBarControllerDelegate?
     private var snapshot: StateSnapshot?
     private var teamRanking: TeamRankingSnapshot?
@@ -76,6 +77,10 @@ final class StatusBarController {
         self.snapshot = snapshot
         popoverModel.snapshot = snapshot
         refreshQuotaPresentation()
+    }
+
+    func setInspirationUnreadCount(_ count: Int) {
+        popoverModel.inspirationUnreadCount = max(0, count)
     }
 
     func applyTeamRanking(
@@ -240,6 +245,7 @@ final class StatusBarController {
         if popover.isShown {
             popover.performClose(nil)
         } else {
+            onPopoverOpen?()
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
             popover.contentViewController?.view.window?.makeKey()
         }
