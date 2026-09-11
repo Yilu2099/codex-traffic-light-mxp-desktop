@@ -394,14 +394,33 @@ struct StatusPopoverView: View {
     private var footer: some View {
         HStack(spacing: 10) {
             Button { openWebsite(nil) } label: {
-                Label("打开团队排行榜网站", systemImage: "safari")
+                Label("排行榜网站", systemImage: "safari")
                     .font(.system(size: 13, weight: .bold))
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 9)
+                    .padding(.vertical, 12)
+                    .foregroundStyle(green)
+                    .background(green.opacity(0.10), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .strokeBorder(green.opacity(0.18), lineWidth: 1)
+                    }
             }
-            .buttonStyle(.borderedProminent)
-            .tint(green)
+            .buttonStyle(.plain)
             .disabled(model.websiteURL == nil)
+
+            Link(destination: URL(string: "https://c.wanhe.cn/inspiration")!) {
+                Label("灵感分享", systemImage: "lightbulb")
+                    .font(.system(size: 13, weight: .bold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .foregroundStyle(green)
+                    .background(green.opacity(0.10), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .strokeBorder(green.opacity(0.18), lineWidth: 1)
+                    }
+            }
+            .buttonStyle(.plain)
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 9)
