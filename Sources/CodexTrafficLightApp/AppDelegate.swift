@@ -1,7 +1,6 @@
 import Cocoa
 import CodexTrafficLightCore
 import Darwin
-@preconcurrency import UserNotifications
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDelegate {
@@ -74,15 +73,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
     }
 
     private func configureExternalAlerts() {
-        let center = UNUserNotificationCenter.current()
-        center.delegate = self
-        center.requestAuthorization(options: [.alert, .sound]) { granted, error in
-            if let error {
-                AppDelegate.appendTeamSyncLog("external alert authorization failed: \(error)")
-            } else if !granted {
-                AppDelegate.appendTeamSyncLog("external alert authorization denied")
-            }
-        }
         checkExternalAlert()
         externalAlertTimer = Timer.scheduledTimer(
             timeInterval: 15,
@@ -113,21 +103,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
 
     private func deliverExternalAlert(_ alert: ExternalAlert) {
         guard externalAlertStore.isUnread(alert) else { return }
-        let content = UNMutableNotificationContent()
-        content.title = alert.title
-        content.body = alert.body
-        content.sound = .default
-        if let sourceURL = alert.sourceURL {
-            content.userInfo["source_url"] = sourceURL.absoluteString
-        }
-        let request = UNNotificationRequest(
-            identifier: "external-alert-\(alert.eventIDs.joined(separator: "-"))",
-            content: content,
-            trigger: nil
-        )
-        UNUserNotificationCenter.current().add(request) { [externalAlertStore] error in
-            if let error {
-                AppDelegate.appendTeamSyncLog("external alert delivery failed: \(error)")
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        process.arguments = [
+            "-e",
+            "on run argv\ndisplay notification item 2 of argv with title item 1 of argv sound name \"Glass\"\nend run",
+            alert.title,
+            alert.body,
+        ]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        process.terminationHandler = { [externalAlertStore] completed in
+            guard completed.terminationStatus == 0 else {
+                AppDelegate.appendTeamSyncLog("external alert delivery failed: exit=\(completed.terminationStatus)")
                 return
             }
             do {
@@ -135,6 +123,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
             } catch {
                 AppDelegate.appendTeamSyncLog("external alert acknowledgement failed: \(error)")
             }
+        }
+        do {
+            try process.run()
+        } catch {
+            AppDelegate.appendTeamSyncLog("external alert delivery failed: \(error)")
         }
     }
 
@@ -487,25 +480,5 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
         teamSyncWatchdogTimer?.invalidate()
         externalAlertTimer?.invalidate()
         NSApp.terminate(nil)
-    }
-}
-
-extension AppDelegate: UNUserNotificationCenterDelegate {
-    nonisolated func userNotificationCenter(
-        _ center: UNUserNotificationCenter,
-        willPresent notification: UNNotification
-    ) async -> UNNotificationPresentationOptions {
-        [.banner, .sound]
-    }
-
-    nonisolated func userNotificationCenter(
-        _ center: UNUserNotificationCenter,
-        didReceive response: UNNotificationResponse
-    ) async {
-        guard let value = response.notification.request.content.userInfo["source_url"] as? String,
-              let url = URL(string: value) else { return }
-        _ = await MainActor.run {
-            NSWorkspace.shared.open(url)
-        }
     }
 }
