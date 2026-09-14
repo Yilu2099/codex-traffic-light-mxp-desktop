@@ -1,6 +1,7 @@
 import Cocoa
 import CodexTrafficLightCore
 import Darwin
+@preconcurrency import UserNotifications
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDelegate {
@@ -12,14 +13,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
     private var teamRankingTimer: Timer?
     private var presenceTimer: Timer?
     private var teamSyncWatchdogTimer: Timer?
+    private var externalAlertTimer: Timer?
     private var teamSyncConfiguration: TeamSyncConfiguration?
     private var isTeamSyncing = false
     private var teamSyncStartedAt: Date?
     private var isTeamRankingRefreshing = false
     private var isPresenceSyncing = false
+    private var isExternalAlertRefreshing = false
     private var presenceFailureLogged = false
     private var latestQuotaDiagnostic: TeamQuotaDiagnostic?
     private let quotaRefreshCoordinator = QuotaRefreshCoordinator()
+    private let externalAlertStore = ExternalAlertStore()
     private var selectedRankingRange: StatusRankingRange = .today
     private var rankingRequestSequence = 0
 
@@ -37,6 +41,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
         statusBar.onPopoverOpen = { [weak self] in self?.refreshInspirationUnread() }
         currentSnapshot = store.read()
         statusBar.apply(snapshot: currentSnapshot)
+        configureExternalAlerts()
         DispatchQueue.global(qos: .utility).async {
             let result = ClientReleaseRetention.prune()
             if !result.removed.isEmpty {
@@ -65,6 +70,71 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
         configureTeamIntegration()
         DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 12) {
             AppDelegate.ensureUpdaterSchedule()
+        }
+    }
+
+    private func configureExternalAlerts() {
+        let center = UNUserNotificationCenter.current()
+        center.delegate = self
+        center.requestAuthorization(options: [.alert, .sound]) { granted, error in
+            if let error {
+                AppDelegate.appendTeamSyncLog("external alert authorization failed: \(error)")
+            } else if !granted {
+                AppDelegate.appendTeamSyncLog("external alert authorization denied")
+            }
+        }
+        checkExternalAlert()
+        externalAlertTimer = Timer.scheduledTimer(
+            timeInterval: 15,
+            target: self,
+            selector: #selector(externalAlertTimerFired),
+            userInfo: nil,
+            repeats: true
+        )
+    }
+
+    @objc private func externalAlertTimerFired() {
+        checkExternalAlert()
+    }
+
+    private func checkExternalAlert() {
+        if let configuration = teamSyncConfiguration {
+            guard !isExternalAlertRefreshing else { return }
+            isExternalAlertRefreshing = true
+            Task { [weak self] in
+                let alert = try? await TeamUsageSyncService(configuration: configuration).fetchExternalAlert()
+                self?.isExternalAlertRefreshing = false
+                if let alert { self?.deliverExternalAlert(alert) }
+            }
+            return
+        }
+        if let alert = externalAlertStore.nextUnread() { deliverExternalAlert(alert) }
+    }
+
+    private func deliverExternalAlert(_ alert: ExternalAlert) {
+        guard externalAlertStore.isUnread(alert) else { return }
+        let content = UNMutableNotificationContent()
+        content.title = alert.title
+        content.body = alert.body
+        content.sound = .default
+        if let sourceURL = alert.sourceURL {
+            content.userInfo["source_url"] = sourceURL.absoluteString
+        }
+        let request = UNNotificationRequest(
+            identifier: "external-alert-\(alert.eventIDs.joined(separator: "-"))",
+            content: content,
+            trigger: nil
+        )
+        UNUserNotificationCenter.current().add(request) { [externalAlertStore] error in
+            if let error {
+                AppDelegate.appendTeamSyncLog("external alert delivery failed: \(error)")
+                return
+            }
+            do {
+                try externalAlertStore.markDelivered(alert)
+            } catch {
+                AppDelegate.appendTeamSyncLog("external alert acknowledgement failed: \(error)")
+            }
         }
     }
 
@@ -415,6 +485,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
         teamRankingTimer?.invalidate()
         presenceTimer?.invalidate()
         teamSyncWatchdogTimer?.invalidate()
+        externalAlertTimer?.invalidate()
         NSApp.terminate(nil)
+    }
+}
+
+extension AppDelegate: UNUserNotificationCenterDelegate {
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification
+    ) async -> UNNotificationPresentationOptions {
+        [.banner, .sound]
+    }
+
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse
+    ) async {
+        guard let value = response.notification.request.content.userInfo["source_url"] as? String,
+              let url = URL(string: value) else { return }
+        _ = await MainActor.run {
+            NSWorkspace.shared.open(url)
+        }
     }
 }

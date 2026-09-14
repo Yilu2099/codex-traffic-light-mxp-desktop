@@ -1149,6 +1149,22 @@ public struct TeamUsageSyncService: Sendable {
         return max(0, try JSONDecoder().decode(Unread.self, from: data).count)
     }
 
+    public func fetchExternalAlert() async throws -> ExternalAlert? {
+        let url = websiteURL.appendingPathComponent("api/client/alerts")
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 10
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.setValue("Bearer \(configuration.token)", forHTTPHeaderField: "Authorization")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            throw TeamUsageSyncError.invalidResponse
+        }
+        struct Response: Decodable { let alert: ExternalAlert? }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(Response.self, from: data).alert
+    }
+
     public func fetchRanking(range: String = "today") async throws -> TeamRankingSnapshot {
         var request = URLRequest(url: rankingsURL(range: range))
         request.timeoutInterval = 20

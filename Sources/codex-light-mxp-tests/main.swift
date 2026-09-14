@@ -4235,6 +4235,45 @@ func testOfficialUsageRefreshPolicyTracksUTCSettlement() throws {
     try expectEqual(OfficialUsageRefreshPolicy.cacheAge(for: delayed, now: later), 30 * 60, "delayed bucket should reduce polling after Beijing 10:00")
 }
 
+func testExternalAlertStoreDeduplicatesDeliveredEvents() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("external-alert-tests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let alertURL = root.appendingPathComponent("external-alert.json")
+    let deliveryURL = root.appendingPathComponent("external-alert-delivery.json")
+    let payload = """
+    {
+      "event_ids": ["tibo-1", "tibo-2"],
+      "title": "Tibo 重置提醒",
+      "body": "预计今晚重置",
+      "source_url": "https://x.com/thsottiaux/status/1",
+      "created_at": "2026-09-14T08:00:00Z"
+    }
+    """
+    try Data(payload.utf8).write(to: alertURL)
+    let store = ExternalAlertStore(alertURL: alertURL, deliveryURL: deliveryURL)
+
+    let now = ISO8601DateFormatter().date(from: "2026-09-14T08:01:00Z")!
+    guard let alert = store.nextUnread(now: now) else {
+        throw TestFailure(description: "new external alert should be readable")
+    }
+    try expectEqual(alert.eventIDs, ["tibo-1", "tibo-2"], "event IDs should decode")
+    try store.markDelivered(alert)
+    try expect(store.nextUnread(now: now) == nil, "delivered external alert should not repeat")
+
+    let updated = payload.replacingOccurrences(
+        of: "[\"tibo-1\", \"tibo-2\"]",
+        with: "[\"tibo-1\", \"tibo-2\", \"tibo-3\"]"
+    )
+    try Data(updated.utf8).write(to: alertURL)
+    try expect(store.nextUnread(now: now) != nil, "a batch containing a new event should be readable")
+    try expect(
+        store.nextUnread(now: now.addingTimeInterval(25 * 60 * 60)) == nil,
+        "stale external alerts should not appear after app downtime"
+    )
+}
+
 let tests: [(String, () throws -> Void)] = [
     ("brand tagline stays aligned", {
         try expectEqual(BrandCopy.tagline, "用 Codex 手搓世界，人人都是造物主", "client tagline should match the approved brand copy")
@@ -4367,7 +4406,8 @@ let tests: [(String, () throws -> Void)] = [
     ("client release retention preserves recovery", testClientReleaseRetentionPreservesOnlyRecoveryCopy),
     ("client release retention pins bridge rollback", testClientReleaseRetentionPinsActiveBridgeRollback),
     ("bounded logs rotate", testBoundedLogRotatesBeforeExceedingLimit),
-    ("bounded logs cap and serialize", testBoundedLogCapsOversizedAndSerializesConcurrentWrites)
+    ("bounded logs cap and serialize", testBoundedLogCapsOversizedAndSerializesConcurrentWrites),
+    ("external alerts deduplicate delivered events", testExternalAlertStoreDeduplicatesDeliveredEvents)
 ]
 
 var failures = 0
