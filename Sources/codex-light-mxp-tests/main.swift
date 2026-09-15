@@ -1324,10 +1324,11 @@ func testTeamRankingURLUsesWebsiteOrigin() throws {
 
 func testTeamRankingDecodesLegacyTodayActivity() throws {
     let data = """
-    {"updatedAt":"2026-08-21 13:50","members":[{"id":"zlu","name":"张璐","tokens":1200,"sessions":12,"lastActive":"13:13"}]}
+    {"updatedAt":"2026-08-21 13:50","members":[{"id":"zlu","name":"张璐","tokens":1200,"sessions":12,"streak":9,"lastActive":"13:13"}]}
     """.data(using: .utf8)!
     let ranking = try JSONDecoder().decode(TeamRankingSnapshot.self, from: data)
     try expectEqual(ranking.members.first?.tokens, 1_200, "legacy ranking should preserve today's token total")
+    try expectEqual(ranking.members.first?.streak, 9, "team ranking should expose consecutive active days")
     try expectEqual(ranking.members.first?.lastActive, "13:13", "legacy ranking should expose its last update time")
     try expectEqual(ranking.members.first?.officialUsage, nil, "legacy ranking may omit official metadata")
 }

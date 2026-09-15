@@ -352,24 +352,47 @@ struct StatusPopoverView: View {
     }
 
     private func avatar(_ member: TeamRankingMember) -> some View {
-        ZStack {
-            Circle().fill(green.opacity(0.11))
-            if let image = localAvatar(member) {
-                Image(nsImage: image)
-                    .resizable()
-                    .scaledToFill()
-            } else if let url = avatarURL(member) {
-                PersistentAvatarImage(url: url, fallbackText: String(displayName(member).prefix(1)))
-                    .id(url.absoluteString)
-                    .foregroundStyle(ink)
-            } else {
-                Text(String(displayName(member).prefix(1)))
-                    .font(.system(size: 14, weight: .bold))
-                    .foregroundStyle(ink)
+        VStack(spacing: -6) {
+            ZStack {
+                Circle().fill(green.opacity(0.11))
+                if let image = localAvatar(member) {
+                    Image(nsImage: image)
+                        .resizable()
+                        .scaledToFill()
+                } else if let url = avatarURL(member) {
+                    PersistentAvatarImage(url: url, fallbackText: String(displayName(member).prefix(1)))
+                        .id(url.absoluteString)
+                        .foregroundStyle(ink)
+                } else {
+                    Text(String(displayName(member).prefix(1)))
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(ink)
+                }
+            }
+            .frame(width: 56, height: 56)
+            .clipShape(Circle())
+
+            if member.id.caseInsensitiveCompare(streakLeaderID ?? "") == .orderedSame {
+                Text("连搓多天")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(Color(red: 0.25, green: 0.44, blue: 0.30))
+                    .padding(.horizontal, 6)
+                    .frame(height: 17)
+                    .background(Color(red: 0.88, green: 0.94, blue: 0.85), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).stroke(green.opacity(0.38), lineWidth: 1))
             }
         }
-        .frame(width: 56, height: 56)
-        .clipShape(Circle())
+        .frame(width: 62)
+    }
+
+    private var streakLeaderID: String? {
+        rankedMembers
+            .filter { $0.hasEverJoined && ($0.streak ?? 0) >= 7 }
+            .sorted {
+                if ($0.streak ?? 0) != ($1.streak ?? 0) { return ($0.streak ?? 0) > ($1.streak ?? 0) }
+                return $0.id.localizedCaseInsensitiveCompare($1.id) == .orderedAscending
+            }
+            .first?.id
     }
 
     private var versionNote: some View {
