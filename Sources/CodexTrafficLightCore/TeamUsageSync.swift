@@ -467,7 +467,9 @@ public struct TeamRankingMember: Codable, Equatable, Sendable {
     public var lastActive: String?
     public var online: Bool?
     public var grindDay: String?
+    public var dayGrindDay: String?
     public var dayGrindTime: String?
+    public var nightGrindDay: String?
     public var nightGrindTime: String?
     public var officialUsage: OfficialUsageSummary?
     public var tokenSource: String?
@@ -486,7 +488,9 @@ public struct TeamRankingMember: Codable, Equatable, Sendable {
         lastActive: String? = nil,
         online: Bool? = nil,
         grindDay: String? = nil,
+        dayGrindDay: String? = nil,
         dayGrindTime: String? = nil,
+        nightGrindDay: String? = nil,
         nightGrindTime: String? = nil,
         officialUsage: OfficialUsageSummary? = nil,
         tokenSource: String? = nil,
@@ -504,7 +508,9 @@ public struct TeamRankingMember: Codable, Equatable, Sendable {
         self.lastActive = lastActive
         self.online = online
         self.grindDay = grindDay
+        self.dayGrindDay = dayGrindDay
         self.dayGrindTime = dayGrindTime
+        self.nightGrindDay = nightGrindDay
         self.nightGrindTime = nightGrindTime
         self.officialUsage = officialUsage
         self.tokenSource = tokenSource
@@ -1181,6 +1187,15 @@ public struct TeamUsageSyncService: Sendable {
             throw TeamUsageSyncError.invalidResponse
         }
         return snapshot
+    }
+
+    public func fetchRankings(selectedRange: String) async throws -> (selected: TeamRankingSnapshot, highlights: [String: MemberHighlight]) {
+        async let today = fetchRanking(range: "today")
+        async let week = fetchRanking(range: "week")
+        async let month = fetchRanking(range: "month")
+        let snapshots = try await (today, week, month)
+        let selected = selectedRange == "week" ? snapshots.1 : selectedRange == "month" ? snapshots.2 : snapshots.0
+        return (selected, MemberHighlights.calculate(today: snapshots.0, week: snapshots.1, month: snapshots.2, workday: MemberHighlights.workday()))
     }
 }
 

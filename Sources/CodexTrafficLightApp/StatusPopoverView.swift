@@ -37,6 +37,7 @@ final class StatusPopoverModel: ObservableObject {
     @Published var snapshot: StateSnapshot?
     @Published var inspirationUnreadCount = 0
     @Published var ranking: TeamRankingSnapshot?
+    @Published var highlights: [String: MemberHighlight] = [:]
     @Published var syncedQuota: TeamQuotaReport?
     @Published var syncDetail: String = "正在读取团队数据…"
     @Published var websiteURL: URL?
@@ -372,27 +373,30 @@ struct StatusPopoverView: View {
             .frame(width: 56, height: 56)
             .clipShape(Circle())
 
-            if member.id.caseInsensitiveCompare(streakLeaderID ?? "") == .orderedSame {
-                Text("连搓多天")
+            if let highlight = model.highlights[member.id] {
+                let colors = highlightColors(highlight.kind)
+                Text(highlight.label)
                     .font(.system(size: 8, weight: .bold))
-                    .foregroundStyle(Color(red: 0.25, green: 0.44, blue: 0.30))
-                    .padding(.horizontal, 6)
-                    .frame(height: 17)
-                    .background(Color(red: 0.88, green: 0.94, blue: 0.85), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-                    .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).stroke(green.opacity(0.38), lineWidth: 1))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                    .foregroundStyle(colors.ink)
+                    .padding(.horizontal, 4)
+                    .frame(maxWidth: 62, minHeight: 17)
+                    .background(colors.fill, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).stroke(colors.border, lineWidth: 1))
+                    .help(highlight.reason)
             }
         }
         .frame(width: 62)
     }
 
-    private var streakLeaderID: String? {
-        rankedMembers
-            .filter { $0.hasEverJoined && ($0.streak ?? 0) >= 7 }
-            .sorted {
-                if ($0.streak ?? 0) != ($1.streak ?? 0) { return ($0.streak ?? 0) > ($1.streak ?? 0) }
-                return $0.id.localizedCaseInsensitiveCompare($1.id) == .orderedAscending
-            }
-            .first?.id
+    private func highlightColors(_ kind: String) -> (ink: Color, fill: Color, border: Color) {
+        switch kind {
+        case "lead": return (Color(red: 0.61, green: 0.29, blue: 0.11), Color(red: 1, green: 0.87, blue: 0.73), Color(red: 0.90, green: 0.68, blue: 0.49))
+        case "quota": return (Color(red: 0.25, green: 0.44, blue: 0.30), Color(red: 0.88, green: 0.94, blue: 0.85), Color(red: 0.66, green: 0.77, blue: 0.60))
+        case "late": return (Color(red: 0.38, green: 0.40, blue: 0.55), Color(red: 0.91, green: 0.90, blue: 0.96), Color(red: 0.73, green: 0.72, blue: 0.84))
+        default: return (Color(red: 0.47, green: 0.32, blue: 0.10), Color(red: 1, green: 0.91, blue: 0.63), Color(red: 0.86, green: 0.73, blue: 0.38))
+        }
     }
 
     private var versionNote: some View {

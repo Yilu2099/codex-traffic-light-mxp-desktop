@@ -248,23 +248,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
         statusBar.setTeamSyncDetail("正在同步本机数据…", websiteURL: service.websiteURL)
         Task { [weak self] in
             do {
-                let ranking = try await Task.detached(priority: .utility) {
+                let rankings = try await Task.detached(priority: .utility) {
                     _ = try await service.sync(quota: quota, quotaDiagnostic: quotaDiagnostic)
-                    let ranking = try await service.fetchRanking(range: requestedRange.rawValue)
+                    let rankings = try await service.fetchRankings(selectedRange: requestedRange.rawValue)
                     await PersistentAvatarCachePrefetcher.prefetch(
-                        ranking: ranking,
+                        ranking: rankings.selected,
                         websiteURL: service.websiteURL
                     )
-                    return ranking
+                    return rankings
                 }.value
                 self?.isTeamSyncing = false
                 self?.teamSyncStartedAt = nil
                 guard self?.selectedRankingRange == requestedRange else { return }
                 self?.statusBar.applyTeamRanking(
-                    ranking,
+                    rankings.selected,
                     websiteURL: service.websiteURL,
                     syncDetail: "刚刚同步",
-                    currentUserID: configuration.userID
+                    currentUserID: configuration.userID,
+                    highlights: rankings.highlights
                 )
             } catch {
                 self?.isTeamSyncing = false
@@ -287,22 +288,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
         let service = TeamUsageSyncService(configuration: configuration)
         Task { [weak self] in
             do {
-                let ranking = try await Task.detached(priority: .utility) {
-                    let ranking = try await service.fetchRanking(range: requestedRange.rawValue)
+                let rankings = try await Task.detached(priority: .utility) {
+                    let rankings = try await service.fetchRankings(selectedRange: requestedRange.rawValue)
                     await PersistentAvatarCachePrefetcher.prefetch(
-                        ranking: ranking,
+                        ranking: rankings.selected,
                         websiteURL: service.websiteURL
                     )
-                    return ranking
+                    return rankings
                 }.value
                 guard let self else { return }
                 guard self.rankingRequestSequence == requestSequence,
                       self.selectedRankingRange == requestedRange else { return }
                 self.isTeamRankingRefreshing = false
                 self.statusBar.applyTeamRanking(
-                    ranking,
+                    rankings.selected,
                     websiteURL: service.websiteURL,
-                    currentUserID: configuration.userID
+                    currentUserID: configuration.userID,
+                    highlights: rankings.highlights
                 )
             } catch {
                 guard let self else { return }

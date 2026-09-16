@@ -67,6 +67,27 @@ enum StatusPopoverCapture {
             model.syncDetail = "正在读取团队数据…"
         } else {
             model.ranking = try? JSONDecoder().decode(TeamRankingSnapshot.self, from: Data(rankingJSON.utf8))
+            if previewState != "unjoined", var today = model.ranking {
+                if let index = today.members.firstIndex(where: { $0.id == "huangning" }) {
+                    today.members[index].sessions = previewState == "streak" ? 5 : 15
+                }
+                if let index = today.members.firstIndex(where: { $0.id == "mameng" }) {
+                    today.members[index].weeklyQuota?.weeklyRemainingPercent = 85
+                }
+                var week = today
+                if let index = week.members.firstIndex(where: { $0.id == "liguoqing" }) {
+                    week.members[index].tokens = 2_200_000_000
+                }
+                var month = today
+                if let index = month.members.firstIndex(where: { $0.id == "qiaoyue" }) {
+                    month.members[index].tokens = 7_000_000_000
+                }
+                model.ranking = today
+                model.highlights = MemberHighlights.calculate(today: today, week: week, month: month, workday: "2026-08-22")
+                if previewState == "long" {
+                    model.highlights["liguoqing"] = MemberHighlight(kind: "quota", label: "5小时余额最足", reason: "同为5小时窗口的成员中，剩余额度比例最高")
+                }
+            }
             model.syncDetail = "正在同步本机数据…"
         }
         model.websiteURL = URL(string: "https://c.wanhe.cn")

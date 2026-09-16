@@ -87,12 +87,14 @@ final class StatusBarController {
         _ ranking: TeamRankingSnapshot?,
         websiteURL: URL?,
         syncDetail: String? = nil,
-        currentUserID: String? = nil
+        currentUserID: String? = nil,
+        highlights: [String: MemberHighlight] = [:]
     ) {
         teamRanking = ranking
         teamWebsiteURL = websiteURL
         teamSyncDetail = syncDetail
         popoverModel.ranking = ranking
+        popoverModel.highlights = highlights
         popoverModel.websiteURL = websiteURL
         if let currentUserID {
             syncedQuota = ranking?.quota(for: currentUserID)

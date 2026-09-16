@@ -1382,6 +1382,40 @@ func testTeamRankingDistinguishesJoinedMemberFromInvitePlaceholder() throws {
     try expectEqual(sorted.map(\.id), ["qiubo", "yangang"], "joined members should rank ahead of invite placeholders even with zero tokens")
 }
 
+func testStatusBarHighlightsMatchWebsitePriorityAndWorkday() throws {
+    let todayJSON = """
+    {"updatedAt":"2026-09-15","members":[
+      {"id":"a","name":"A","tokens":100,"sessions":10,"joined":true},
+      {"id":"b","name":"B","tokens":90,"sessions":9,"joined":true},
+      {"id":"c","name":"C","tokens":80,"sessions":8,"joined":true},
+      {"id":"d","name":"D","tokens":70,"sessions":20,"joined":true},
+      {"id":"e","name":"E","tokens":60,"sessions":7,"joined":true,"dayGrindDay":"2026-09-15","dayGrindTime":"05:30"},
+      {"id":"f","name":"F","tokens":50,"sessions":6,"joined":true,"dayGrindDay":"2026-09-15","dayGrindTime":"06:30","nightGrindDay":"2026-09-14","nightGrindTime":"04:00"},
+      {"id":"g","name":"G","tokens":40,"sessions":5,"joined":true,"nightGrindDay":"2026-09-14","nightGrindTime":"03:00","streak":9,"weeklyQuota":{"weeklyRemainingPercent":30,"primaryWindow":"weekly","updatedAt":"2026-09-15"}},
+      {"id":"h","name":"H","tokens":30,"sessions":4,"joined":true,"weeklyQuota":{"weeklyRemainingPercent":80,"primaryWindow":"weekly","updatedAt":"2026-09-15"}},
+      {"id":"i","name":"I","tokens":20,"sessions":3,"joined":true,"streak":12},
+      {"id":"placeholder","name":"未加入","tokens":1000,"sessions":100,"joined":false}
+    ]}
+    """
+    let weekJSON = """
+    {"updatedAt":"2026-09-15","members":[{"id":"a","name":"A","tokens":1000,"sessions":0},{"id":"b","name":"B","tokens":2000,"sessions":0},{"id":"c","name":"C","tokens":900,"sessions":0},{"id":"d","name":"D","tokens":800,"sessions":0},{"id":"e","name":"E","tokens":700,"sessions":0},{"id":"f","name":"F","tokens":600,"sessions":0},{"id":"g","name":"G","tokens":500,"sessions":0},{"id":"h","name":"H","tokens":400,"sessions":0},{"id":"i","name":"I","tokens":300,"sessions":0}]}
+    """
+    let monthJSON = """
+    {"updatedAt":"2026-09-15","members":[{"id":"a","name":"A","tokens":1000,"sessions":0},{"id":"b","name":"B","tokens":900,"sessions":0},{"id":"c","name":"C","tokens":3000,"sessions":0},{"id":"d","name":"D","tokens":800,"sessions":0},{"id":"e","name":"E","tokens":700,"sessions":0},{"id":"f","name":"F","tokens":600,"sessions":0},{"id":"g","name":"G","tokens":500,"sessions":0},{"id":"h","name":"H","tokens":400,"sessions":0},{"id":"i","name":"I","tokens":300,"sessions":0}]}
+    """
+    let decoder = JSONDecoder()
+    let today = try decoder.decode(TeamRankingSnapshot.self, from: Data(todayJSON.utf8))
+    let week = try decoder.decode(TeamRankingSnapshot.self, from: Data(weekJSON.utf8))
+    let month = try decoder.decode(TeamRankingSnapshot.self, from: Data(monthJSON.utf8))
+    let labels = MemberHighlights.calculate(today: today, week: week, month: month, workday: "2026-09-15").mapValues(\.label)
+    try expectEqual(labels, ["a":"今日领跑", "b":"本周领跑", "c":"本月领跑", "d":"对话最多", "e":"起得最早", "f":"收工最晚", "h":"余额最足", "i":"连搓多天"], "status bar should use the same website winner order and labels")
+    try expectEqual(today.members[4].dayGrindDay, "2026-09-15", "ranking should decode the current workday used by website tags")
+    try expectEqual(today.members[5].nightGrindDay, "2026-09-14", "ranking should decode the settled previous workday used by website tags")
+    let iso = ISO8601DateFormatter()
+    try expectEqual(MemberHighlights.workday(at: iso.date(from: "2026-09-14T21:00:00Z")!), "2026-09-14", "workday should not settle before 05:01 China time")
+    try expectEqual(MemberHighlights.workday(at: iso.date(from: "2026-09-14T21:01:00Z")!), "2026-09-15", "workday should settle at 05:01 China time")
+}
+
 func testAvatarDiskCachePersistsByRemoteURL() throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     let cache = AvatarDiskCache(directoryURL: root.appendingPathComponent("avatars"))
@@ -4342,6 +4376,7 @@ let tests: [(String, () throws -> Void)] = [
     ("team ranking decodes member weekly quota", testTeamRankingDecodesMemberWeeklyQuota),
     ("team ranking decodes member 5-hour quota", testTeamRankingDecodesFiveHourQuota),
     ("team ranking distinguishes joined members", testTeamRankingDistinguishesJoinedMemberFromInvitePlaceholder),
+    ("status bar highlights match website priority and workday", testStatusBarHighlightsMatchWebsitePriorityAndWorkday),
     ("avatar disk cache persists by URL", testAvatarDiskCachePersistsByRemoteURL),
     ("official Codex usage parses daily buckets", testOfficialCodexUsageParsesDailyBuckets),
     ("official usage rejects protocol errors promptly", testOfficialUsageRejectsProtocolErrorsWithoutWaitingForTimeout),
