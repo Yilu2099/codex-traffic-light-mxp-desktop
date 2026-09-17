@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 import CodexTrafficLightCore
 
-enum StatusRankingRange: String, CaseIterable, Equatable {
+enum StatusRankingRange: String, CaseIterable, Equatable, Hashable, Sendable {
     case today
     case week
     case month

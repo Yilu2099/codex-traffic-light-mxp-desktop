@@ -25,6 +25,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
     private let externalAlertStore = ExternalAlertStore()
     private var selectedRankingRange: StatusRankingRange = .today
     private var rankingRequestSequence = 0
+    private var rankingCache: [StatusRankingRange: TeamRankingSnapshot] = [:]
+    private var isRankingCacheWarming = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if let release = Bundle.main.executableURL?.deletingLastPathComponent() {
@@ -248,25 +250,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
         statusBar.setTeamSyncDetail("正在同步本机数据…", websiteURL: service.websiteURL)
         Task { [weak self] in
             do {
-                let rankings = try await Task.detached(priority: .utility) {
+                let ranking = try await Task.detached(priority: .utility) {
                     _ = try await service.sync(quota: quota, quotaDiagnostic: quotaDiagnostic)
-                    let rankings = try await service.fetchRankings(selectedRange: requestedRange.rawValue)
-                    await PersistentAvatarCachePrefetcher.prefetch(
-                        ranking: rankings.selected,
-                        websiteURL: service.websiteURL
-                    )
-                    return rankings
+                    return try await service.fetchRanking(range: requestedRange.rawValue)
                 }.value
                 self?.isTeamSyncing = false
                 self?.teamSyncStartedAt = nil
+                self?.rankingCache[requestedRange] = ranking
+                self?.prefetchAvatars(for: ranking, websiteURL: service.websiteURL)
                 guard self?.selectedRankingRange == requestedRange else { return }
-                self?.statusBar.applyTeamRanking(
-                    rankings.selected,
-                    websiteURL: service.websiteURL,
-                    syncDetail: "刚刚同步",
-                    currentUserID: configuration.userID,
-                    highlights: rankings.highlights
-                )
+                self?.applyRanking(ranking, configuration: configuration, service: service, syncDetail: "刚刚同步")
+                self?.warmRankingCacheIfNeeded(service: service, configuration: configuration)
             } catch {
                 self?.isTeamSyncing = false
                 self?.teamSyncStartedAt = nil
@@ -282,30 +276,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
         if !force && (isTeamRankingRefreshing || isTeamSyncing) { return }
         let requestedRange = range ?? selectedRankingRange
         selectedRankingRange = requestedRange
+        if let cached = rankingCache[requestedRange] {
+            applyRanking(cached, configuration: configuration, service: TeamUsageSyncService(configuration: configuration))
+        }
         rankingRequestSequence += 1
         let requestSequence = rankingRequestSequence
         isTeamRankingRefreshing = true
         let service = TeamUsageSyncService(configuration: configuration)
         Task { [weak self] in
             do {
-                let rankings = try await Task.detached(priority: .utility) {
-                    let rankings = try await service.fetchRankings(selectedRange: requestedRange.rawValue)
-                    await PersistentAvatarCachePrefetcher.prefetch(
-                        ranking: rankings.selected,
-                        websiteURL: service.websiteURL
-                    )
-                    return rankings
+                let ranking = try await Task.detached(priority: .utility) {
+                    try await service.fetchRanking(range: requestedRange.rawValue)
                 }.value
                 guard let self else { return }
+                self.rankingCache[requestedRange] = ranking
+                self.prefetchAvatars(for: ranking, websiteURL: service.websiteURL)
                 guard self.rankingRequestSequence == requestSequence,
                       self.selectedRankingRange == requestedRange else { return }
                 self.isTeamRankingRefreshing = false
-                self.statusBar.applyTeamRanking(
-                    rankings.selected,
-                    websiteURL: service.websiteURL,
-                    currentUserID: configuration.userID,
-                    highlights: rankings.highlights
-                )
+                self.applyRanking(ranking, configuration: configuration, service: service)
+                self.warmRankingCacheIfNeeded(service: service, configuration: configuration)
             } catch {
                 guard let self else { return }
                 guard self.rankingRequestSequence == requestSequence else { return }
@@ -313,6 +303,71 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
                 self.statusBar.setRankingRangeLoading(false)
                 AppDelegate.appendTeamSyncLog("ranking refresh failed: \(error)")
             }
+        }
+    }
+
+    private func applyRanking(
+        _ ranking: TeamRankingSnapshot,
+        configuration: TeamSyncConfiguration,
+        service: TeamUsageSyncService,
+        syncDetail: String? = nil
+    ) {
+        statusBar.applyTeamRanking(
+            ranking,
+            websiteURL: service.websiteURL,
+            syncDetail: syncDetail,
+            currentUserID: configuration.userID,
+            highlights: cachedHighlights()
+        )
+    }
+
+    private func cachedHighlights() -> [String: MemberHighlight] {
+        guard let today = rankingCache[.today],
+              let week = rankingCache[.week],
+              let month = rankingCache[.month] else { return [:] }
+        return MemberHighlights.calculate(
+            today: today,
+            week: week,
+            month: month,
+            workday: MemberHighlights.workday()
+        )
+    }
+
+    private func warmRankingCacheIfNeeded(
+        service: TeamUsageSyncService,
+        configuration: TeamSyncConfiguration
+    ) {
+        let missing = StatusRankingRange.allCases.filter { rankingCache[$0] == nil }
+        guard !missing.isEmpty, !isRankingCacheWarming else { return }
+        isRankingCacheWarming = true
+        Task { [weak self] in
+            let loaded = await withTaskGroup(of: (StatusRankingRange, TeamRankingSnapshot?).self) { group in
+                for range in missing {
+                    group.addTask {
+                        let ranking = try? await service.fetchRanking(range: range.rawValue)
+                        return (range, ranking)
+                    }
+                }
+                var result: [(StatusRankingRange, TeamRankingSnapshot)] = []
+                for await (range, ranking) in group {
+                    if let ranking { result.append((range, ranking)) }
+                }
+                return result
+            }
+            guard let self else { return }
+            self.isRankingCacheWarming = false
+            for (range, ranking) in loaded {
+                self.rankingCache[range] = ranking
+                self.prefetchAvatars(for: ranking, websiteURL: service.websiteURL)
+            }
+            guard let current = self.rankingCache[self.selectedRankingRange] else { return }
+            self.applyRanking(current, configuration: configuration, service: service)
+        }
+    }
+
+    private func prefetchAvatars(for ranking: TeamRankingSnapshot, websiteURL: URL) {
+        Task.detached(priority: .utility) {
+            await PersistentAvatarCachePrefetcher.prefetch(ranking: ranking, websiteURL: websiteURL)
         }
     }
 
