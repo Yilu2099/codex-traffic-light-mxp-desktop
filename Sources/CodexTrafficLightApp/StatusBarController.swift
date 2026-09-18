@@ -10,8 +10,6 @@ protocol StatusBarControllerDelegate: AnyObject {
 
 @MainActor
 final class StatusBarController {
-    private static let breathingFrameCount = 12
-    private static let breathingFrameInterval: TimeInterval = 0.5
     private let healthyGreen = NSColor(
         srgbRed: 0x35 / 255,
         green: 0xD2 / 255,
@@ -47,9 +45,6 @@ final class StatusBarController {
     private var teamSyncDetail: String?
     private var syncedQuota: TeamQuotaReport?
     private var quotaRemainingPercent: Int?
-    private var breathingTimer: Timer?
-    private var breathingFrames: [NSImage] = []
-    private var breathingFrameIndex = 0
 
     init() {
         item.button?.imagePosition = .imageLeft
@@ -121,11 +116,6 @@ final class StatusBarController {
         if let websiteURL { popoverModel.websiteURL = websiteURL }
     }
 
-    func stopAnimation() {
-        breathingTimer?.invalidate()
-        breathingTimer = nil
-    }
-
     private func statusBarText() -> String {
         guard let quota = effectiveQuota() else {
             return "额度 --"
@@ -181,65 +171,23 @@ final class StatusBarController {
 
     private func updateQuotaIndicator() {
         guard let percent = quotaRemainingPercent else {
-            stopAnimation()
             item.button?.image = makeQuotaIndicator(color: .systemGray, glow: 0.15)
             return
         }
 
         if percent <= 10 {
-            stopAnimation()
             item.button?.image = makeQuotaIndicator(color: .systemRed, glow: 0.72)
             return
         }
 
-        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
-            stopAnimation()
-            item.button?.image = makeQuotaIndicator(
-                color: healthyGreen,
-                glow: 0.82,
-                coreTop: healthyGreenTop,
-                coreBottom: healthyGreenBottom,
-                rim: healthyGreenRim,
-                haloProgress: 0.35
-            )
-            return
-        }
-
-        if breathingTimer == nil {
-            if breathingFrames.isEmpty {
-                breathingFrames = (0..<Self.breathingFrameCount).map { index in
-                    let progress = CGFloat(index) / CGFloat(Self.breathingFrameCount - 1)
-                    return makeQuotaIndicator(
-                        color: healthyGreen,
-                        glow: 0.82,
-                        coreTop: healthyGreenTop,
-                        coreBottom: healthyGreenBottom,
-                        rim: healthyGreenRim,
-                        haloProgress: progress
-                    )
-                }
-            }
-            breathingFrameIndex = 0
-            let timer = Timer(
-                timeInterval: Self.breathingFrameInterval,
-                target: self,
-                selector: #selector(breathingTimerFired),
-                userInfo: nil,
-                repeats: true
-            )
-            timer.tolerance = 0.15
-            RunLoop.main.add(timer, forMode: .common)
-            breathingTimer = timer
-        }
-        updateBreathingFrame()
-    }
-
-    @objc private func breathingTimerFired() {
-        guard let percent = quotaRemainingPercent, percent > 10 else {
-            updateQuotaIndicator()
-            return
-        }
-        updateBreathingFrame()
+        item.button?.image = makeQuotaIndicator(
+            color: healthyGreen,
+            glow: 0.82,
+            coreTop: healthyGreenTop,
+            coreBottom: healthyGreenBottom,
+            rim: healthyGreenRim,
+            haloProgress: 0.35
+        )
     }
 
     @objc private func togglePopover() {
@@ -271,12 +219,6 @@ final class StatusBarController {
     private func selectRankingRange(_ range: StatusRankingRange) {
         setRankingRange(range, isLoading: true)
         delegate?.statusBarDidSelectRankingRange(range)
-    }
-
-    private func updateBreathingFrame() {
-        guard !breathingFrames.isEmpty else { return }
-        item.button?.image = breathingFrames[breathingFrameIndex]
-        breathingFrameIndex = (breathingFrameIndex + 1) % breathingFrames.count
     }
 
     private func makeQuotaIndicator(

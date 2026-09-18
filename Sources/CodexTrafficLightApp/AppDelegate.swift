@@ -529,7 +529,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
     }
 
     func statusBarDidRequestQuit() {
-        statusBar.stopAnimation()
         quotaTimer?.invalidate()
         teamSyncTimer?.invalidate()
         teamRankingTimer?.invalidate()
