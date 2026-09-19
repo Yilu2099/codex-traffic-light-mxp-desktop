@@ -51,6 +51,7 @@ struct StatusPopoverView: View {
     let openWebsite: (String?) -> Void
     let selectRange: (StatusRankingRange) -> Void
     let openGuide: () -> Void
+    let openBureau: () -> Void
     let quit: () -> Void
 
     private let canvas = Color(red: 0.985, green: 0.982, blue: 0.974)
@@ -461,6 +462,17 @@ struct StatusPopoverView: View {
                         .allowsHitTesting(false)
                 }
             }
+
+            Button(action: openBureau) {
+                Label("创新局", systemImage: "sparkles")
+                    .font(.system(size: 13, weight: .bold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .foregroundStyle(.white)
+                    .background(green, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .disabled(model.websiteURL == nil)
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 9)

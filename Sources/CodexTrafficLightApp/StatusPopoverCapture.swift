@@ -99,6 +99,7 @@ enum StatusPopoverCapture {
             openWebsite: { _ in },
             selectRange: { _ in },
             openGuide: {},
+            openBureau: {},
             quit: {}
         ))
         view.appearance = NSAppearance(named: .aqua)

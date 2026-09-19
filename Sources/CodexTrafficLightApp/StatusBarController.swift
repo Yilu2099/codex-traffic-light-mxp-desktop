@@ -60,6 +60,7 @@ final class StatusBarController {
             openWebsite: { [weak self] memberID in self?.openTeamWebsite(memberID: memberID) },
             selectRange: { [weak self] range in self?.selectRankingRange(range) },
             openGuide: { [weak self] in self?.openTeamGuide() },
+            openBureau: { [weak self] in self?.openBureau() },
             quit: { [weak self] in self?.delegate?.statusBarDidRequestQuit() }
         )
         let hostingController = NSHostingController(rootView: rootView)
@@ -213,6 +214,13 @@ final class StatusBarController {
         guard var guideURL = teamWebsiteURL else { return }
         guideURL.append(path: "guide")
         NSWorkspace.shared.open(guideURL)
+        popover.performClose(nil)
+    }
+
+    private func openBureau() {
+        guard var bureauURL = teamWebsiteURL else { return }
+        bureauURL.append(path: "bureau")
+        NSWorkspace.shared.open(bureauURL)
         popover.performClose(nil)
     }
 
