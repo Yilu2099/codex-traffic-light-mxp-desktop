@@ -4270,6 +4270,33 @@ func testOfficialUsageRefreshPolicyTracksUTCSettlement() throws {
     try expectEqual(OfficialUsageRefreshPolicy.cacheAge(for: delayed, now: later), 30 * 60, "delayed bucket should reduce polling after Beijing 10:00")
 }
 
+func testInnovationBureauSnapshotDecodesAndScopesMembers() throws {
+    try expect(InnovationBureau.isMember("zlu"), "张璐属于创新局")
+    try expect(InnovationBureau.isMember("liguoqing"), "李国庆属于创新局")
+    try expect(InnovationBureau.isMember("qiaoyue"), "乔月属于创新局")
+    try expect(!InnovationBureau.isMember("qiubo"), "其他成员不属于创新局，不该多一个菜单栏入口")
+
+    let json = """
+    {"name":"创新局","tagline":"给企业做 AI 数字化改造","updatedAt":"2026-09-19T01:00:00.000Z",
+     "stages":[{"key":"building","label":"正在做"}],
+     "members":[
+       {"id":"zlu","name":"张璐","avatar":"/avatars/58.png","activeCount":1,"onlineCount":0,"updatedAt":"2026-09-19T01:00:00.000Z",
+        "projects":[{"id":"p1","name":"Boss 直聘智能体","client":"鲁信机械","summary":"自动筛简历。","progressNote":"打分跑通了。","nextStep":"下周试用。","stage":"building","stageLabel":"正在做","percent":65,"createdAt":"2026-09-02T02:00:00.000Z","updatedAt":"2026-09-19T01:00:00.000Z"}]},
+       {"id":"liguoqing","name":"李国庆","avatar":"/avatars/168.png","activeCount":0,"onlineCount":1,"updatedAt":"2026-09-16T02:00:00.000Z",
+        "projects":[{"id":"p2","name":"设计师智能体","client":"青岛家居","summary":"自动出配色方案。","progressNote":"","nextStep":"","stage":"online","stageLabel":"已上线","percent":100,"createdAt":"2026-08-05T02:00:00.000Z","updatedAt":"2026-09-16T02:00:00.000Z"}]},
+       {"id":"qiaoyue","name":"乔月","avatar":"/avatars/201.png","activeCount":0,"onlineCount":0,"updatedAt":"","projects":[]}
+     ]}
+    """
+    let snapshot = try JSONDecoder().decode(BureauSnapshot.self, from: Data(json.utf8))
+    try expectEqual(snapshot.name, "创新局", "标题按服务端下发")
+    try expectEqual(snapshot.members.count, 3, "只展示三个人")
+    try expectEqual(snapshot.projectCount, 2, "项目总数")
+    try expectEqual(snapshot.activeCount, 1, "推进中的项目数")
+    try expectEqual(snapshot.members[0].projects[0].stageLabel, "正在做", "阶段文案直接用服务端的中文")
+    try expectEqual(snapshot.members[0].projects[0].percent, 65, "进度百分比")
+    try expectEqual(snapshot.members[2].projects.count, 0, "没填项目的人也要占一行")
+}
+
 func testExternalAlertStoreDeduplicatesDeliveredEvents() throws {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("external-alert-tests-\(UUID().uuidString)", isDirectory: true)
@@ -4443,7 +4470,8 @@ let tests: [(String, () throws -> Void)] = [
     ("client release retention pins bridge rollback", testClientReleaseRetentionPinsActiveBridgeRollback),
     ("bounded logs rotate", testBoundedLogRotatesBeforeExceedingLimit),
     ("bounded logs cap and serialize", testBoundedLogCapsOversizedAndSerializesConcurrentWrites),
-    ("external alerts deduplicate delivered events", testExternalAlertStoreDeduplicatesDeliveredEvents)
+    ("external alerts deduplicate delivered events", testExternalAlertStoreDeduplicatesDeliveredEvents),
+    ("innovation bureau snapshot decodes and scopes members", testInnovationBureauSnapshotDecodesAndScopesMembers)
 ]
 
 var failures = 0

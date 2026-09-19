@@ -7,6 +7,11 @@ if let capturePath = ProcessInfo.processInfo.environment["CODEX_LIGHT_CAPTURE_ST
     let succeeded = StatusPopoverCapture.writePreview(to: URL(fileURLWithPath: capturePath))
     exit(succeeded ? 0 : 1)
 }
+if let capturePath = ProcessInfo.processInfo.environment["CODEX_LIGHT_CAPTURE_BUREAU_POPOVER"] {
+    app.setActivationPolicy(.prohibited)
+    let succeeded = BureauPopoverCapture.writePreview(to: URL(fileURLWithPath: capturePath))
+    exit(succeeded ? 0 : 1)
+}
 let delegate = AppDelegate()
 app.delegate = delegate
 app.setActivationPolicy(.accessory)
