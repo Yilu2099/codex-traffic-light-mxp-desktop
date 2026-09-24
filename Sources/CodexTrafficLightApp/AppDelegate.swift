@@ -27,9 +27,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
     private var rankingRequestSequence = 0
     private var rankingCache: [StatusRankingRange: TeamRankingSnapshot] = [:]
     private var isRankingCacheWarming = false
-    private var bureauStatusBar: BureauStatusBarController?
-    private var bureauTimer: Timer?
-    private var isBureauRefreshing = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if let release = Bundle.main.executableURL?.deletingLastPathComponent() {
@@ -187,56 +184,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
             userInfo: nil,
             repeats: true
         )
-        configureBureauIntegration(configuration: configuration)
-    }
-
-    // 创新局是三个人的子系统，只在这三台机器上多挂一个菜单栏入口。
-    private func configureBureauIntegration(configuration: TeamSyncConfiguration) {
-        guard InnovationBureau.isMember(configuration.userID) else { return }
-        let controller = BureauStatusBarController(currentUserID: configuration.userID)
-        let service = TeamUsageSyncService(configuration: configuration)
-        controller.apply(
-            snapshot: nil,
-            websiteURL: service.websiteURL,
-            bureauPageURL: service.bureauPageURL,
-            syncDetail: "正在读取创新局项目…"
-        )
-        controller.onPopoverOpen = { [weak self] in self?.refreshBureau() }
-        bureauStatusBar = controller
-        refreshBureau()
-        bureauTimer = Timer.scheduledTimer(
-            timeInterval: Defaults.bureauRefreshSeconds,
-            target: self,
-            selector: #selector(bureauTimerFired),
-            userInfo: nil,
-            repeats: true
-        )
-    }
-
-    @objc private func bureauTimerFired() {
-        refreshBureau()
-    }
-
-    private func refreshBureau() {
-        guard let configuration = teamSyncConfiguration, bureauStatusBar != nil, !isBureauRefreshing else { return }
-        isBureauRefreshing = true
-        let service = TeamUsageSyncService(configuration: configuration)
-        Task { [weak self] in
-            do {
-                let snapshot = try await service.fetchBureau()
-                self?.isBureauRefreshing = false
-                self?.bureauStatusBar?.apply(
-                    snapshot: snapshot,
-                    websiteURL: service.websiteURL,
-                    bureauPageURL: service.bureauPageURL,
-                    syncDetail: "刚刚同步"
-                )
-            } catch {
-                self?.isBureauRefreshing = false
-                self?.bureauStatusBar?.setSyncDetail("创新局项目读取失败，稍后重试")
-                AppDelegate.appendTeamSyncLog("bureau refresh failed: \(error)")
-            }
-        }
     }
 
     @objc private func teamSyncTimerFired() {
@@ -588,7 +535,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
         presenceTimer?.invalidate()
         teamSyncWatchdogTimer?.invalidate()
         externalAlertTimer?.invalidate()
-        bureauTimer?.invalidate()
         NSApp.terminate(nil)
     }
 }

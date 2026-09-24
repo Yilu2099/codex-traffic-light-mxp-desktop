@@ -147,11 +147,3 @@ public extension TeamUsageSyncService {
         return snapshot
     }
 }
-
-public extension Defaults {
-    static let bureauRefreshSeconds: TimeInterval = {
-        if let raw = ProcessInfo.processInfo.environment["CODEX_LIGHT_BUREAU_SECONDS"],
-           let seconds = TimeInterval(raw), seconds > 0 { return seconds }
-        return 10 * 60
-    }()
-}
