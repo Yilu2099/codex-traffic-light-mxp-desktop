@@ -380,6 +380,7 @@ public struct TeamUsagePayload: Codable, Equatable, Sendable {
     public var quotaDiagnostic: TeamQuotaDiagnostic?
     public var officialUsage: OfficialCodexUsageReport?
     public var todayLiveUsage: TodayLiveUsageReport
+    public var claudeDailyUsage: [ClaudeDailyTokens]?
     public var sessionActivity: [TeamSessionActivity]
     public var sessionActivityMode: String?
     public var sessionActivityCutoffDay: String?
@@ -389,6 +390,26 @@ public struct TeamUsagePayload: Codable, Equatable, Sendable {
     public var projects: [TeamProjectActivity]
     public var inputEvents: [TeamInputEvent]
     public var sessions: [TeamUsageSession]
+    public var usageOnly: Bool? = true
+
+    private enum CodingKeys: String, CodingKey {
+        case collector, collectedAt, profile, device, quota, quotaDiagnostic, officialUsage, todayLiveUsage, claudeDailyUsage
+        case sessionActivity, sessionActivityMode, sessionActivityCutoffDay, interactionSummary, grindHistory, grindHistoryMode
+        case projects, inputEvents, sessions, usageOnly
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(true, forKey: .usageOnly)
+        try container.encode(collector, forKey: .collector)
+        try container.encode(collectedAt, forKey: .collectedAt)
+        try container.encode(["userId": profile.userId], forKey: .profile)
+        try container.encode(["id": device.id], forKey: .device)
+        try container.encodeIfPresent(quota, forKey: .quota)
+        try container.encodeIfPresent(officialUsage, forKey: .officialUsage)
+        try container.encode(todayLiveUsage, forKey: .todayLiveUsage)
+        try container.encodeIfPresent(claudeDailyUsage, forKey: .claudeDailyUsage)
+    }
 }
 
 public struct TeamSessionInteractionSummary: Codable, Equatable, Sendable {
@@ -443,6 +464,15 @@ public struct TeamPresencePayload: Codable, Equatable, Sendable {
     public var lastActiveAt: String?
     public var taskActiveAt: String?
     public var todayLiveUsage: TodayLiveUsageReport?
+
+    private enum CodingKeys: String, CodingKey { case collector, collectedAt, device, lastActiveAt, taskActiveAt, todayLiveUsage }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(collector, forKey: .collector)
+        try container.encode(collectedAt, forKey: .collectedAt)
+        try container.encodeIfPresent(todayLiveUsage, forKey: .todayLiveUsage)
+    }
 }
 
 public struct TeamPresenceResult: Codable, Equatable, Sendable {
@@ -964,41 +994,8 @@ public struct TeamUsageSyncService: Sendable {
             sessionFileIndex: sessionFileIndex,
             now: now
         )
-        // Token accounting reads only session metadata and token_count totals.
-        // The separately authorized input ledger below tails human input text;
-        // it never includes assistant replies, code, attachments or injected context.
-        // The two-minute live sync must never repeatedly rescan full files.
-        // TodayCodexUsageCollector already tails appended token events and the
-        // server retains earlier calendar buckets for week/month aggregation.
-        let calendarUsage = configuration.endpoint.host == "c.wanhe.cn"
-            ? OneTimeUsageBackfillStore().prepare(configuration: configuration, device: device, now: now)
-            : []
-        let allSessionActivity = CodexSessionFileCounter().collect(
-            codexHome: configuration.codexHome,
-            sessionFileIndex: sessionFileIndex,
-            days: configuration.collectDays,
-            now: now
-        )
-        let sessionActivityPlan = TeamSessionActivityDeltaStore().prepare(
-            current: allSessionActivity,
-            days: configuration.collectDays,
-            now: now,
-            forceFull: sessionActivityProtocol != "delta_v1"
-        )
-        let interactionReport = CodexGrindHistoryCollector().collectIncremental(
-            codexHome: configuration.codexHome,
-            sessionFileIndex: sessionFileIndex,
-            days: min(30, configuration.collectDays),
-            now: now
-        )
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let projectReport = ProjectActivityStore().prepareSync(
-            days: configuration.collectDays,
-            now: now,
-            codexHome: configuration.codexHome,
-            sessionFileIndex: sessionFileIndex
-        )
         return TeamUsagePayload(
             collector: "wanhe-codex-mac-menu",
             collectedAt: formatter.string(from: now),
@@ -1014,18 +1011,16 @@ public struct TeamUsageSyncService: Sendable {
             quotaDiagnostic: quotaDiagnostic,
             officialUsage: officialUsage,
             todayLiveUsage: todayLiveUsage,
-            sessionActivity: sessionActivityPlan.activities,
-            sessionActivityMode: sessionActivityPlan.mode,
-            sessionActivityCutoffDay: sessionActivityPlan.cutoffDay,
-            interactionSummary: interactionReport.sessions,
-            grindHistory: interactionReport.history,
-            grindHistoryMode: "interaction_v7",
-            // Only newly appended, human-authored input_text events are read.
-            // Replies, fenced code, attachments, injected context and subagents
-            // are excluded before the authenticated upload is prepared.
-            projects: projectReport.projects,
-            inputEvents: projectReport.inputEvents,
-            sessions: calendarUsage
+            claudeDailyUsage: ClaudeTokenUsageCollector().collect(days: configuration.collectDays),
+            sessionActivity: [],
+            sessionActivityMode: nil,
+            sessionActivityCutoffDay: nil,
+            interactionSummary: [],
+            grindHistory: [],
+            grindHistoryMode: "",
+            projects: [],
+            inputEvents: [],
+            sessions: []
         )
     }
 
@@ -1060,15 +1055,7 @@ public struct TeamUsageSyncService: Sendable {
     }
 
     public func sync(quota: TeamQuotaReport?, quotaDiagnostic: TeamQuotaDiagnostic? = nil) async throws -> TeamUsageSyncResult {
-        // Capability negotiation is deliberately fail-closed. If health is
-        // unavailable or an older server omits the protocol field, the upload
-        // remains a full snapshot and is still allowed to proceed.
-        let activityProtocol = await fetchServerCapabilities()?.sessionActivityProtocol
-        let payload = try makePayload(
-            quota: quota,
-            quotaDiagnostic: quotaDiagnostic,
-            sessionActivityProtocol: activityProtocol
-        )
+        let payload = try makePayload(quota: quota)
         var request = URLRequest(url: configuration.endpoint)
         request.httpMethod = "POST"
         request.timeoutInterval = 45
@@ -1083,24 +1070,6 @@ public struct TeamUsageSyncService: Sendable {
         }
         guard let result = try? JSONDecoder().decode(TeamUsageSyncResult.self, from: data) else {
             throw TeamUsageSyncError.invalidResponse
-        }
-        if let mode = payload.sessionActivityMode,
-           result.sessionActivityModeAccepted == mode,
-           result.sessionActivityDurable == true,
-           let cutoffDay = payload.sessionActivityCutoffDay,
-           let collectedAt = Self.isoDate(payload.collectedAt) {
-            TeamSessionActivityDeltaStore().acknowledge(TeamSessionActivityDeltaPlan(
-                mode: mode,
-                cutoffDay: cutoffDay,
-                localDay: Self.localDayString(collectedAt),
-                activities: payload.sessionActivity
-            ))
-        }
-        ProjectActivityStore().acknowledgeInputEvents(ids: result.inputEventIds ?? [])
-        CodexGrindHistoryCollector().acknowledgeUploaded()
-        if configuration.endpoint.host == "c.wanhe.cn",
-           result.accepted >= payload.sessions.count {
-            OneTimeUsageBackfillStore().acknowledge()
         }
         return result
     }

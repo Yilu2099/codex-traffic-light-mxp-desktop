@@ -1501,10 +1501,18 @@ func testTeamPayloadPreservesLocalDataWithoutOfficialUsage() throws {
     let data = try JSONEncoder().encode(payload)
     let encoded = try JSONSerialization.jsonObject(with: data) as! [String: Any]
     try expect(encoded["officialUsage"] == nil, "missing official usage must be omitted rather than sent as zero")
-    let roundTrip = try JSONDecoder().decode(TeamUsagePayload.self, from: data)
-    try expectEqual(roundTrip.todayLiveUsage.tokens, 123, "local tokens must survive")
-    try expectEqual(roundTrip.sessionActivity.count, 1, "local activity must survive")
-    try expectEqual(roundTrip.grindHistory.first?.dayGrindTime, "12:00", "local workday must survive")
+    try expect((encoded["usageOnly"] as? Bool) == true, "upload must declare usage-only mode")
+    let live = encoded["todayLiveUsage"] as? [String: Any]
+    try expectEqual(live?["tokens"] as? Int, 123, "local tokens must survive")
+    for key in ["sessionActivity", "interactionSummary", "grindHistory", "projects", "inputEvents", "sessions", "quotaDiagnostic"] {
+        try expect(encoded[key] == nil, "\(key) must be omitted from upload")
+    }
+    try expectEqual((encoded["profile"] as? [String: Any])?.count, 1, "profile must contain only the user ID")
+    try expectEqual((encoded["device"] as? [String: Any])?.count, 1, "device must contain only the device ID")
+    let presenceFixture = #"{"collector":"test","collectedAt":"2026-09-05T04:00:00Z","device":{"id":"fixture","kind":"mac","name":"Private","modelIdentifier":"Test","legacyIds":[]},"lastActiveAt":"2026-09-05T03:59:00Z","taskActiveAt":"2026-09-05T03:59:00Z","todayLiveUsage":{"day":"2026-09-05","tokens":123,"updatedAt":"2026-09-05T04:00:00Z","source":"local_live_increment"}}"#.data(using: .utf8)!
+    let presence = try JSONDecoder().decode(TeamPresencePayload.self, from: presenceFixture)
+    let presenceJSON = try JSONSerialization.jsonObject(with: JSONEncoder().encode(presence)) as! [String: Any]
+    try expectEqual(Set(presenceJSON.keys), Set(["collector", "collectedAt", "todayLiveUsage"]), "presence must contain only usage and protocol metadata")
 }
 
 func testSessionCounterUsesLocalFilenameAndMetadataWithoutReadingContents() throws {
@@ -4336,7 +4344,25 @@ func testExternalAlertStoreDeduplicatesDeliveredEvents() throws {
     )
 }
 
+func testClaudeTokenUsageDeduplicatesMessages() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("claude-token-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: root) }
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let day = ISO8601DateFormatter().string(from: Date())
+    let first = "{\"type\":\"assistant\",\"timestamp\":\"\(day)\",\"message\":{\"id\":\"m1\",\"usage\":{\"input_tokens\":2,\"cache_creation_input_tokens\":3,\"cache_read_input_tokens\":4,\"output_tokens\":5}}}"
+    let second = first.replacingOccurrences(of: "\"output_tokens\":5", with: "\"output_tokens\":7")
+    try (first + "\n" + second + "\n").write(to: root.appendingPathComponent("one.jsonl"), atomically: true, encoding: .utf8)
+    try first.write(to: root.appendingPathComponent("two.jsonl"), atomically: true, encoding: .utf8)
+    let collector = ClaudeTokenUsageCollector()
+    let cache = root.appendingPathComponent("cache.json")
+    let rows = collector.collect(root: root, days: 2, cacheURL: cache)
+    try expectEqual(rows.count, 1, "Claude usage should have one local day")
+    try expectEqual(rows[0].totalTokens, 16, "repeated message IDs should count once at the highest usage")
+    try expectEqual(collector.collect(root: root, days: 2, cacheURL: cache), rows, "cached collection should be stable")
+}
+
 let tests: [(String, () throws -> Void)] = [
+    ("claude token usage deduplicates messages", testClaudeTokenUsageDeduplicatesMessages),
     ("brand tagline stays aligned", {
         try expectEqual(BrandCopy.tagline, "用 Codex 手搓世界，人人都是造物主", "client tagline should match the approved brand copy")
     }),
