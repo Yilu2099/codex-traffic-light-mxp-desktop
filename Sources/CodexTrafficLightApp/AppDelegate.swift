@@ -105,31 +105,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
 
     private func deliverExternalAlert(_ alert: ExternalAlert) {
         guard externalAlertStore.isUnread(alert) else { return }
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        process.arguments = [
-            "-e",
-            "on run argv\ndisplay notification item 2 of argv with title item 1 of argv sound name \"Glass\"\nend run",
-            alert.title,
-            alert.body,
-        ]
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        process.terminationHandler = { [externalAlertStore] completed in
-            guard completed.terminationStatus == 0 else {
-                AppDelegate.appendTeamSyncLog("external alert delivery failed: exit=\(completed.terminationStatus)")
-                return
-            }
-            do {
-                try externalAlertStore.markDelivered(alert)
-            } catch {
-                AppDelegate.appendTeamSyncLog("external alert acknowledgement failed: \(error)")
-            }
-        }
+        NSApp.activate(ignoringOtherApps: true)
+        let detail = NSAlert()
+        detail.messageText = alert.title
+        detail.informativeText = alert.body
+        detail.addButton(withTitle: "确定")
+        guard detail.runModal() == .alertFirstButtonReturn else { return }
         do {
-            try process.run()
+            try externalAlertStore.markDelivered(alert)
         } catch {
-            AppDelegate.appendTeamSyncLog("external alert delivery failed: \(error)")
+            AppDelegate.appendTeamSyncLog("external alert acknowledgement failed: \(error)")
         }
     }
 
