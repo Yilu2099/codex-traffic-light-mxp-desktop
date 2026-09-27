@@ -24,6 +24,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
     private let quotaRefreshCoordinator = QuotaRefreshCoordinator()
     private let externalAlertStore = ExternalAlertStore()
     private var isExternalAlertDialogOpen = false
+    private var externalAlertDialog: NSAlert?
+    private var pendingExternalAlert: ExternalAlert?
     private var externalAlertSourceURL: URL?
     private var selectedRankingRange: StatusRankingRange = .today
     private var rankingRequestSequence = 0
@@ -108,10 +110,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
     private func deliverExternalAlert(_ alert: ExternalAlert) {
         guard !isExternalAlertDialogOpen, externalAlertStore.isUnread(alert) else { return }
         isExternalAlertDialogOpen = true
-        defer {
-            isExternalAlertDialogOpen = false
-            externalAlertSourceURL = nil
-        }
         NSApp.activate(ignoringOtherApps: true)
         let detail = NSAlert()
         detail.messageText = alert.title
@@ -137,8 +135,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
             link.frame = NSRect(x: 0, y: 0, width: 420, height: 24)
             detail.accessoryView = link
         }
-        detail.addButton(withTitle: "确定")
-        guard detail.runModal() == .alertFirstButtonReturn else { return }
+        let confirm = detail.addButton(withTitle: "确定")
+        confirm.target = self
+        confirm.action = #selector(confirmExternalAlert)
+        externalAlertDialog = detail
+        pendingExternalAlert = alert
+        detail.layout()
+        detail.window.styleMask.remove(.closable)
+        detail.window.center()
+        // A modal loop here blocks launch and the sync timers until confirmation.
+        detail.window.makeKeyAndOrderFront(nil)
+    }
+
+    @objc private func confirmExternalAlert() {
+        guard let alert = pendingExternalAlert else { return }
+        externalAlertDialog?.window.orderOut(nil)
+        externalAlertDialog = nil
+        pendingExternalAlert = nil
+        isExternalAlertDialogOpen = false
+        externalAlertSourceURL = nil
         do {
             try externalAlertStore.markDelivered(alert)
         } catch {
