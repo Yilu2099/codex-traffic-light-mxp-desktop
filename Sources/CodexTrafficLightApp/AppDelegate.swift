@@ -23,6 +23,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
     private var latestQuotaDiagnostic: TeamQuotaDiagnostic?
     private let quotaRefreshCoordinator = QuotaRefreshCoordinator()
     private let externalAlertStore = ExternalAlertStore()
+    private var isExternalAlertDialogOpen = false
+    private var externalAlertSourceURL: URL?
     private var selectedRankingRange: StatusRankingRange = .today
     private var rankingRequestSequence = 0
     private var rankingCache: [StatusRankingRange: TeamRankingSnapshot] = [:]
@@ -104,11 +106,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
     }
 
     private func deliverExternalAlert(_ alert: ExternalAlert) {
-        guard externalAlertStore.isUnread(alert) else { return }
+        guard !isExternalAlertDialogOpen, externalAlertStore.isUnread(alert) else { return }
+        isExternalAlertDialogOpen = true
+        defer {
+            isExternalAlertDialogOpen = false
+            externalAlertSourceURL = nil
+        }
         NSApp.activate(ignoringOtherApps: true)
         let detail = NSAlert()
         detail.messageText = alert.title
         detail.informativeText = alert.body
+        if let iconURL = Bundle.module.url(forResource: "codex-icon-128", withExtension: "png", subdirectory: "Brand")
+            ?? Bundle.module.url(forResource: "codex-icon-128", withExtension: "png") {
+            detail.icon = NSImage(contentsOf: iconURL)
+        }
+        if let sourceURL = alert.sourceURL, sourceURL.scheme == "https" {
+            externalAlertSourceURL = sourceURL
+            let link = NSButton(title: "原帖：\(sourceURL.absoluteString)", target: self, action: #selector(openExternalAlertSource))
+            link.isBordered = false
+            link.alignment = .left
+            link.attributedTitle = NSAttributedString(
+                string: link.title,
+                attributes: [
+                    .foregroundColor: NSColor.linkColor,
+                    .underlineStyle: NSUnderlineStyle.single.rawValue,
+                    .font: NSFont.systemFont(ofSize: 12)
+                ]
+            )
+            link.toolTip = sourceURL.absoluteString
+            link.frame = NSRect(x: 0, y: 0, width: 420, height: 24)
+            detail.accessoryView = link
+        }
         detail.addButton(withTitle: "确定")
         guard detail.runModal() == .alertFirstButtonReturn else { return }
         do {
@@ -116,6 +144,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
         } catch {
             AppDelegate.appendTeamSyncLog("external alert acknowledgement failed: \(error)")
         }
+    }
+
+    @objc private func openExternalAlertSource() {
+        if let externalAlertSourceURL { NSWorkspace.shared.open(externalAlertSourceURL) }
     }
 
     private func configureTeamIntegration() {
