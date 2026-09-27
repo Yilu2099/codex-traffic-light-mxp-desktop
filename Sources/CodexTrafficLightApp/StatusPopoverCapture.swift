@@ -74,6 +74,12 @@ enum StatusPopoverCapture {
                 if let index = today.members.firstIndex(where: { $0.id == "mameng" }) {
                     today.members[index].weeklyQuota?.weeklyRemainingPercent = 85
                 }
+                if previewState == "live" {
+                    let formatter = ISO8601DateFormatter()
+                    for index in today.members.indices {
+                        today.members[index].lastMessageAt = formatter.string(from: now.addingTimeInterval(index == 0 ? -60 : -3600))
+                    }
+                }
                 var week = today
                 if let index = week.members.firstIndex(where: { $0.id == "liguoqing" }) {
                     week.members[index].tokens = 2_200_000_000

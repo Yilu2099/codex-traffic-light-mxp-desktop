@@ -495,6 +495,7 @@ public struct TeamRankingMember: Codable, Equatable, Sendable {
     public var sessions: Int
     public var streak: Int?
     public var lastActive: String?
+    public var lastMessageAt: String?
     public var online: Bool?
     public var grindDay: String?
     public var dayGrindDay: String?
@@ -516,6 +517,7 @@ public struct TeamRankingMember: Codable, Equatable, Sendable {
         sessions: Int = 0,
         streak: Int? = nil,
         lastActive: String? = nil,
+        lastMessageAt: String? = nil,
         online: Bool? = nil,
         grindDay: String? = nil,
         dayGrindDay: String? = nil,
@@ -536,6 +538,7 @@ public struct TeamRankingMember: Codable, Equatable, Sendable {
         self.sessions = sessions
         self.streak = streak
         self.lastActive = lastActive
+        self.lastMessageAt = lastMessageAt
         self.online = online
         self.grindDay = grindDay
         self.dayGrindDay = dayGrindDay

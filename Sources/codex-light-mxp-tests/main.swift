@@ -33,6 +33,33 @@ func testGrindDisplayFormatterUsesConciseLabels() throws {
     try expectEqual(GrindDisplayFormatter.finish("00:49"), "收工 00:49", "finish should not repeat yesterday")
 }
 
+func testWorkdayStatusTracksLatestHumanMessage() throws {
+    let parser = ISO8601DateFormatter()
+    let cases: [(String, String?, String, String)] = [
+        ("2026-09-28T03:31:00+08:00", "2026-09-27T19:30:40.246Z", "进行中", "new message overrides previous finish"),
+        ("2026-09-28T03:31:00+08:00", "2026-09-27T19:01:00Z", "进行中", "thirty minute boundary stays active"),
+        ("2026-09-28T03:31:01+08:00", "2026-09-27T19:01:00Z", "03:01", "idle shows last message without claiming finish"),
+        ("2026-09-28T00:10:00+08:00", "2026-09-27T15:20:00Z", "23:20", "midnight retains previous evening"),
+        ("2026-09-28T04:59:59+08:00", "2026-09-27T20:50:00Z", "进行中", "workday continues until five"),
+        ("2026-09-28T05:00:00+08:00", "2026-09-27T20:50:00Z", "收工 00:16", "morning uses settled field"),
+        ("2026-09-28T13:59:59+08:00", "2026-09-28T05:50:00Z", "收工 00:16", "morning contract matches website"),
+        ("2026-09-28T14:00:00+08:00", "2026-09-28T05:50:00Z", "进行中", "afternoon switches to current status"),
+        ("2026-09-28T14:00:00+08:00", "2026-09-28T06:00:01Z", "未记录", "future timestamp is invalid"),
+        ("2026-09-28T14:00:00+08:00", "2026-09-27T20:59:59Z", "未记录", "previous workday cannot imply current activity"),
+        ("2026-09-28T14:00:00+08:00", nil, "未记录", "missing human timestamp cannot use background activity"),
+        ("2026-09-28T14:00:00+08:00", "invalid", "未记录", "malformed timestamp is safe"),
+    ]
+    for (now, message, expected, reason) in cases {
+        try expectEqual(GrindDisplayFormatter.status(lastMessageAt: message, previousFinish: "00:16", now: parser.date(from: now)!), expected, reason)
+    }
+    let payload = #"{"id":"zlu","name":"张璐","tokens":0,"sessions":1,"lastMessageAt":"2026-09-27T19:30:40.246Z","nightGrindTime":"00:16"}"#
+    let member = try JSONDecoder().decode(TeamRankingMember.self, from: Data(payload.utf8))
+    try expectEqual(member.lastMessageAt, "2026-09-27T19:30:40.246Z", "API timestamp must survive decoding")
+    let legacy = #"{"id":"zlu","name":"张璐","tokens":0,"sessions":1}"#
+    let older = try JSONDecoder().decode(TeamRankingMember.self, from: Data(legacy.utf8))
+    try expectEqual(older.lastMessageAt, nil, "older payloads still decode")
+}
+
 func testQuotaSnapshotClampsPercentValues() throws {
     let updatedAt = Date(timeIntervalSince1970: 1_234)
 
@@ -4368,6 +4395,7 @@ let tests: [(String, () throws -> Void)] = [
     }),
     ("command contract", testCommandContract),
     ("grind display formatter", testGrindDisplayFormatterUsesConciseLabels),
+    ("workday status tracks latest human message", testWorkdayStatusTracksLatestHumanMessage),
     ("quota snapshot clamps", testQuotaSnapshotClampsPercentValues),
     ("quota snapshot stores reset dates", testQuotaSnapshotStoresResetDates),
     ("quota extractor reads top-level snake case", testQuotaExtractorReadsTopLevelSnakeCase),

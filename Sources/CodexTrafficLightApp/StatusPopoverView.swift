@@ -585,7 +585,7 @@ struct StatusPopoverView: View {
                 )
                 grindBandSegment(
                     icon: "moon.fill",
-                    text: GrindDisplayFormatter.finish(member.nightGrindTime),
+                    text: GrindDisplayFormatter.status(lastMessageAt: member.lastMessageAt, previousFinish: member.nightGrindTime),
                     foreground: nightInk
                 )
             }
