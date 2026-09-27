@@ -1523,7 +1523,7 @@ func testOfficialUsageDerivesStableAccountFingerprint() throws {
 
 func testTeamPayloadPreservesLocalDataWithoutOfficialUsage() throws {
     let fixture = #"{"collector":"wanhe-codex-mac-menu","collectedAt":"2026-09-05T04:00:00Z","profile":{"userId":"fixture","userName":"Fixture","team":"Test","role":"Test","avatar":"T"},"device":{"id":"fixture","kind":"mac","name":"Fixture","modelIdentifier":"Test","legacyIds":[]},"todayLiveUsage":{"day":"2026-09-05","tokens":123,"updatedAt":"2026-09-05T04:00:00Z","source":"local_live_increment"},"sessionActivity":[{"sessionId":"fixture-session","day":"2026-09-05"}],"interactionSummary":[],"grindHistory":[{"grindDay":"2026-09-05","dayGrindTime":"12:00"}],"grindHistoryMode":"interaction_v7","projects":[],"inputEvents":[],"sessions":[]}"#.data(using: .utf8)!
-    let payload = try JSONDecoder().decode(TeamUsagePayload.self, from: fixture)
+    var payload = try JSONDecoder().decode(TeamUsagePayload.self, from: fixture)
     try expect(payload.officialUsage == nil, "a new install may have no official cache")
     let data = try JSONEncoder().encode(payload)
     let encoded = try JSONSerialization.jsonObject(with: data) as! [String: Any]
@@ -1536,6 +1536,22 @@ func testTeamPayloadPreservesLocalDataWithoutOfficialUsage() throws {
     }
     try expectEqual((encoded["profile"] as? [String: Any])?.count, 1, "profile must contain only the user ID")
     try expectEqual((encoded["device"] as? [String: Any])?.count, 1, "device must contain only the device ID")
+    payload.interactionSummary = [
+        TeamSessionInteractionSummary(sessionId: "private-session-a", day: "2026-09-05", firstDayUserAt: "2026-09-05T01:00:00.000Z", lastDayUserAt: "2026-09-05T14:00:00.000Z", dayTurnCount: 17),
+        TeamSessionInteractionSummary(sessionId: "private-session-b", day: "2026-09-05", firstDayUserAt: "2026-09-05T02:00:00.000Z", lastDayUserAt: "2026-09-05T15:00:00.000Z", lastNightUserAt: "2026-09-05T18:30:00.000Z", nightTurnCount: 9),
+        TeamSessionInteractionSummary(sessionId: "private-session-c", day: "2026-09-06", lastNightUserAt: "2026-09-06T18:00:00.000Z"),
+    ]
+    let timedData = try JSONEncoder().encode(payload)
+    let timed = try JSONSerialization.jsonObject(with: timedData) as! [String: Any]
+    let timestamps = timed["interactionSummary"] as! [[String: String]]
+    try expectEqual(timestamps.count, 2, "upload aggregates conversations into dates")
+    try expectEqual(timestamps[0], ["sessionId": "workday", "day": "2026-09-05", "firstDayUserAt": "2026-09-05T01:00:00.000Z", "lastDayUserAt": "2026-09-05T15:00:00.000Z", "lastNightUserAt": "2026-09-05T18:30:00.000Z"], "retain only daily timestamp bounds and a constant protocol key")
+    try expectEqual(timestamps[1], ["sessionId": "workday", "day": "2026-09-06", "lastNightUserAt": "2026-09-06T18:00:00.000Z"], "a late-night-only date must not invent a start")
+    try expectEqual(timed["grindHistoryMode"] as? String, "interaction_v7", "server must recognize timestamp updates")
+    try expect(!String(decoding: timedData, as: UTF8.self).contains("private-session"), "real conversation IDs must stay local")
+    for key in ["projects", "inputEvents", "sessionActivity", "sessions", "grindHistory", "quotaDiagnostic"] {
+        try expect(timed[key] == nil, "restoring timestamps must not restore \(key)")
+    }
     let presenceFixture = #"{"collector":"test","collectedAt":"2026-09-05T04:00:00Z","device":{"id":"fixture","kind":"mac","name":"Private","modelIdentifier":"Test","legacyIds":[]},"lastActiveAt":"2026-09-05T03:59:00Z","taskActiveAt":"2026-09-05T03:59:00Z","todayLiveUsage":{"day":"2026-09-05","tokens":123,"updatedAt":"2026-09-05T04:00:00Z","source":"local_live_increment"}}"#.data(using: .utf8)!
     let presence = try JSONDecoder().decode(TeamPresencePayload.self, from: presenceFixture)
     let presenceJSON = try JSONSerialization.jsonObject(with: JSONEncoder().encode(presence)) as! [String: Any]

@@ -409,6 +409,21 @@ public struct TeamUsagePayload: Codable, Equatable, Sendable {
         try container.encodeIfPresent(officialUsage, forKey: .officialUsage)
         try container.encode(todayLiveUsage, forKey: .todayLiveUsage)
         try container.encodeIfPresent(claudeDailyUsage, forKey: .claudeDailyUsage)
+        // Retain only daily timestamp bounds. The constant key keeps the existing
+        // server protocol compatible without transmitting conversation identities.
+        if !interactionSummary.isEmpty {
+            let days = Dictionary(grouping: interactionSummary, by: \.day)
+            let timestamps = days.keys.sorted().map { day -> [String: String] in
+                let rows = days[day]!
+                var row = ["sessionId": "workday", "day": day]
+                row["firstDayUserAt"] = rows.compactMap(\.firstDayUserAt).min()
+                row["lastDayUserAt"] = rows.compactMap(\.lastDayUserAt).max()
+                row["lastNightUserAt"] = rows.compactMap(\.lastNightUserAt).max()
+                return row
+            }
+            try container.encode(timestamps, forKey: .interactionSummary)
+            try container.encode("interaction_v7", forKey: .grindHistoryMode)
+        }
     }
 }
 
@@ -997,6 +1012,12 @@ public struct TeamUsageSyncService: Sendable {
             sessionFileIndex: sessionFileIndex,
             now: now
         )
+        let interactionReport = CodexGrindHistoryCollector().collectIncremental(
+            codexHome: configuration.codexHome,
+            sessionFileIndex: sessionFileIndex,
+            days: min(30, configuration.collectDays),
+            now: now
+        )
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return TeamUsagePayload(
@@ -1018,7 +1039,7 @@ public struct TeamUsageSyncService: Sendable {
             sessionActivity: [],
             sessionActivityMode: nil,
             sessionActivityCutoffDay: nil,
-            interactionSummary: [],
+            interactionSummary: interactionReport.sessions,
             grindHistory: [],
             grindHistoryMode: "",
             projects: [],
@@ -1071,9 +1092,11 @@ public struct TeamUsageSyncService: Sendable {
             let message = String(data: data, encoding: .utf8) ?? "unknown"
             throw TeamUsageSyncError.serverRejected(status: http.statusCode, message: message)
         }
-        guard let result = try? JSONDecoder().decode(TeamUsageSyncResult.self, from: data) else {
+        guard let result = try? JSONDecoder().decode(TeamUsageSyncResult.self, from: data),
+              result.status == "ok" else {
             throw TeamUsageSyncError.invalidResponse
         }
+        CodexGrindHistoryCollector().acknowledgeUploaded()
         return result
     }
 
