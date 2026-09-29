@@ -110,6 +110,12 @@ struct WanheStatusUpdater {
                 Darwin.exit(73)
             }
         }
+        let lockURL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".wanhe-codex-token/app/update-process.lock")
+        guard let updateLock = try? UpdaterProcessLock(url: lockURL) else {
+            appendLog("skip: another updater owns the update lock or the lock is unavailable")
+            return
+        }
+        defer { withExtendedLifetime(updateLock) {} }
         guard let configuration = ClientUpdateConfiguration.load() else {
             appendLog("skip: configuration missing")
             return

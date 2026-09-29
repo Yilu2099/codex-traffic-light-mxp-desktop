@@ -1274,6 +1274,17 @@ func testOneTimeUsageBackfillSelectsOnlyAugust25AndAcknowledges() throws {
     try expect(store.selectTargetDay(from: [template], now: now).isEmpty, "an acknowledged recovery must not repeat in the two-minute heartbeat")
 }
 
+func testUpdaterProcessLockExcludesConcurrentChecks() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent("updater-lock-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let url = directory.appendingPathComponent("update.lock")
+    var first = try UpdaterProcessLock(url: url)
+    try expect(first != nil, "first updater must own the lock")
+    try expect(try UpdaterProcessLock(url: url) == nil, "a concurrent updater must not replace the same release")
+    first = nil
+    try expect(try UpdaterProcessLock(url: url) != nil, "lock must release on completion even though its file remains")
+}
+
 func testAdaptiveTeamSyncAndActivityMerge() throws {
     let now = ISO8601DateFormatter().date(from: "2026-09-29T04:00:00Z")!
     let recent = now.addingTimeInterval(-10)
@@ -2684,10 +2695,12 @@ func testDesktopMonitorArchivesStaleBridgeAndPreparesCurrentRelease() throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent("monitor-stale-bridge-\(UUID().uuidString)")
     let home = root.appendingPathComponent("home")
     let appRoot = home.appendingPathComponent(".wanhe-codex-token/app")
-    let helper = appRoot.appendingPathComponent("releases/1.2.97/wanhe-status-updater")
+    let helper = appRoot.appendingPathComponent("releases/1.2.117/wanhe-status-updater")
     let request = appRoot.appendingPathComponent("launch-agent-bridge.request")
     defer { try? FileManager.default.removeItem(at: root) }
     try FileManager.default.createDirectory(at: helper.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try "1.2.117\n".write(to: helper.deletingLastPathComponent().appendingPathComponent("VERSION"), atomically: true, encoding: .utf8)
+    try FileManager.default.createSymbolicLink(at: appRoot.appendingPathComponent("current"), withDestinationURL: helper.deletingLastPathComponent())
     try "1.2.93\nreleases/1.2.84\n".write(to: request, atomically: true, encoding: .utf8)
     let helperScript = """
     #!/bin/zsh
@@ -2696,12 +2709,12 @@ func testDesktopMonitorArchivesStaleBridgeAndPreparesCurrentRelease() throws {
     if [[ "$1" == "--prepare-legacy-launch-agent-bridge" ]]; then
       [[ -d "$app_root/launch-agent-bridge.lock" ]] || exit 65
       : > "$HOME/prepare-held-lock"
-      printf '1.2.97\\nreleases/1.2.84\\n' > "$app_root/launch-agent-bridge.request"
+      printf '1.2.117\\nreleases/1.2.84\\n' > "$app_root/launch-agent-bridge.request"
       exit 0
     fi
     if [[ "$1" == "--bridge-launch-agents" ]]; then
       printf '%s|%s\\n' "$2" "$3" > "$HOME/bridge-invocation"
-      : > "$app_root/launch-agent-bridge-1.2.97.done"
+      : > "$app_root/launch-agent-bridge-1.2.117.done"
       exit 0
     fi
     exit 64
@@ -2729,7 +2742,7 @@ func testDesktopMonitorArchivesStaleBridgeAndPreparesCurrentRelease() throws {
         "1.2.93\nreleases/1.2.84\n",
         "monitor must archive a request owned by the prior embedded release"
     )
-    try expectEqual(try String(contentsOf: home.appendingPathComponent("bridge-invocation"), encoding: .utf8), "1.2.97|releases/1.2.84\n", "same monitor pass must prepare and invoke the current signed helper")
+    try expectEqual(try String(contentsOf: home.appendingPathComponent("bridge-invocation"), encoding: .utf8), "1.2.117|releases/1.2.84\n", "same monitor pass must prepare and invoke the current signed helper")
     try expect(FileManager.default.fileExists(atPath: home.appendingPathComponent("prepare-held-lock").path), "monitor must hold the bridge lock before request preparation")
     try expect(!FileManager.default.fileExists(atPath: request.path), "successful current bridge must consume its request")
     try expect(!FileManager.default.fileExists(atPath: appRoot.appendingPathComponent("launch-agent-bridge.lock").path), "bridge lock must be removed after the helper exits")
@@ -4482,6 +4495,7 @@ let tests: [(String, () throws -> Void)] = [
     ("quota refresh coordinator throttles repeated logs", testQuotaRefreshCoordinatorThrottlesRepeatedFailureLogs),
     ("quota refresh countdown uses hours below one day", testQuotaRefreshCountdownUsesHoursBelowOneDay),
     ("quota display formatter uses natural date", testQuotaDisplayFormatterUsesNaturalChineseDate),
+    ("updater process lock excludes concurrent checks", testUpdaterProcessLockExcludesConcurrentChecks),
     ("adaptive sync and activity merge", testAdaptiveTeamSyncAndActivityMerge),
     ("team sync parses environment", testTeamSyncParsesEnvironmentFile),
     ("team device uses hardware names", testTeamDeviceUsesHardwareFamilyNames),

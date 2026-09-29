@@ -5,8 +5,8 @@ APP_ROOT="$HOME/.wanhe-codex-token/app"
 CURRENT_RELEASE="$APP_ROOT/current"
 BRIDGE_REQUEST="$APP_ROOT/launch-agent-bridge.request"
 BRIDGE_LOCK="$APP_ROOT/launch-agent-bridge.lock"
-LEGACY_BRIDGE_VERSION="1.2.97"
-LEGACY_BRIDGE_HELPER="$APP_ROOT/releases/$LEGACY_BRIDGE_VERSION/wanhe-status-updater"
+LEGACY_BRIDGE_VERSION=""
+LEGACY_BRIDGE_HELPER=""
 
 bridge_target_is_safe() {
   local value="$1"
@@ -20,6 +20,10 @@ bridge_previous_is_safe() {
 }
 
 prepare_legacy_bridge_request() {
+  # Resolve on every pass: an update may switch current while this monitor runs.
+  { IFS= read -r LEGACY_BRIDGE_VERSION < "$CURRENT_RELEASE/VERSION"; } 2>/dev/null || true
+  bridge_target_is_safe "$LEGACY_BRIDGE_VERSION" || return 0
+  LEGACY_BRIDGE_HELPER="$APP_ROOT/releases/$LEGACY_BRIDGE_VERSION/wanhe-status-updater"
   # A failed prior release can leave the generic request behind. Never feed it
   # to a different embedded helper; archive it, then prepare this release in the
   # same pass. The per-version done/failed markers remain terminal and are not
