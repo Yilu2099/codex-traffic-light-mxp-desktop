@@ -1274,6 +1274,27 @@ func testOneTimeUsageBackfillSelectsOnlyAugust25AndAcknowledges() throws {
     try expect(store.selectTargetDay(from: [template], now: now).isEmpty, "an acknowledged recovery must not repeat in the two-minute heartbeat")
 }
 
+func testAdaptiveTeamSyncAndActivityMerge() throws {
+    let now = ISO8601DateFormatter().date(from: "2026-09-29T04:00:00Z")!
+    let recent = now.addingTimeInterval(-10)
+    try expect(TeamSyncSchedule.shouldSync(now: now, lastSyncAt: nil, lastActivityAt: nil), "first sync must run")
+    try expect(!TeamSyncSchedule.shouldSync(now: now, lastSyncAt: now.addingTimeInterval(-299), lastActivityAt: recent), "activity must not cause per-minute full scans")
+    try expect(TeamSyncSchedule.shouldSync(now: now, lastSyncAt: now.addingTimeInterval(-300), lastActivityAt: recent), "active usage syncs every five minutes")
+    try expect(!TeamSyncSchedule.shouldSync(now: now, lastSyncAt: now.addingTimeInterval(-899), lastActivityAt: nil), "idle devices defer collection")
+    try expect(TeamSyncSchedule.shouldSync(now: now, lastSyncAt: now.addingTimeInterval(-900), lastActivityAt: nil), "idle devices still reconcile")
+    try expect(TeamSyncSchedule.shouldSync(now: now, lastSyncAt: now.addingTimeInterval(-600), lastActivityAt: now.addingTimeInterval(-400)), "activity after last sync must be flushed even after work stops")
+    var utc = Calendar(identifier: .gregorian)
+    utc.timeZone = TimeZone(secondsFromGMT: 0)!
+    let midnight = ISO8601DateFormatter().date(from: "2026-09-30T00:00:01Z")!
+    try expect(TeamSyncSchedule.shouldSync(now: midnight, lastSyncAt: midnight.addingTimeInterval(-30), lastActivityAt: nil, calendar: utc), "day rollover must flush without waiting for idle interval")
+    let snapshot = try JSONDecoder().decode(TeamRankingSnapshot.self, from: Data(#"{"updatedAt":"2026-09-29 12:00","members":[{"id":"a","name":"A","tokens":123,"sessions":2,"online":false},{"id":"b","name":"B","tokens":99,"sessions":1,"online":true}]}"#.utf8))
+    let activity = try JSONDecoder().decode(TeamActivitySnapshot.self, from: Data(#"{"members":[{"id":"a","online":true}]}"#.utf8))
+    let merged = activity.applying(to: snapshot)
+    try expectEqual(merged.members.map(\.tokens), [123, 99], "activity cannot change Token totals or ordering")
+    try expectEqual(merged.members.map(\.online), [true, true], "partial activity must preserve unreported members")
+    try expectEqual(merged.updatedAt, snapshot.updatedAt, "heartbeats cannot disguise stale accounting as fresh")
+}
+
 func testTeamQuotaReportUsesWeeklyPercentAndReset() throws {
     let reset = Date(timeIntervalSince1970: 2_000)
     let report = TeamQuotaReport(
@@ -1555,7 +1576,7 @@ func testTeamPayloadPreservesLocalDataWithoutOfficialUsage() throws {
     let presenceFixture = #"{"collector":"test","collectedAt":"2026-09-05T04:00:00Z","device":{"id":"fixture","kind":"mac","name":"Private","modelIdentifier":"Test","legacyIds":[]},"lastActiveAt":"2026-09-05T03:59:00Z","taskActiveAt":"2026-09-05T03:59:00Z","todayLiveUsage":{"day":"2026-09-05","tokens":123,"updatedAt":"2026-09-05T04:00:00Z","source":"local_live_increment"}}"#.data(using: .utf8)!
     let presence = try JSONDecoder().decode(TeamPresencePayload.self, from: presenceFixture)
     let presenceJSON = try JSONSerialization.jsonObject(with: JSONEncoder().encode(presence)) as! [String: Any]
-    try expectEqual(Set(presenceJSON.keys), Set(["collector", "collectedAt", "todayLiveUsage"]), "presence must contain only usage and protocol metadata")
+    try expectEqual(Set(presenceJSON.keys), Set(["collector", "collectedAt", "lastActiveAt", "taskActiveAt"]), "presence must contain only activity times and protocol metadata")
 }
 
 func testSessionCounterUsesLocalFilenameAndMetadataWithoutReadingContents() throws {
@@ -4461,6 +4482,7 @@ let tests: [(String, () throws -> Void)] = [
     ("quota refresh coordinator throttles repeated logs", testQuotaRefreshCoordinatorThrottlesRepeatedFailureLogs),
     ("quota refresh countdown uses hours below one day", testQuotaRefreshCountdownUsesHoursBelowOneDay),
     ("quota display formatter uses natural date", testQuotaDisplayFormatterUsesNaturalChineseDate),
+    ("adaptive sync and activity merge", testAdaptiveTeamSyncAndActivityMerge),
     ("team sync parses environment", testTeamSyncParsesEnvironmentFile),
     ("team device uses hardware names", testTeamDeviceUsesHardwareFamilyNames),
     ("team usage collector aggregates deltas", testTeamUsageCollectorBuildsDailySessionDelta),

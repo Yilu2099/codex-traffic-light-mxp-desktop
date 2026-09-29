@@ -486,7 +486,8 @@ public struct TeamPresencePayload: Codable, Equatable, Sendable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(collector, forKey: .collector)
         try container.encode(collectedAt, forKey: .collectedAt)
-        try container.encodeIfPresent(todayLiveUsage, forKey: .todayLiveUsage)
+        try container.encodeIfPresent(lastActiveAt, forKey: .lastActiveAt)
+        try container.encodeIfPresent(taskActiveAt, forKey: .taskActiveAt)
     }
 }
 
@@ -577,6 +578,35 @@ public struct TeamRankingMember: Codable, Equatable, Sendable {
         if todayLiveUpdatedAt?.isEmpty == false { return true }
         if let tokenSource, !tokenSource.isEmpty, tokenSource != "collector" { return true }
         return false
+    }
+}
+
+/// Activity is deliberately independent of Token accounting and ranking order.
+public struct TeamActivitySnapshot: Codable, Sendable {
+    public struct Member: Codable, Sendable {
+        public var id: String
+        public var online: Bool
+    }
+    public var members: [Member]
+
+    public func applying(to snapshot: TeamRankingSnapshot) -> TeamRankingSnapshot {
+        let activity = Dictionary(members.map { ($0.id, $0.online) }, uniquingKeysWith: { _, last in last })
+        var result = snapshot
+        for index in result.members.indices {
+            if let online = activity[result.members[index].id] { result.members[index].online = online }
+        }
+        return result
+    }
+}
+
+public enum TeamSyncSchedule {
+    public static func shouldSync(now: Date, lastSyncAt: Date?, lastActivityAt: Date?, activeInterval: TimeInterval = 300, calendar: Calendar = .current) -> Bool {
+        guard let lastSyncAt else { return true }
+        if !calendar.isDate(now, inSameDayAs: lastSyncAt) { return true }
+        let recentlyActive = lastActivityAt.map { now.timeIntervalSince($0) <= activeInterval } ?? false
+        let activitySinceSync = lastActivityAt.map { $0 > lastSyncAt } ?? false
+        let interval = recentlyActive || activitySinceSync ? activeInterval : max(900, activeInterval)
+        return now.timeIntervalSince(lastSyncAt) >= interval
     }
 }
 
@@ -993,7 +1023,7 @@ public struct TeamUsageSyncService: Sendable {
             device: TeamDeviceIdentity.current(),
             lastActiveAt: lastActiveAt.map(formatter.string),
             taskActiveAt: taskActiveAt.map(formatter.string),
-            todayLiveUsage: TodayCodexUsageCollector().cachedReport(now: now)
+            todayLiveUsage: nil
         )
     }
 
@@ -1035,7 +1065,7 @@ public struct TeamUsageSyncService: Sendable {
             quotaDiagnostic: quotaDiagnostic,
             officialUsage: officialUsage,
             todayLiveUsage: todayLiveUsage,
-            claudeDailyUsage: ClaudeTokenUsageCollector().collect(days: configuration.collectDays),
+            claudeDailyUsage: nil,
             sessionActivity: [],
             sessionActivityMode: nil,
             sessionActivityCutoffDay: nil,
@@ -1169,6 +1199,19 @@ public struct TeamUsageSyncService: Sendable {
         return try decoder.decode(Response.self, from: data).alert
     }
 
+    public func fetchActivity() async throws -> TeamActivitySnapshot {
+        let url = websiteURL.appendingPathComponent("api/activity")
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 5
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.setValue("Bearer \(configuration.token)", forHTTPHeaderField: "Authorization")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            throw TeamUsageSyncError.invalidResponse
+        }
+        return try JSONDecoder().decode(TeamActivitySnapshot.self, from: data)
+    }
+
     public func fetchRanking(range: String = "today") async throws -> TeamRankingSnapshot {
         var request = URLRequest(url: rankingsURL(range: range))
         request.timeoutInterval = 20
@@ -1204,6 +1247,6 @@ public extension Defaults {
     static let teamSyncRefreshSeconds: TimeInterval = {
         if let raw = ProcessInfo.processInfo.environment["CODEX_LIGHT_TEAM_SYNC_SECONDS"],
            let seconds = TimeInterval(raw), seconds > 0 { return seconds }
-        return 2 * 60
+        return 5 * 60
     }()
 }

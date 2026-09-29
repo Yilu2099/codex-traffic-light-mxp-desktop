@@ -16,6 +16,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
     private var teamSyncConfiguration: TeamSyncConfiguration?
     private var isTeamSyncing = false
     private var teamSyncStartedAt: Date?
+    private var lastTeamSyncAt: Date?
     private var isTeamRankingRefreshing = false
     private var isPresenceSyncing = false
     private var isExternalAlertRefreshing = false
@@ -43,7 +44,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
             }
         }
         statusBar.delegate = self
-        statusBar.onPopoverOpen = { [weak self] in self?.refreshInspirationUnread() }
+        statusBar.onPopoverOpen = { [weak self] in self?.refreshTeamRanking() }
         currentSnapshot = store.read()
         statusBar.apply(snapshot: currentSnapshot)
         configureExternalAlerts()
@@ -182,14 +183,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
             repeats: false
         )
         teamRankingTimer = Timer.scheduledTimer(
-            timeInterval: 30,
+            timeInterval: 60,
             target: self,
             selector: #selector(teamRankingTimerFired),
             userInfo: nil,
             repeats: true
         )
         teamSyncTimer = Timer.scheduledTimer(
-            timeInterval: Defaults.teamSyncRefreshSeconds,
+            timeInterval: min(60, Defaults.teamSyncRefreshSeconds),
             target: self,
             selector: #selector(teamSyncTimerFired),
             userInfo: nil,
@@ -219,10 +220,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
     }
 
     @objc private func teamSyncTimerFired() {
+        let dates = [TeamUsageSyncService.presenceMarkerURL(), TeamUsageSyncService.taskActivityMarkerURL()].compactMap {
+            (try? $0.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+        }
+        guard TeamSyncSchedule.shouldSync(now: Date(), lastSyncAt: lastTeamSyncAt, lastActivityAt: dates.max(), activeInterval: Defaults.teamSyncRefreshSeconds) else { return }
         syncTeamData()
     }
 
     @objc private func teamRankingTimerFired() {
+        guard statusBar.isPopoverShown else { return }
         refreshTeamRanking()
     }
 
@@ -250,6 +256,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
                 _ = try await service.syncPresence(lastActiveAt: lastActiveAt, taskActiveAt: taskActiveAt)
                 self?.isPresenceSyncing = false
                 self?.presenceFailureLogged = false
+                if self?.statusBar.isPopoverShown == true, let activity = try? await service.fetchActivity(), let self {
+                    self.rankingCache = self.rankingCache.mapValues { activity.applying(to: $0) }
+                    if let ranking = self.rankingCache[self.selectedRankingRange] {
+                        self.applyRanking(ranking, configuration: configuration, service: service)
+                    }
+                }
             } catch {
                 self?.isPresenceSyncing = false
                 if self?.presenceFailureLogged == false {
@@ -271,8 +283,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
     }
 
     private func syncTeamData() {
-        refreshInspirationUnread()
         guard let configuration = teamSyncConfiguration, !isTeamSyncing else { return }
+        refreshInspirationUnread()
         isTeamSyncing = true
         teamSyncStartedAt = Date()
         let quota = TeamQuotaReport.from(snapshot: store.read())
@@ -288,6 +300,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
                 }.value
                 self?.isTeamSyncing = false
                 self?.teamSyncStartedAt = nil
+                self?.lastTeamSyncAt = Date()
                 self?.rankingCache[requestedRange] = ranking
                 self?.prefetchAvatars(for: ranking, websiteURL: service.websiteURL)
                 guard self?.selectedRankingRange == requestedRange else { return }
@@ -465,7 +478,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
 
     private func handleQuotaRefreshCompletion(snapshot: StateSnapshot, error: Error?) {
         quotaRefreshCoordinator.endRefresh(success: error == nil)
-        let previousQuotaUpdatedAt = TeamQuotaReport.from(snapshot: currentSnapshot)?.updatedAt
         let verifiedQuota = TeamQuotaReport.from(snapshot: snapshot)
         let errorCode: String? = {
             if let quotaError = error as? CodexAppServerQuotaError { return quotaError.summaryKey }
@@ -489,10 +501,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
         )
         currentSnapshot = snapshot
         statusBar.apply(snapshot: currentSnapshot)
-        if error == nil,
-           TeamQuotaReport.from(snapshot: snapshot)?.updatedAt != previousQuotaUpdatedAt {
-            syncTeamData()
-        }
         if let error, let line = quotaRefreshCoordinator.failureLogLine(error: error) {
             AppDelegate.appendQuotaLog(line)
         }

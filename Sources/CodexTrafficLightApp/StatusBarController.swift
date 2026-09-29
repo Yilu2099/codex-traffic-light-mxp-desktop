@@ -36,6 +36,7 @@ final class StatusBarController {
     )
     private let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let popover = NSPopover()
+    var isPopoverShown: Bool { popover.isShown }
     private let popoverModel = StatusPopoverModel()
     var onPopoverOpen: (() -> Void)?
     weak var delegate: StatusBarControllerDelegate?
