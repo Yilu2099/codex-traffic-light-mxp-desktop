@@ -355,6 +355,8 @@ public struct CodexGrindHistoryCollector: Sendable {
         var collectionVersion: Int? = nil
         var pendingHistory: [TeamGrindHistoryDay]? = nil
         var pendingSessions: [TeamSessionInteractionSummary]? = nil
+        var fileIdentifiers: [String: String]? = nil
+        var partialRowStarts: [String: Int64]? = nil
     }
     private struct InteractionDates {
         var day: [Date] = []
@@ -442,6 +444,14 @@ public struct CodexGrindHistoryCollector: Sendable {
 
     public func collect(codexHome: URL, days: Int = 30, now: Date = Date()) -> [TeamGrindHistoryDay] {
         collectDetailed(codexHome: codexHome, days: days, now: now).history
+    }
+
+    // Share the existing human-input filter without exposing or retaining text.
+    static func authoredEventMetadata(_ data: Data) -> (date: Date, type: String)? {
+        guard let event = try? JSONDecoder().decode(EventEnvelope.self, from: data),
+              event.isAuthoredResponse || event.isLegacyUserEvent,
+              let timestamp = event.timestamp, let date = isoDate(timestamp) else { return nil }
+        return (date, event.type ?? "other")
     }
 
     public func collectDetailed(
@@ -570,6 +580,10 @@ public struct CodexGrindHistoryCollector: Sendable {
             // retained in this state or included in the upload.
             let backfill = collectDetailed(codexHome: codexHome, days: min(30, days), now: now)
             for file in files { state.fileOffsets[file.stableKey] = file.size }
+            state.fileIdentifiers = Dictionary(uniqueKeysWithValues: files.compactMap { file in
+                file.fileIdentifier.map { (file.stableKey, $0) }
+            })
+            state.partialRowStarts = [:]
             state.initialized = true
             state.collectionVersion = 2
             state.pendingHistory = mergeHistory(state.pendingHistory ?? [], backfill.history)
@@ -582,8 +596,22 @@ public struct CodexGrindHistoryCollector: Sendable {
         // Register every candidate before applying the per-run read budget.
         // Pending new live files retain offset zero, so files beyond the first
         // 16 are drained on later syncs instead of being baselined at EOF.
+        var identifiers = state.fileIdentifiers ?? [:]
         for file in files {
             let key = file.stableKey
+            if let identifier = file.fileIdentifier {
+                if let previous = identifiers[key], previous != identifier {
+                    // A new inode at the same rollout filename must not inherit
+                    // EOF, even when the replacement has exactly the same size.
+                    state.fileOffsets[key] = 0
+                    state.partialRowStarts?.removeValue(forKey: key)
+                    stateChanged = true
+                }
+                if identifiers[key] != identifier {
+                    identifiers[key] = identifier
+                    stateChanged = true
+                }
+            }
             if state.fileOffsets[key] == nil, let legacyOffset = state.fileOffsets[file.path] {
                 state.fileOffsets[key] = legacyOffset
                 state.fileOffsets.removeValue(forKey: file.path)
@@ -606,6 +634,7 @@ public struct CodexGrindHistoryCollector: Sendable {
                 stateChanged = true
             }
         }
+        state.fileIdentifiers = identifiers
         var interactionDates: [String: InteractionDates] = [:]
         var history: [String: (day: Date?, night: Date?)] = [:]
         var processed = 0
@@ -618,6 +647,9 @@ public struct CodexGrindHistoryCollector: Sendable {
                 // already present before the next sync are not lost.
                 offset > file.size ? 0 : max(0, offset)
             } ?? file.size
+            if let knownOffset, knownOffset > file.size {
+                state.partialRowStarts?.removeValue(forKey: key)
+            }
             guard start < file.size else {
                 if knownOffset != file.size { stateChanged = true }
                 state.fileOffsets[key] = file.size
@@ -625,6 +657,7 @@ public struct CodexGrindHistoryCollector: Sendable {
             }
             if isSubagentSession(file.url) {
                 state.fileOffsets[key] = file.size
+                state.partialRowStarts?.removeValue(forKey: key)
                 stateChanged = true
                 processed += 1
                 continue
@@ -632,7 +665,7 @@ public struct CodexGrindHistoryCollector: Sendable {
             guard let handle = try? FileHandle(forReadingFrom: file.url) else { continue }
             try? handle.seek(toOffset: UInt64(start))
             let data = (try? handle.read(upToCount: 256 * 1_024)) ?? Data()
-            try? handle.close()
+            defer { try? handle.close() }
             guard !data.isEmpty else { continue }
             guard let newline = data.lastIndex(of: 0x0A) else {
                 let reachedEOF = start + Int64(data.count) >= file.size
@@ -641,12 +674,30 @@ public struct CodexGrindHistoryCollector: Sendable {
                     // cannot block every newer event forever. At EOF, retain
                     // the offset because an ordinary partial row may complete.
                     state.fileOffsets[key] = start + Int64(data.count)
+                    var partialStarts = state.partialRowStarts ?? [:]
+                    partialStarts[key] = partialStarts[key] ?? start
+                    state.partialRowStarts = partialStarts
                     stateChanged = true
                 }
                 processed += 1
                 continue
             }
-            let complete = Data(data.prefix(through: newline))
+            var complete = Data(data.prefix(through: newline))
+            if let rowStart = state.partialRowStarts?[key], rowStart < start,
+               let firstNewline = complete.firstIndex(of: 0x0A) {
+                let rowLength = start - rowStart + Int64(firstNewline + 1)
+                // Only offsets survive between polls. Reassemble a complete
+                // bounded row in memory; never persist message text.
+                if rowLength <= 4 * 1_024 * 1_024 {
+                    try? handle.seek(toOffset: UInt64(rowStart))
+                    let row = (try? handle.read(upToCount: Int(rowLength))) ?? Data()
+                    if row.count != Int(rowLength) { continue }
+                    complete = row + complete.dropFirst(firstNewline + 1)
+                } else {
+                    complete = Data(complete.dropFirst(firstNewline + 1))
+                }
+            }
+            state.partialRowStarts?.removeValue(forKey: key)
             var modern: [Date] = []
             var legacy: [Date] = []
             for line in complete.split(separator: 0x0A) {
@@ -671,13 +722,15 @@ public struct CodexGrindHistoryCollector: Sendable {
                 if hour >= 23 || hour < 5 { values.night.append(date) }
                 interactionDates[key] = values
             }
-            state.fileOffsets[key] = start + Int64(complete.count)
+            state.fileOffsets[key] = start + Int64(newline + 1)
             stateChanged = true
             processed += 1
         }
         let activeKeys = Set(files.map(\.stableKey))
         let previousOffsetCount = state.fileOffsets.count
         state.fileOffsets = state.fileOffsets.filter { activeKeys.contains($0.key) }
+        state.fileIdentifiers = state.fileIdentifiers?.filter { activeKeys.contains($0.key) }
+        state.partialRowStarts = state.partialRowStarts?.filter { activeKeys.contains($0.key) }
         if state.fileOffsets.count != previousOffsetCount { stateChanged = true }
         let sessions = interactionDates.compactMap { key, values -> TeamSessionInteractionSummary? in
             let parts = key.split(separator: "|", maxSplits: 1).map(String.init)
@@ -811,8 +864,15 @@ public struct CodexGrindHistoryCollector: Sendable {
         defer { try? handle.close() }
         guard let data = try? handle.read(upToCount: 64 * 1024),
               let text = String(data: data, encoding: .utf8) else { return false }
-        return text.contains("\"type\":\"session_meta\"")
-            && text.contains("\"source\":{\"subagent\"")
+        for line in text.split(separator: "\n") {
+            guard let data = String(line).data(using: .utf8),
+                  let event = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  event["type"] as? String == "session_meta",
+                  let payload = event["payload"] as? [String: Any],
+                  let source = payload["source"] as? [String: Any] else { continue }
+            if source["subagent"] != nil { return true }
+        }
+        return false
     }
 
     private func uniqueTurns(_ values: [Date]) -> [Date] {

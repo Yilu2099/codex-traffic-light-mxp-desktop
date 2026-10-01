@@ -2198,6 +2198,129 @@ func testGrindOversizedRowDoesNotBlockNewerEvents() throws {
     try expectEqual(resumed.sessions.first?.dayTurnCount, 1, "a skipped oversized row must not block later complete JSONL events")
 }
 
+func testGrindReReadsSameSizeAtomicReplacement() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("grind-replace-\(UUID().uuidString)")
+    let home = root.appendingPathComponent("codex")
+    let sessions = home.appendingPathComponent("sessions")
+    let stateURL = root.appendingPathComponent("grind.json")
+    try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let file = sessions.appendingPathComponent("rollout-2026-09-30T08-00-00-11111111-1111-1111-1111-111111111111.jsonl")
+    let first = #"{"timestamp":"2026-09-30T16:23:58.010Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"本人指令"}]}}"# + "\n"
+    let later = first.replacingOccurrences(of: "16:23:58.010", with: "17:26:00.000")
+    try expectEqual(first.utf8.count, later.utf8.count, "replacement fixture must preserve size")
+    try first.write(to: file, atomically: true, encoding: .utf8)
+    let now = ISO8601DateFormatter().date(from: "2026-09-30T17:30:00Z")!
+    let collector = CodexGrindHistoryCollector()
+    _ = collector.collectIncremental(codexHome: home, now: now, stateURL: stateURL)
+    collector.acknowledgeUploaded(stateURL: stateURL)
+    try later.write(to: file, atomically: true, encoding: .utf8)
+    let changed = collector.collectIncremental(codexHome: home, now: now.addingTimeInterval(60), stateURL: stateURL)
+    try expectEqual(changed.sessions.first?.lastNightUserAt, "2026-09-30T17:26:00.000Z", "a replacement with unchanged size must not inherit the previous file's EOF")
+    try expectEqual(changed.history.first?.grindDay, "2026-09-30", "01:26 local belongs to the previous workday")
+    collector.acknowledgeUploaded(stateURL: stateURL)
+    let repeated = collector.collectIncremental(codexHome: home, now: now.addingTimeInterval(120), stateURL: stateURL)
+    try expect(repeated.sessions.isEmpty, "an unchanged replacement must not replay after acknowledgement")
+}
+
+func testGrindRecoversLargeHumanInputAcrossReadChunks() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("grind-large-human-\(UUID().uuidString)")
+    let home = root.appendingPathComponent("codex")
+    let sessions = home.appendingPathComponent("sessions")
+    let stateURL = root.appendingPathComponent("grind.json")
+    try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let file = sessions.appendingPathComponent("rollout-2026-09-30T08-00-00-22222222-2222-2222-2222-222222222222.jsonl")
+    try Data().write(to: file)
+    let now = ISO8601DateFormatter().date(from: "2026-09-30T17:30:00Z")!
+    let collector = CodexGrindHistoryCollector()
+    _ = collector.collectIncremental(codexHome: home, now: now, stateURL: stateURL)
+    let row = #"{"timestamp":"2026-09-30T17:26:00.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"PRIVATE-LARGE-"# + String(repeating: "x", count: 300_000) + #""}]}}"# + "\n"
+    try row.write(to: file, atomically: false, encoding: .utf8)
+    let first = collector.collectIncremental(codexHome: home, now: now, stateURL: stateURL)
+    try expect(first.sessions.isEmpty, "the first bounded read must wait for the complete large row")
+    let resumed = collector.collectIncremental(codexHome: home, now: now.addingTimeInterval(60), stateURL: stateURL)
+    try expectEqual(resumed.sessions.first?.lastNightUserAt, "2026-09-30T17:26:00.000Z", "a valid human input spanning chunks must not be discarded")
+    try expect(!(try String(contentsOf: stateURL, encoding: .utf8)).contains("PRIVATE-LARGE"), "chunk recovery state must contain offsets, never message text")
+    collector.acknowledgeUploaded(stateURL: stateURL)
+    try expect(collector.collectIncremental(codexHome: home, now: now.addingTimeInterval(120), stateURL: stateURL).sessions.isEmpty, "recovery must not replay acknowledged inputs")
+}
+
+func testGrindExcludesWhitespaceFormattedSubagentMetadata() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("grind-subagent-\(UUID().uuidString)")
+    let home = root.appendingPathComponent("codex")
+    let sessions = home.appendingPathComponent("sessions")
+    try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let file = sessions.appendingPathComponent("rollout-2026-09-30T08-00-00-33333333-3333-3333-3333-333333333333.jsonl")
+    let rows = [
+        #"{"timestamp": "2026-09-30T17:25:00Z", "type": "session_meta", "payload": {"source": {"subagent": {"thread_spawn": {"parent_thread_id": "private"}}}}}"#,
+        #"{"timestamp":"2026-09-30T17:26:00.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"自动委派的子任务"}]}}"#,
+    ]
+    try (rows.joined(separator: "\n") + "\n").write(to: file, atomically: true, encoding: .utf8)
+    let now = ISO8601DateFormatter().date(from: "2026-09-30T17:30:00Z")!
+    let collector = CodexGrindHistoryCollector()
+    try expect(collector.collectDetailed(codexHome: home, now: now).sessions.isEmpty, "subagent exclusion must parse metadata independent of JSON whitespace")
+    let incremental = collector.collectIncremental(codexHome: home, now: now, stateURL: root.appendingPathComponent("grind.json"))
+    try expect(incremental.sessions.isEmpty, "initial backfill must not count delegated user-role content")
+}
+
+func testGrindDiagnosticMetadataRecovery() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("diagnostic-\(UUID().uuidString)")
+    let sessions = root.appendingPathComponent("sessions")
+    try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let times = (0..<13).map { String(format: "2026-09-30T16:%02d:32Z", 30 + $0) } + ["2026-09-30T17:04:39Z", "2026-09-30T17:30:02Z"]
+    var rows = [#"{"type":"session_meta","payload":{"source":"desktop"}}"#]
+    for time in times {
+        let row = "{\"timestamp\":\"\(time)\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"PRIVATE-CANARY\"}]}}"
+        rows += [row, row]
+        rows.append("{\"timestamp\":\"\(time)\",\"type\":\"event_msg\",\"payload\":{\"type\":\"user_message\",\"message\":\"PRIVATE-CANARY\"}}")
+    }
+    rows += [#"{"timestamp":"2026-09-30T17:50:00Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"input_text","text":"PRIVATE-ASSISTANT"}]}}"#,
+             #"{"timestamp":"2026-09-30T17:51:00Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context> injected"}]}}"#]
+    try (rows.joined(separator: "\n") + "\n").write(to: sessions.appendingPathComponent("rollout-private-root.jsonl"), atomically: true, encoding: .utf8)
+    for (name, source) in [("child", #"{"subagent": {"thread_spawn": {}}}"#), ("unknown", #""future-format""#)] {
+        let header = "{\"type\": \"session_meta\", \"payload\": {\"source\": \(source)}}\n"
+        let row = #"{"timestamp":"2026-09-30T17:59:00Z","type":"event_msg","payload":{"type":"user_message","message":"PRIVATE-OTHER"}}"# + "\n"
+        try (header + row).write(to: sessions.appendingPathComponent("rollout-private-\(name).jsonl"), atomically: true, encoding: .utf8)
+    }
+    let report = GrindDiagnosticCollector().collect(codexHome: root)
+    let eligible = report.events.filter { $0.source == "known_root" }
+    try expectEqual(eligible.count, 15, "duplicate modern/legacy representations must collapse into actual root input times")
+    try expectEqual(eligible.last?.at, "2026-10-01T01:30:02.000+08:00", "recover real timestamps into prior workday campaign")
+    try expectEqual(report.window.businessDay, "2026-09-30", "early hours belong to previous workday")
+    try expect(report.events.contains { $0.source == "subagent" } && report.events.contains { $0.source == "unknown" }, "source limitations must remain explicit")
+    try expect(report.summary.coverageIncomplete, "unknown source makes evidence incomplete")
+    try expect(!report.actualComputerConfirmed, "automatic collection must never forge human attestation")
+    let data = try report.canonicalData()
+    try expect(report.validForUpload, "bounded collector output must validate before transmission")
+    var tampered = report
+    tampered.events[0].at = "PRIVATE-DO-NOT-UPLOAD"
+    try expect(!tampered.validForUpload, "tampered metadata must be rejected locally")
+    let text = String(decoding: data, as: UTF8.self)
+    try expect(!text.contains("PRIVATE") && !text.contains(root.path) && !text.contains("rollout-"), "report must contain metadata only")
+    try expectEqual(report, GrindDiagnosticCollector().collect(codexHome: root), "same input produces stable report and ID")
+    if let path = ProcessInfo.processInfo.environment["WANHE_TEST_DIAGNOSTIC_FIXTURE"] { try data.write(to: URL(fileURLWithPath: path)) }
+}
+
+func testGrindDiagnosticQueueRetry() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("diagnostic-queue-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let queue = GrindDiagnosticQueue(url: root.appendingPathComponent("queue.json"))
+    let report = GrindDiagnosticCollector().collect(codexHome: root)
+    let pending = try queue.pending(scope: "isolated-device") { report }
+    try expectEqual(pending, report, "report persisted before network attempt")
+    let retried = try queue.pending(scope: "isolated-device") { fatalError("retry must reuse pending metadata") }
+    try expectEqual(retried?.reportId, report.reportId, "lost acknowledgement retries the same report ID")
+    let wrong = GrindDiagnosticReceipt(reportId: String(repeating: "0", count: 64), status: "received", receivedAt: "2026-10-01T18:00:00.000Z")
+    try expect(!wrong.confirms(report), "foreign report receipt must not clear queue")
+    let good = GrindDiagnosticReceipt(reportId: report.reportId, status: "duplicate", receivedAt: "2026-10-01T18:00:00.000Z")
+    try queue.acknowledge(scope: "isolated-device", report: report, receipt: good)
+    try expect(try queue.pending(scope: "isolated-device") { fatalError("acknowledged campaign must not replay") } == nil, "valid durable receipt stops replay")
+}
+
 func testClientVersionComparison() throws {
     try expectEqual(ClientVersion.compare("1.2.0", "1.1.9"), .orderedDescending, "newer client version should sort after the installed version")
     try expectEqual(ClientVersion.compare("1.0.0", "1.0.0"), .orderedSame, "equal client versions should compare equally")
@@ -4538,6 +4661,11 @@ let tests: [(String, () throws -> Void)] = [
     ("tail collectors preserve partial rows across moves", testTailCollectorsPreservePartialRowsAcrossArchiveMove),
     ("collectors read newly archived short sessions", testCollectorsReadSessionFirstDiscoveredAfterArchiving),
     ("grind history skips oversized rows without blocking", testGrindOversizedRowDoesNotBlockNewerEvents),
+    ("grind re-reads same-size atomic replacement", testGrindReReadsSameSizeAtomicReplacement),
+    ("grind recovers large human input across chunks", testGrindRecoversLargeHumanInputAcrossReadChunks),
+    ("grind excludes whitespace-formatted subagents", testGrindExcludesWhitespaceFormattedSubagentMetadata),
+    ("grind diagnostic recovers private metadata", testGrindDiagnosticMetadataRecovery),
+    ("grind diagnostic queue retries and acknowledges", testGrindDiagnosticQueueRetry),
     ("project audit sanitizes workspace and session", testProjectActivityStoreKeepsOnlySanitizedProjectAudit),
     ("project input ledger filters and acknowledges human text", testProjectActivityBuildsReliableHumanInputOutbox),
     ("project input cursor survives archive and partial rows", testProjectInputCursorSurvivesArchiveMoveAndPartialRows),

@@ -295,6 +295,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
         Task { [weak self] in
             do {
                 let ranking = try await Task.detached(priority: .utility) {
+                    do {
+                        if let receipt = try await service.syncGrindDiagnosticIfNeeded() {
+                            AppDelegate.appendTeamSyncLog("diagnostic \(receipt.status): \(receipt.reportId) receivedAt=\(receipt.receivedAt)")
+                        }
+                    } catch {
+                        // No server bodies, credentials, source paths or text in logs.
+                        AppDelegate.appendTeamSyncLog("diagnostic pending; retry on next sync")
+                    }
                     _ = try await service.sync(quota: quota, quotaDiagnostic: quotaDiagnostic)
                     return try await service.fetchRanking(range: requestedRange.rawValue)
                 }.value
