@@ -2305,6 +2305,12 @@ func testGrindDiagnosticMetadataRecovery() throws {
 }
 
 func testGrindDiagnosticQueueRetry() throws {
+    let scope = "5421cd1880ea885bbbdb00fc44c76730075b09c9b4f891e3538ea73ea9e114cf"
+    for (enabled, identity, expected) in [(true, scope, true), (false, scope, false), (true, "other-device", false)] {
+        let data = try JSONSerialization.data(withJSONObject: ["enabled": enabled, "schema": "grind_diagnostic_v2", "scope": identity])
+        let campaign = try JSONDecoder().decode(GrindDiagnosticCampaign.self, from: data)
+        try expectEqual(campaign.authorized, expected, "only server-authorized target credential may scan historical metadata")
+    }
     let root = FileManager.default.temporaryDirectory.appendingPathComponent("diagnostic-queue-\(UUID().uuidString)")
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: root) }
