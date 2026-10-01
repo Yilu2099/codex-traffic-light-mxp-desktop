@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
     private var externalAlertTimer: Timer?
     private var teamSyncConfiguration: TeamSyncConfiguration?
     private var isTeamSyncing = false
+    private var isDiagnosticSyncing = false
     private var teamSyncStartedAt: Date?
     private var lastTeamSyncAt: Date?
     private var isTeamRankingRefreshing = false
@@ -291,18 +292,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
         let quotaDiagnostic = latestQuotaDiagnostic
         let service = TeamUsageSyncService(configuration: configuration)
         let requestedRange = selectedRankingRange
+        if !isDiagnosticSyncing {
+            isDiagnosticSyncing = true
+            Task { [weak self] in
+                defer { self?.isDiagnosticSyncing = false }
+                do {
+                    let receipt = try await Task.detached(priority: .utility) {
+                        try await service.syncGrindDiagnosticIfNeeded()
+                    }.value
+                    if let receipt { AppDelegate.appendTeamSyncLog("diagnostic \(receipt.status): \(receipt.reportId) receivedAt=\(receipt.receivedAt)") }
+                } catch { AppDelegate.appendTeamSyncLog("diagnostic pending; retry on next sync") }
+            }
+        }
         statusBar.setTeamSyncDetail("正在同步本机数据…", websiteURL: service.websiteURL)
         Task { [weak self] in
             do {
                 let ranking = try await Task.detached(priority: .utility) {
-                    do {
-                        if let receipt = try await service.syncGrindDiagnosticIfNeeded() {
-                            AppDelegate.appendTeamSyncLog("diagnostic \(receipt.status): \(receipt.reportId) receivedAt=\(receipt.receivedAt)")
-                        }
-                    } catch {
-                        // No server bodies, credentials, source paths or text in logs.
-                        AppDelegate.appendTeamSyncLog("diagnostic pending; retry on next sync")
-                    }
                     _ = try await service.sync(quota: quota, quotaDiagnostic: quotaDiagnostic)
                     return try await service.fetchRanking(range: requestedRange.rawValue)
                 }.value

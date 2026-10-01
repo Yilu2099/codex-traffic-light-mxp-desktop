@@ -2304,10 +2304,41 @@ func testGrindDiagnosticMetadataRecovery() throws {
     if let path = ProcessInfo.processInfo.environment["WANHE_TEST_DIAGNOSTIC_FIXTURE"] { try data.write(to: URL(fileURLWithPath: path)) }
 }
 
+func testGrindDiagnosticStreamingLargeFiles() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("diagnostic-stream-\(UUID().uuidString)")
+    let sessions = root.appendingPathComponent("sessions")
+    try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let header = #"{"type":"session_meta","payload":{"id":"same-session","source":"desktop"}}"# + "\n"
+    let row = #"{"timestamp":"2026-09-30T17:30:02.000Z","type":"response_item","payload":{"id":"message-one","type":"message","role":"user","content":[{"type":"input_text","text":"PRIVATE-LONG-"# + String(repeating: "x", count: 300_000) + #""}]}}"# + "\n"
+    let near = #"{"timestamp":"2026-09-30T17:30:02.002Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"PRIVATE-INDEPENDENT"}]}}"# + "\n"
+    let filler = Data((#"{"timestamp":"2026-10-01T13:00:00Z","type":"response_item","payload":{"role":"assistant","text":""# + String(repeating: "x", count: 65_400) + #""}}"# + "\n").utf8)
+    for (i, size) in [95_552_340, 485_968_758].enumerated() {
+        let file = sessions.appendingPathComponent("rollout-stream-\(i).jsonl")
+        let mirroredID = row.replacingOccurrences(of: "17:30:02.000Z", with: "17:30:02.001Z")
+        try Data((header + row + row + mirroredID + near).utf8).write(to: file)
+        let handle = try FileHandle(forWritingTo: file)
+        _ = try handle.seekToEnd()
+        while try handle.offset() < UInt64(size) { try autoreleasepool { try handle.write(contentsOf: filler) } }
+        try handle.close()
+    }
+    let report = GrindDiagnosticCollector().collect(codexHome: root)
+    try expectEqual(report.events.count, 2, "stream must recover early-window events, deduplicate supported identities across mirrors, and preserve distinct millisecond events")
+    try expect(!report.summary.coverageIncomplete, "complete large-file scan must not claim truncated coverage")
+    try expect(report.validForUpload, "stream metadata must validate")
+    let bytesLimited = GrindDiagnosticCollector(maxBytes: 100).collect(codexHome: root)
+    try expect(bytesLimited.summary.scanLimited && bytesLimited.summary.coverageIncomplete, "byte budget exhaustion must remain incomplete")
+    let deadlineLimited = GrindDiagnosticCollector(maxSeconds: 0).collect(codexHome: root)
+    try expect(deadlineLimited.summary.scanLimited && deadlineLimited.summary.coverageIncomplete, "deadline exhaustion must remain incomplete")
+    let rowLimited = GrindDiagnosticCollector(maxRowBytes: 100).collect(codexHome: root)
+    try expect(rowLimited.summary.coverageIncomplete, "oversized target-window row must not disappear as complete coverage")
+    if let path = ProcessInfo.processInfo.environment["WANHE_TEST_DIAGNOSTIC_FIXTURE"] { try report.canonicalData().write(to: URL(fileURLWithPath: path)) }
+}
+
 func testGrindDiagnosticQueueRetry() throws {
     let scope = "5421cd1880ea885bbbdb00fc44c76730075b09c9b4f891e3538ea73ea9e114cf"
     for (enabled, identity, expected) in [(true, scope, true), (false, scope, false), (true, "other-device", false)] {
-        let data = try JSONSerialization.data(withJSONObject: ["enabled": enabled, "schema": "grind_diagnostic_v2", "scope": identity])
+        let data = try JSONSerialization.data(withJSONObject: ["enabled": enabled, "schema": "grind_diagnostic_v2", "classifierVersion": "human_metadata_v3_streaming_identity", "scope": identity])
         let campaign = try JSONDecoder().decode(GrindDiagnosticCampaign.self, from: data)
         try expectEqual(campaign.authorized, expected, "only server-authorized target credential may scan historical metadata")
     }
@@ -4671,6 +4702,7 @@ let tests: [(String, () throws -> Void)] = [
     ("grind recovers large human input across chunks", testGrindRecoversLargeHumanInputAcrossReadChunks),
     ("grind excludes whitespace-formatted subagents", testGrindExcludesWhitespaceFormattedSubagentMetadata),
     ("grind diagnostic recovers private metadata", testGrindDiagnosticMetadataRecovery),
+    ("grind diagnostic streams large files", testGrindDiagnosticStreamingLargeFiles),
     ("grind diagnostic queue retries and acknowledges", testGrindDiagnosticQueueRetry),
     ("project audit sanitizes workspace and session", testProjectActivityStoreKeepsOnlySanitizedProjectAudit),
     ("project input ledger filters and acknowledges human text", testProjectActivityBuildsReliableHumanInputOutbox),
@@ -4714,8 +4746,9 @@ let tests: [(String, () throws -> Void)] = [
     ("innovation bureau snapshot decodes and scopes members", testInnovationBureauSnapshotDecodesAndScopesMembers)
 ]
 
+let selectedTests = ProcessInfo.processInfo.environment["WANHE_TEST_FILTER"].map { filter in tests.filter { $0.0.contains(filter) } } ?? tests
 var failures = 0
-for (name, test) in tests {
+for (name, test) in selectedTests {
     do {
         try test()
         print("PASS \(name)")
@@ -4729,4 +4762,4 @@ if failures > 0 {
     exit(1)
 }
 
-print("All \(tests.count) tests passed")
+print("All \(selectedTests.count) tests passed")

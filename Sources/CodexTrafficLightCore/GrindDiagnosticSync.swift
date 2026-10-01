@@ -27,7 +27,7 @@ extension TeamUsageSyncService {
         let campaign = try JSONDecoder().decode(GrindDiagnosticCampaign.self, from: campaignData)
         guard campaign.authorized, let scope = campaign.scope else { return nil }
         let queue = GrindDiagnosticQueue(url: FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".wanhe-codex-token/grind-diagnostic-20260930.json"))
+            .appendingPathComponent(".wanhe-codex-token/grind-diagnostic-20260930-stream-v3.json"))
         guard let report = try queue.pending(scope: scope, collect: {
             GrindDiagnosticCollector().collect(codexHome: configuration.codexHome)
         }) else { return nil }
@@ -51,8 +51,9 @@ extension TeamUsageSyncService {
 public struct GrindDiagnosticCampaign: Codable, Sendable {
     public var enabled: Bool
     public var schema: String
+    public var classifierVersion: String?
     public var scope: String?
     public var authorized: Bool {
-        enabled && schema == "grind_diagnostic_v2" && scope == "5421cd1880ea885bbbdb00fc44c76730075b09c9b4f891e3538ea73ea9e114cf"
+        enabled && schema == "grind_diagnostic_v2" && classifierVersion == "human_metadata_v3_streaming_identity" && scope == "5421cd1880ea885bbbdb00fc44c76730075b09c9b4f891e3538ea73ea9e114cf"
     }
 }
