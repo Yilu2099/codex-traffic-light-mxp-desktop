@@ -447,13 +447,13 @@ public struct CodexGrindHistoryCollector: Sendable {
     }
 
     // Share the existing human-input filter without exposing or retaining text.
-    static func authoredEventMetadata(_ data: Data) -> (date: Date, type: String, identifier: String?)? {
+    static func authoredEventMetadata(_ data: Data) -> (date: Date, type: String, identifier: String?, timestamp: String)? {
         guard let event = try? JSONDecoder().decode(EventEnvelope.self, from: data),
               event.isAuthoredResponse || event.isLegacyUserEvent,
               let timestamp = event.timestamp, let date = isoDate(timestamp) else { return nil }
         let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         let identifier = (raw?["payload"] as? [String: Any])?["id"] as? String
-        return (date, event.type ?? "other", identifier?.isEmpty == false ? identifier : nil)
+        return (date, event.type ?? "other", identifier?.isEmpty == false ? identifier : nil, timestamp)
     }
 
     public func collectDetailed(

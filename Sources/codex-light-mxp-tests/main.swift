@@ -2313,16 +2313,26 @@ func testGrindDiagnosticStreamingLargeFiles() throws {
     let row = #"{"timestamp":"2026-09-30T17:30:02.000Z","type":"response_item","payload":{"id":"message-one","type":"message","role":"user","content":[{"type":"input_text","text":"PRIVATE-LONG-"# + String(repeating: "x", count: 300_000) + #""}]}}"# + "\n"
     let near = #"{"timestamp":"2026-09-30T17:30:02.002Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"PRIVATE-INDEPENDENT"}]}}"# + "\n"
     let filler = Data((#"{"timestamp":"2026-10-01T13:00:00Z","type":"response_item","payload":{"role":"assistant","text":""# + String(repeating: "x", count: 65_400) + #""}}"# + "\n").utf8)
-    for (i, size) in [95_552_340, 485_968_758].enumerated() {
+    for (i, size) in [95_552_340, 485_968_758, 945_095_358].enumerated() {
         let file = sessions.appendingPathComponent("rollout-stream-\(i).jsonl")
         let mirroredID = row.replacingOccurrences(of: "17:30:02.000Z", with: "17:30:02.001Z")
-        try Data((header + row + row + mirroredID + near).utf8).write(to: file)
+        let oversizedTool = #"{"timestamp":"2026-09-30T17:31:00Z","type":"response_item","payload":{"type":"function_call_output","output":""# + String(repeating: "x", count: 5 * 1024 * 1024) + #""}}"# + "\n"
+        try autoreleasepool { try Data((header + row + row + mirroredID + near + oversizedTool).utf8).write(to: file) }
         let handle = try FileHandle(forWritingTo: file)
         _ = try handle.seekToEnd()
         while try handle.offset() < UInt64(size) { try autoreleasepool { try handle.write(contentsOf: filler) } }
         try handle.close()
     }
-    let report = GrindDiagnosticCollector().collect(codexHome: root)
+    let stateURL = root.appendingPathComponent("checkpoint.json")
+    var report = GrindDiagnosticCollector().collect(codexHome: root, stateURL: stateURL)
+    try expect(report.summary.scanLimited, "1.527GB fixture must require more than one bounded slice")
+    for _ in 0..<3 {
+        if !report.summary.scanLimited { break }
+        report = GrindDiagnosticCollector().collect(codexHome: root, stateURL: stateURL)
+    }
+    let checkpoint = try String(contentsOf: stateURL, encoding: .utf8)
+    try expect(!checkpoint.contains("PRIVATE") && !checkpoint.contains(root.path) && !checkpoint.contains("same-session") && !checkpoint.contains("message-one"), "checkpoint retains only hashed identities, offsets and metadata")
+    try expectEqual((try FileManager.default.attributesOfItem(atPath: stateURL.path)[.posixPermissions]) as? Int, 0o600, "checkpoint must remain private")
     try expectEqual(report.events.count, 2, "stream must recover early-window events, deduplicate supported identities across mirrors, and preserve distinct millisecond events")
     try expect(!report.summary.coverageIncomplete, "complete large-file scan must not claim truncated coverage")
     try expect(report.validForUpload, "stream metadata must validate")
@@ -2338,7 +2348,7 @@ func testGrindDiagnosticStreamingLargeFiles() throws {
 func testGrindDiagnosticQueueRetry() throws {
     let scope = "5421cd1880ea885bbbdb00fc44c76730075b09c9b4f891e3538ea73ea9e114cf"
     for (enabled, identity, expected) in [(true, scope, true), (false, scope, false), (true, "other-device", false)] {
-        let data = try JSONSerialization.data(withJSONObject: ["enabled": enabled, "schema": "grind_diagnostic_v2", "classifierVersion": "human_metadata_v3_streaming_identity", "scope": identity])
+        let data = try JSONSerialization.data(withJSONObject: ["enabled": enabled, "schema": "grind_diagnostic_v2", "classifierVersion": "human_metadata_v4_resumable_identity", "scope": identity])
         let campaign = try JSONDecoder().decode(GrindDiagnosticCampaign.self, from: data)
         try expectEqual(campaign.authorized, expected, "only server-authorized target credential may scan historical metadata")
     }
