@@ -28,6 +28,14 @@
 swift run codex-light-mxp-tests
 ```
 
+整月官方数据的只读诊断（重新查询，不读写用量缓存或上传数据）：
+
+```bash
+.build/release/codex-light-mxp official-usage --month 2026-09 --json
+```
+
+自动尝试已安装的官方 Codex 程序；可用 `CODEX_TRAFFIC_LIGHT_CODEX_BIN` 指定单一程序复核。JSON 保留官方日记录，`completeAccountResponse` 仅表示账户日记录与累计总量一致，不代表换账号前后的成员月度记录已补齐。
+
 主要产物：
 
 ```text

@@ -10,6 +10,7 @@ struct CLIOptions {
     var fiveHourPercent: Int?
     var weeklyPercent: Int?
     var command: String?
+    var month: String?
 }
 
 func usage() {
@@ -19,6 +20,7 @@ func usage() {
            \(CommandContract.clientCommandName) quota [--five-hour <0-100>] [--weekly <0-100>] [--json]
            \(CommandContract.clientCommandName) quota --stdin [--json]
            \(CommandContract.clientCommandName) quota --app-server [--json]
+           \(CommandContract.clientCommandName) official-usage [--month YYYY-MM] [--json]
 
     """.data(using: .utf8)!)
 }
@@ -28,6 +30,13 @@ func parse(_ arguments: [String]) throws -> CLIOptions {
     var index = 0
     while index < arguments.count {
         switch arguments[index] {
+        case "--month":
+            index += 1
+            guard index < arguments.count,
+                  arguments[index].range(of: #"^\d{4}-(0[1-9]|1[0-2])$"#, options: .regularExpression) != nil else {
+                throw StateStoreError.invalidInput("--month requires YYYY-MM")
+            }
+            options.month = arguments[index]
         case "--task":
             index += 1
             guard index < arguments.count else { throw StateStoreError.invalidInput("--task requires a value") }
@@ -80,6 +89,27 @@ do {
     let store = StateStore()
 
     switch command {
+    case "official-usage":
+        let report = try OfficialCodexUsageCollector().fetch()
+        if let month = options.month {
+            let daily = report.dailyUsageBuckets.filter { $0.startDate.hasPrefix(month + "-") }
+            let total = daily.reduce(0) { $0 + $1.tokens }
+            let complete = report.lifetimeTokens.map { $0 == report.dailyUsageBuckets.reduce(0) { $0 + $1.tokens } } ?? false
+            if options.json {
+                let payload: [String: Any] = ["month": month, "tokens": total, "updatedAt": report.updatedAt,
+                    "completeAccountResponse": complete, "dataThrough": report.dataThrough ?? "",
+                    "dailyUsageBuckets": daily.map { ["startDate": $0.startDate, "tokens": $0.tokens] as [String: Any] }]
+                FileHandle.standardOutput.write(try JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys]))
+                print("")
+            } else {
+                print("\(month): \(String(format: "%.2f", Double(total) / 100_000_000)) 亿 Token")
+            }
+        } else {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            FileHandle.standardOutput.write(try encoder.encode(report))
+            print("")
+        }
     case "status":
         try printSnapshot(store.read(), json: options.json)
     case CommandContract.auditCommandName:

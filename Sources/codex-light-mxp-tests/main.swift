@@ -1536,6 +1536,48 @@ func testOfficialCodexUsageAcceptsNullableSummary() throws {
     try expectEqual(roundTrip, report, "nullable report must survive the disk cache")
 }
 
+func testOfficialUsageFallsBackWithoutLeakingErrors() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    func fixture(_ name: String, response: String, initialize: Bool = true) throws -> String {
+        let file = root.appendingPathComponent(name)
+        let script = initialize ? """
+        #!/bin/sh
+        read -r request
+        echo '{"id":1,"result":{}}'
+        read -r request
+        read -r request
+        echo '\(response)'
+        read -r request
+        """ : "#!/bin/sh\nexit 1\n"
+        try script.write(to: file, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: file.path)
+        return file.path
+    }
+    let rejected = try fixture("unsupported", response: #"{"id":2,"error":{"code":-32601,"message":"private-error"}}"#)
+    let invalid = try fixture("invalid", response: #"{"id":2,"result":{"private":"value"}}"#)
+    let exited = try fixture("exited", response: "", initialize: false)
+    let working = try fixture("working", response: #"{"id":2,"result":{"summary":{"lifetimeTokens":700},"dailyUsageBuckets":[{"startDate":"2026-09-30","tokens":700}]}}"#)
+    for failure in [root.appendingPathComponent("missing").path, rejected, invalid, exited] {
+        let report = try OfficialCodexUsageCollector(codexBinaries: [failure, working], initializeTimeout: 2, usageTimeout: 2).fetch()
+        try expectEqual(report.lifetimeTokens, 700, "another official binary should recover a failed reader")
+    }
+    let hanging = root.appendingPathComponent("hanging")
+    try "#!/bin/sh\nread -r request\nread -r request\n".write(to: hanging, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: hanging.path)
+    let started = Date()
+    let recovered = try OfficialCodexUsageCollector(codexBinaries: [hanging.path, working], initializeTimeout: 2, usageTimeout: 2).fetch()
+    try expectEqual(recovered.lifetimeTokens, 700, "a hanging reader must leave time for fallback")
+    try expect(Date().timeIntervalSince(started) < 4.5, "all attempts must share one bounded timeout")
+    do {
+        _ = try OfficialCodexUsageCollector(codexBinary: rejected, initializeTimeout: 2, usageTimeout: 2).fetch()
+        throw TestFailure(description: "explicit override must not silently choose another reader")
+    } catch OfficialCodexUsageError.requestRejected {
+        try expect(!String(describing: OfficialCodexUsageError.requestRejected).contains("private-error"), "errors must not expose remote private text")
+    }
+}
+
 func testOfficialUsageDerivesStableAccountFingerprint() throws {
     let nested = #"{"account":{"email":"  Team@Example.com "},"planType":"team"}"#.data(using: .utf8)!
     let fingerprint = OfficialCodexUsageCollector.accountFingerprint(fromAccountRead: nested)
@@ -4683,6 +4725,7 @@ let tests: [(String, () throws -> Void)] = [
     ("avatar disk cache persists by URL", testAvatarDiskCachePersistsByRemoteURL),
     ("official Codex usage parses daily buckets", testOfficialCodexUsageParsesDailyBuckets),
     ("official usage rejects protocol errors promptly", testOfficialUsageRejectsProtocolErrorsWithoutWaitingForTimeout),
+    ("official usage falls back across installed readers", testOfficialUsageFallsBackWithoutLeakingErrors),
     ("official usage accepts nullable summaries", testOfficialCodexUsageAcceptsNullableSummary),
     ("official usage derives a stable account fingerprint", testOfficialUsageDerivesStableAccountFingerprint),
     ("team payload preserves local data without official usage", testTeamPayloadPreservesLocalDataWithoutOfficialUsage),

@@ -110,43 +110,63 @@ public struct TeamGrindHistoryDay: Codable, Equatable, Sendable {
 }
 
 public struct OfficialCodexUsageCollector: Sendable {
-    private let codexBinary: String
+    private let codexBinaries: [String]
     private let initializeTimeout: TimeInterval
     private let usageTimeout: TimeInterval
 
     public init(
-        codexBinary: String = OfficialCodexUsageCollector.defaultCodexBinary(),
+        codexBinary: String? = nil,
         initializeTimeout: TimeInterval = 30,
         usageTimeout: TimeInterval = 20
     ) {
-        self.codexBinary = codexBinary
+        self.codexBinaries = codexBinary.map { [$0] } ?? Self.defaultCodexBinaries()
+        self.initializeTimeout = initializeTimeout
+        self.usageTimeout = usageTimeout
+    }
+
+    public init(codexBinaries: [String], initializeTimeout: TimeInterval = 30, usageTimeout: TimeInterval = 20) {
+        self.codexBinaries = codexBinaries
         self.initializeTimeout = initializeTimeout
         self.usageTimeout = usageTimeout
     }
 
     public static func defaultCodexBinary() -> String {
+        defaultCodexBinaries()[0]
+    }
+
+    public static func defaultCodexBinaries() -> [String] {
         if let configured = ProcessInfo.processInfo.environment["CODEX_TRAFFIC_LIGHT_CODEX_BIN"], !configured.isEmpty {
-            return configured
+            return [configured]
         }
-        let bundled = "/Applications/ChatGPT.app/Contents/Resources/codex"
-        if FileManager.default.isExecutableFile(atPath: bundled) { return bundled }
-        let local = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".local/bin/codex").path
-        if FileManager.default.isExecutableFile(atPath: local) { return local }
-        return "codex"
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let candidates = [
+            "/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex",
+            "/Applications/Codex.app/Contents/Resources/codex",
+            "/Applications/ChatGPT.app/Contents/Resources/codex",
+            "\(home)/.local/bin/codex", "/opt/homebrew/bin/codex", "/usr/local/bin/codex"
+        ].filter { FileManager.default.isExecutableFile(atPath: $0) }
+        return candidates.isEmpty ? ["codex"] : candidates
     }
 
     public func fetch(now: Date = Date()) throws -> OfficialCodexUsageReport {
-        let result = try readAppServerMethod("account/usage/read")
-        var report = try Self.parse(result, now: now)
-        // The fingerprint lets the server keep accounts apart when a device
-        // switches or borrows a Codex account. It is best-effort: usage
-        // collection must still succeed when account/read is unavailable.
-        report.accountFingerprint = fetchAccountFingerprint()
-        return report
+        let deadline = Date().addingTimeInterval(initializeTimeout + usageTimeout)
+        var lastError: Error = OfficialCodexUsageError.launchFailed("No Codex binary available")
+        for (index, binary) in codexBinaries.enumerated() {
+            guard Date() < deadline else { break }
+            do {
+                let attemptDeadline = Date().addingTimeInterval(deadline.timeIntervalSinceNow / Double(codexBinaries.count - index))
+                let result = try readAppServerMethod("account/usage/read", binary: binary, deadline: attemptDeadline)
+                var report = try Self.parse(result, now: now)
+                // Identity comes from the same binary as usage; never combine accounts across fallbacks.
+                report.accountFingerprint = fetchAccountFingerprint(binary: binary, deadline: deadline)
+                return report
+            } catch { lastError = error }
+        }
+        throw lastError
     }
 
-    private func fetchAccountFingerprint() -> String? {
-        guard let data = try? readAppServerMethod("account/read") else { return nil }
+    private func fetchAccountFingerprint(binary: String, deadline: Date) -> String? {
+        guard let data = try? readAppServerMethod("account/read", binary: binary, deadline: deadline) else { return nil }
         return Self.accountFingerprint(fromAccountRead: data)
     }
 
@@ -206,10 +226,10 @@ public struct OfficialCodexUsageCollector: Sendable {
         }
     }
 
-    private func readAppServerMethod(_ method: String) throws -> Data {
+    private func readAppServerMethod(_ method: String, binary: String, deadline: Date) throws -> Data {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = [codexBinary, "app-server", "--stdio"]
+        process.arguments = [binary, "app-server", "--stdio"]
         let input = Pipe()
         let output = Pipe()
         let errorPipe = Pipe()
@@ -235,6 +255,7 @@ public struct OfficialCodexUsageCollector: Sendable {
             output.fileHandleForReading.readabilityHandler = nil
             errorPipe.fileHandleForReading.readabilityHandler = nil
             if process.isRunning { process.terminate() }
+            try? input.fileHandleForWriting.close()
         }
 
         let initialize = try CodexAppServerJSONRPCLineCodec.encodeRequest(
@@ -246,13 +267,14 @@ public struct OfficialCodexUsageCollector: Sendable {
             ]
         )
         try input.fileHandleForWriting.write(contentsOf: initialize)
-        let initializeDeadline = Date().addingTimeInterval(initializeTimeout)
+        let initializeDeadline = min(deadline, Date().addingTimeInterval(initializeTimeout))
         var initialized = false
         while Date() < initializeDeadline {
             if try response(forID: 1, in: responseBuffer.snapshot()) != nil {
                 initialized = true
                 break
             }
+            if !process.isRunning { throw OfficialCodexUsageError.processFailed("Process exited before initialization") }
             Thread.sleep(forTimeInterval: 0.15)
         }
         guard initialized else { throw OfficialCodexUsageError.initializeTimedOut }
@@ -261,15 +283,15 @@ public struct OfficialCodexUsageCollector: Sendable {
         let request = try CodexAppServerJSONRPCLineCodec.encodeRequest(id: 2, method: method, params: [:])
         try input.fileHandleForWriting.write(contentsOf: notification)
         try input.fileHandleForWriting.write(contentsOf: request)
-        let usageDeadline = Date().addingTimeInterval(usageTimeout)
+        let usageDeadline = min(deadline, Date().addingTimeInterval(usageTimeout))
         while Date() < usageDeadline {
             if let result = try response(forID: 2, in: responseBuffer.snapshot()) {
                 return result
             }
+            if !process.isRunning { throw OfficialCodexUsageError.processFailed("Process exited before usage response") }
             Thread.sleep(forTimeInterval: 0.15)
         }
-        let stderr = String(data: errorBuffer.snapshot(), encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let stderr, !stderr.isEmpty { throw OfficialCodexUsageError.processFailed(stderr) }
+        if !errorBuffer.snapshot().isEmpty { throw OfficialCodexUsageError.processFailed("No valid usage response") }
         throw OfficialCodexUsageError.usageTimedOut
     }
 }
