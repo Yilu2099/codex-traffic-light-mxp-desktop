@@ -125,15 +125,23 @@ struct StatusPopoverView: View {
                     .foregroundStyle(muted)
             }
             Spacer()
-            HStack(spacing: 6) {
-                Circle().fill(green).frame(width: 7, height: 7)
-                Text(syncStatus)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(green)
+            Button {
+                guard let url = model.websiteURL?.appendingPathComponent("history") else { return }
+                NSWorkspace.shared.open(url)
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "clock.arrow.circlepath")
+                    Text("历史排行").lineLimit(1)
+                }
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(green)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(green.opacity(0.09), in: Capsule())
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(green.opacity(0.09), in: Capsule())
+            .buttonStyle(.plain)
+            .disabled(model.websiteURL == nil)
+            .help("查看每月官方 Token 用量排行")
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 9)
