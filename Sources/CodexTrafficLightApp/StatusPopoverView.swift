@@ -412,35 +412,16 @@ struct StatusPopoverView: View {
     }
 
     private var footer: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             Button { openWebsite(nil) } label: {
-                Label("排行榜网站", systemImage: "safari")
-                    .font(.system(size: 13, weight: .bold))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
-                    .foregroundStyle(green)
-                    .background(green.opacity(0.10), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            .strokeBorder(green.opacity(0.18), lineWidth: 1)
-                    }
+                footerLabel("排行榜网站", icon: "safari")
             }
-            .buttonStyle(.plain)
             .disabled(model.websiteURL == nil)
 
-            Link(destination: URL(string: "https://c.wanhe.cn/inspiration")!) {
-                Label("灵感分享", systemImage: "lightbulb")
-                    .font(.system(size: 13, weight: .bold))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
-                    .foregroundStyle(green)
-                    .background(green.opacity(0.10), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            .strokeBorder(green.opacity(0.18), lineWidth: 1)
-                    }
+            Link(destination: shareURL("inspiration")) {
+                footerLabel("手搓分享", icon: "lightbulb")
             }
-            .buttonStyle(.plain)
+            .disabled(model.websiteURL == nil)
             .overlay(alignment: .topTrailing) {
                 if model.inspirationUnreadCount > 0 {
                     Text(model.inspirationUnreadCount > 99 ? "99+" : "\(model.inspirationUnreadCount)")
@@ -449,26 +430,45 @@ struct StatusPopoverView: View {
                         .frame(width: 26, height: 26)
                         .background(Color(red: 1, green: 0.23, blue: 0.19), in: Circle())
                         .offset(x: 5, y: -7)
-                        .accessibilityLabel("\(model.inspirationUnreadCount) 篇未查看灵感")
+                        .accessibilityLabel("\(model.inspirationUnreadCount) 篇未查看手搓分享")
                         .allowsHitTesting(false)
                 }
             }
 
             Button(action: openBureau) {
-                Label("创新局", systemImage: "sparkles")
-                    .font(.system(size: 13, weight: .bold))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
-                    .foregroundStyle(.white)
-                    .background(green, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                footerLabel("企业客户", icon: "sparkles", prominent: true)
             }
-            .buttonStyle(.plain)
+            .disabled(model.websiteURL == nil)
+
+            Link(destination: shareURL("huokebao")) {
+                footerLabel("抖音获客", icon: "person.2")
+            }
             .disabled(model.websiteURL == nil)
         }
-        .padding(.horizontal, 20)
+        .buttonStyle(.plain)
+        .padding(.horizontal, 16)
         .padding(.vertical, 9)
         .background(card)
         .overlay(alignment: .top) { line.frame(height: 1) }
+    }
+
+    private func shareURL(_ path: String) -> URL {
+        (model.websiteURL ?? URL(string: "https://c.wanhe.cn")!).appendingPathComponent(path)
+    }
+
+    private func footerLabel(_ title: String, icon: String, prominent: Bool = false) -> some View {
+        Label(title, systemImage: icon)
+            .font(.system(size: 12, weight: .bold))
+            .lineLimit(1)
+            .minimumScaleFactor(0.85)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 12)
+            .foregroundStyle(prominent ? .white : green)
+            .background(prominent ? green : green.opacity(0.10), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .strokeBorder(green.opacity(0.18), lineWidth: 1)
+            }
     }
 
     private var rankedMembers: [TeamRankingMember] {
