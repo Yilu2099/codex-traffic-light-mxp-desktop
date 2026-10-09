@@ -436,7 +436,7 @@ struct StatusPopoverView: View {
             }
 
             Button(action: openBureau) {
-                footerLabel("企业客户", icon: "sparkles", prominent: true)
+                footerLabel("企业客户", icon: "sparkles")
             }
             .disabled(model.websiteURL == nil)
 
@@ -456,18 +456,18 @@ struct StatusPopoverView: View {
         (model.websiteURL ?? URL(string: "https://c.wanhe.cn")!).appendingPathComponent(path)
     }
 
-    private func footerLabel(_ title: String, icon: String, prominent: Bool = false) -> some View {
+    private func footerLabel(_ title: String, icon: String) -> some View {
         Label(title, systemImage: icon)
             .font(.system(size: 12, weight: .bold))
             .lineLimit(1)
             .minimumScaleFactor(0.85)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 12)
-            .foregroundStyle(prominent ? .white : green)
-            .background(prominent ? green : green.opacity(0.10), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .foregroundStyle(green)
+            .background(green.opacity(0.08), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .strokeBorder(green.opacity(0.18), lineWidth: 1)
+                    .strokeBorder(green.opacity(0.14), lineWidth: 1)
             }
     }
 
