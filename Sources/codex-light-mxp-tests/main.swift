@@ -952,6 +952,17 @@ func testAppServerJSONRPCLineCodecDecodesMessagesAndFindsTargetResponse() throws
         ]
     ])
 
+    let unicode = try CodexAppServerJSONRPCLineCodec.encodeMessage(["id": 3, "result": ["title": "检查项目情况"]])
+    for split in 1..<unicode.count {
+        var pending = Data(unicode.prefix(split))
+        let complete = CodexAppServerJSONRPCLineCodec.completeLinePrefix(from: pending)
+        try expectEqual(complete.count, 0, "partial pipe reads must wait for newline, including split UTF-8 characters")
+        pending.append(unicode.dropFirst(split))
+        let frames = try CodexAppServerJSONRPCLineCodec.decodeMessages(from: CodexAppServerJSONRPCLineCodec.completeLinePrefix(from: pending))
+        let result = try CodexAppServerJSONRPCLineCodec.resultData(forID: 3, in: frames)
+        let object = try JSONSerialization.jsonObject(with: result) as! [String: String]
+        try expectEqual(object["title"], "检查项目情况", "every byte boundary must preserve Chinese titles")
+    }
     let messages = try CodexAppServerJSONRPCLineCodec.decodeMessages(from: notification + response)
     let target = try CodexAppServerJSONRPCLineCodec.resultData(forID: 2, in: messages)
     let quota = try CodexAppServerQuotaMapper.quotaValues(from: target)

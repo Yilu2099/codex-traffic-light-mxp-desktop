@@ -153,6 +153,11 @@ public enum CodexAppServerJSONRPCLineCodec {
         return data
     }
 
+    public static func completeLinePrefix(from data: Data) -> Data {
+        guard let end = data.lastIndex(of: 0x0A) else { return Data() }
+        return Data(data.prefix(through: end))
+    }
+
     public static func decodeMessages(from data: Data) throws -> [Data] {
         guard let text = String(data: data, encoding: .utf8) else {
             throw CodexAppServerQuotaError.invalidJSON

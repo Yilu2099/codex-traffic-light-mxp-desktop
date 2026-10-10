@@ -24,9 +24,24 @@ public enum ChatUsageCollector {
         let attempt = cache.appendingPathExtension("attempt")
         let old = (try? Data(contentsOf: cache)).flatMap { try? JSONDecoder().decode(ChatUsageReport.self, from: $0) }
         let modified = (try? FileManager.default.attributesOfItem(atPath: attempt.path)[.modificationDate]) as? Date
-        if let modified, now.timeIntervalSince(modified) < 1800 { return old }
-        try? Data().write(to: attempt, options: .atomic)
-        guard let fresh = try? fetch(codexHome: codexHome, now: now) else { return old }
+        let attemptVersion = try? String(contentsOf: attempt, encoding: .utf8)
+        let retryAfter: TimeInterval = old == nil || FileManager.default.fileExists(atPath: cache.appendingPathExtension("error").path) ? 300 : 1800
+        if let modified, attemptVersion == ClientVersion.current, now.timeIntervalSince(modified) < retryAfter { return old }
+        try? Data(ClientVersion.current.utf8).write(to: attempt, options: .atomic)
+        let fresh: ChatUsageReport
+        do { fresh = try fetch(codexHome: codexHome, now: now) }
+        catch {
+            let code: String
+            switch error {
+            case CodexAppServerQuotaError.invalidJSON: code = "rpc_incomplete_json"
+            case CodexAppServerQuotaError.appServerReturnedError: code = "rpc_unavailable"
+            case OfficialCodexUsageError.usageTimedOut: code = "collection_timeout"
+            default: code = "collection_unavailable"
+            }
+            try? Data(code.utf8).write(to: cache.appendingPathExtension("error"), options: .atomic)
+            return old
+        }
+        try? FileManager.default.removeItem(at: cache.appendingPathExtension("error"))
         if let data = try? JSONEncoder().encode(fresh) { try? data.write(to: cache, options: .atomic) }
         return fresh
     }
@@ -109,6 +124,13 @@ private final class ChatUsageBuffer: @unchecked Sendable {
     private let lock = NSLock()
     private var data = Data()
     func append(_ chunk: Data) { lock.lock(); defer { lock.unlock() }; data.append(chunk) }
+    // Pipe reads may end inside a UTF-8 character or JSON object. Parse complete lines only.
+    func takeLines() -> Data {
+        lock.lock(); defer { lock.unlock() }
+        let lines = CodexAppServerJSONRPCLineCodec.completeLinePrefix(from: data)
+        data.removeFirst(lines.count)
+        return lines
+    }
     func snapshot() -> Data { lock.lock(); defer { lock.unlock() }; return data }
 }
 
@@ -136,8 +158,12 @@ private final class ChatUsageRPC {
         try input.fileHandleForWriting.write(contentsOf: CodexAppServerJSONRPCLineCodec.encodeRequest(id: id, method: method, params: params))
         let until = min(deadline, Date().addingTimeInterval(15))
         while Date() < until && process.isRunning {
-            let messages = try CodexAppServerJSONRPCLineCodec.decodeMessages(from: buffer.snapshot())
-            if let result = try? CodexAppServerJSONRPCLineCodec.resultData(forID: id, in: messages), let object = try JSONSerialization.jsonObject(with: result) as? [String: Any] { return object }
+            let messages = try CodexAppServerJSONRPCLineCodec.decodeMessages(from: buffer.takeLines())
+            do {
+                let result = try CodexAppServerJSONRPCLineCodec.resultData(forID: id, in: messages)
+                if let object = try JSONSerialization.jsonObject(with: result) as? [String: Any] { return object }
+                throw OfficialCodexUsageError.invalidResponse
+            } catch CodexAppServerQuotaError.responseNotFound { }
             Thread.sleep(forTimeInterval: 0.025)
         }
         throw OfficialCodexUsageError.usageTimedOut
