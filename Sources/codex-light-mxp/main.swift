@@ -20,6 +20,7 @@ func usage() {
            \(CommandContract.clientCommandName) quota [--five-hour <0-100>] [--weekly <0-100>] [--json]
            \(CommandContract.clientCommandName) quota --stdin [--json]
            \(CommandContract.clientCommandName) quota --app-server [--json]
+           \(CommandContract.clientCommandName) chat-usage [--json]
            \(CommandContract.clientCommandName) official-usage [--month YYYY-MM] [--json]
 
     """.data(using: .utf8)!)
@@ -89,6 +90,10 @@ do {
     let store = StateStore()
 
     switch command {
+    case "chat-usage":
+        let report = try ChatUsageCollector.fetch(codexHome: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex"))
+        FileHandle.standardOutput.write(try JSONEncoder().encode(report))
+        print("")
     case "official-usage":
         let report = try OfficialCodexUsageCollector().fetch()
         if let month = options.month {

@@ -1610,6 +1610,13 @@ func testTeamPayloadPreservesLocalDataWithoutOfficialUsage() throws {
     }
     try expectEqual((encoded["profile"] as? [String: Any])?.count, 1, "profile must contain only the user ID")
     try expectEqual((encoded["device"] as? [String: Any])?.count, 1, "device must contain only the device ID")
+    payload.chatUsage = try JSONDecoder().decode(ChatUsageReport.self, from: JSONSerialization.data(withJSONObject: ["collectedAt": "2026-09-05T04:00:00Z", "rows": [["id": String(repeating: "a", count: 64), "title": "真实聊天标题", "weeklyPercent": 120.5, "subagents": 2]]]))
+    let chatEncoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(payload)) as! [String: Any]
+    let chatReport = chatEncoded["chatUsage"] as! [String: Any]
+    let chatRow = (chatReport["rows"] as! [[String: Any]])[0]
+    try expectEqual(chatRow["weeklyPercent"] as? Double, 120.5, "official lifetime percentages are not clamped to 100")
+    try expect(chatRow["credits"] == nil, "unknown credits must never become zero")
+    try expectEqual(Set(chatRow.keys), Set(["id", "title", "weeklyPercent", "subagents"]), "chat upload must contain no raw IDs, prompts, credentials or paths")
     payload.interactionSummary = [
         TeamSessionInteractionSummary(sessionId: "private-session-a", day: "2026-09-05", firstDayUserAt: "2026-09-05T01:00:00.000Z", lastDayUserAt: "2026-09-05T14:00:00.000Z", dayTurnCount: 17),
         TeamSessionInteractionSummary(sessionId: "private-session-b", day: "2026-09-05", firstDayUserAt: "2026-09-05T02:00:00.000Z", lastDayUserAt: "2026-09-05T15:00:00.000Z", lastNightUserAt: "2026-09-05T18:30:00.000Z", nightTurnCount: 9),
