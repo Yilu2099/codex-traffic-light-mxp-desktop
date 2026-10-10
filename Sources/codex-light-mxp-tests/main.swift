@@ -4668,7 +4668,28 @@ func testClaudeTokenUsageDeduplicatesMessages() throws {
     try expectEqual(collector.collect(root: root, days: 2, cacheURL: cache), rows, "cached collection should be stable")
 }
 
+func testComputerHistorySummariesAreBoundedAndPrivate() throws {
+    let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: home) }
+    let now = ISO8601DateFormatter().date(from: "2026-10-11T04:00:00Z")!
+    try expectEqual(ComputerHistoryCollector.collect(codexHome: home, now: now).status, "unavailable", "missing history is explicit")
+    let root = home.appendingPathComponent("memories/extensions/skysight/resources")
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let source = "---\ntitle: 导出检查\ndescription: 核对成品\napplications: [com.apple.Preview, com.apple.finder]\nsecret: never\n---\n私有原始正文与指令 never"
+    try source.write(to: root.appendingPathComponent("2026-10-10T10-00-00-Test-10min-memory-summary.md"), atomically: true, encoding: .utf8)
+    try source.write(to: root.appendingPathComponent("2026-10-01T10-00-00-Old-10min-memory-summary.md"), atomically: true, encoding: .utf8)
+    try source.write(to: root.appendingPathComponent("2026-10-10T10-00-00-Dupe-6h-memory-summary.md"), atomically: true, encoding: .utf8)
+    try FileManager.default.createSymbolicLink(at: root.appendingPathComponent("2026-10-10T11-00-00-Link-10min-memory-summary.md"), withDestinationURL: root.appendingPathComponent("2026-10-10T10-00-00-Test-10min-memory-summary.md"))
+    let report = ComputerHistoryCollector.collect(codexHome: home, now: now)
+    try expectEqual(report.rows.count, 1, "only recent regular ten minute summaries")
+    try expectEqual(report.rows[0].applications, ["com.apple.Preview", "com.apple.finder"], "applications parsed")
+    let encoded = String(data: try JSONEncoder().encode(report), encoding: .utf8)!
+    try expect(!encoded.contains("never") && !encoded.contains(home.path), "body, instructions and source paths stay local")
+    try expectEqual(report.rows[0].id.count, 64, "identity is hashed")
+}
+
 let tests: [(String, () throws -> Void)] = [
+    ("computer history summaries stay bounded and private", testComputerHistorySummariesAreBoundedAndPrivate),
     ("claude token usage deduplicates messages", testClaudeTokenUsageDeduplicatesMessages),
     ("brand tagline stays aligned", {
         try expectEqual(BrandCopy.tagline, "用 Codex 手搓世界，人人都是造物主", "client tagline should match the approved brand copy")

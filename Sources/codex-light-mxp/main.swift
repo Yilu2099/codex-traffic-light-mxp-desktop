@@ -90,6 +90,10 @@ do {
     let store = StateStore()
 
     switch command {
+    case "computer-history":
+        let report = ComputerHistoryCollector.collect(codexHome: ProcessInfo.processInfo.environment["CODEX_HOME"].map { URL(fileURLWithPath: $0) } ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex"))
+        FileHandle.standardOutput.write(try JSONEncoder().encode(report))
+        print("")
     case "chat-usage":
         let report = try ChatUsageCollector.fetch(codexHome: ProcessInfo.processInfo.environment["CODEX_HOME"].map { URL(fileURLWithPath: $0) } ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex"))
         FileHandle.standardOutput.write(try JSONEncoder().encode(report))

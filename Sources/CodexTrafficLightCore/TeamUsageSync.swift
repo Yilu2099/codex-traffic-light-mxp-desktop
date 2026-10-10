@@ -380,6 +380,7 @@ public struct TeamUsagePayload: Codable, Equatable, Sendable {
     public var quotaDiagnostic: TeamQuotaDiagnostic?
     public var officialUsage: OfficialCodexUsageReport?
     public var chatUsage: ChatUsageReport? = nil
+    public var computerHistory: ComputerHistoryReport? = nil
     public var todayLiveUsage: TodayLiveUsageReport
     public var claudeDailyUsage: [ClaudeDailyTokens]?
     public var sessionActivity: [TeamSessionActivity]
@@ -396,7 +397,7 @@ public struct TeamUsagePayload: Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case collector, collectedAt, profile, device, quota, quotaDiagnostic, officialUsage, todayLiveUsage, claudeDailyUsage
         case sessionActivity, sessionActivityMode, sessionActivityCutoffDay, interactionSummary, grindHistory, grindHistoryMode
-        case projects, inputEvents, sessions, usageOnly, chatUsage
+        case projects, inputEvents, sessions, usageOnly, chatUsage, computerHistory
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -409,6 +410,7 @@ public struct TeamUsagePayload: Codable, Equatable, Sendable {
         try container.encodeIfPresent(quota, forKey: .quota)
         try container.encodeIfPresent(officialUsage, forKey: .officialUsage)
         try container.encodeIfPresent(chatUsage, forKey: .chatUsage)
+        try container.encodeIfPresent(computerHistory, forKey: .computerHistory)
         try container.encode(todayLiveUsage, forKey: .todayLiveUsage)
         try container.encodeIfPresent(claudeDailyUsage, forKey: .claudeDailyUsage)
         // Retain only daily timestamp bounds. The constant key keeps the existing
@@ -1067,6 +1069,7 @@ public struct TeamUsageSyncService: Sendable {
             quotaDiagnostic: quotaDiagnostic,
             officialUsage: officialUsage,
             chatUsage: ChatUsageCollector.cached(codexHome: configuration.codexHome),
+            computerHistory: ComputerHistoryCollector.collect(codexHome: configuration.codexHome, now: now),
             todayLiveUsage: todayLiveUsage,
             claudeDailyUsage: nil,
             sessionActivity: [],
