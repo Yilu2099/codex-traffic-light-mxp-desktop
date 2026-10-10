@@ -29,7 +29,7 @@ public enum ChatUsageCollector {
         if let modified, attemptVersion == ClientVersion.current, now.timeIntervalSince(modified) < retryAfter { return old }
         try? Data(ClientVersion.current.utf8).write(to: attempt, options: .atomic)
         let fresh: ChatUsageReport
-        do { fresh = try fetch(codexHome: codexHome, now: now) }
+        do { fresh = try fetchInHelper(codexHome: codexHome) }
         catch {
             let code: String
             switch error {
@@ -44,6 +44,26 @@ public enum ChatUsageCollector {
         try? FileManager.default.removeItem(at: cache.appendingPathExtension("error"))
         if let data = try? JSONEncoder().encode(fresh) { try? data.write(to: cache, options: .atomic) }
         return fresh
+    }
+
+    // Use the packaged CLI's independent networking session, matching the tested collector.
+    private static func fetchInHelper(codexHome: URL) throws -> ChatUsageReport {
+        let process = Process()
+        let output = FileManager.default.temporaryDirectory.appendingPathComponent("wanhe-chat-\(UUID().uuidString).json")
+        FileManager.default.createFile(atPath: output.path, contents: nil, attributes: [.posixPermissions: 0o600])
+        let handle = try FileHandle(forWritingTo: output)
+        defer { try? handle.close(); try? FileManager.default.removeItem(at: output) }
+        process.executableURL = URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent().appendingPathComponent("codex-light-mxp")
+        process.arguments = ["chat-usage", "--json"]
+        process.environment = ["HOME": FileManager.default.homeDirectoryForCurrentUser.path, "PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "CODEX_HOME": codexHome.path]
+        process.environment?["CODEX_TRAFFIC_LIGHT_CODEX_BIN"] = ProcessInfo.processInfo.environment["CODEX_TRAFFIC_LIGHT_CODEX_BIN"]
+        process.standardOutput = handle; process.standardError = FileHandle.nullDevice
+        try process.run()
+        let deadline = Date().addingTimeInterval(110)
+        while process.isRunning && Date() < deadline { Thread.sleep(forTimeInterval: 0.05) }
+        guard !process.isRunning else { process.terminate(); throw OfficialCodexUsageError.usageTimedOut }
+        guard process.terminationStatus == 0 else { throw OfficialCodexUsageError.invalidResponse }
+        return try JSONDecoder().decode(ChatUsageReport.self, from: Data(contentsOf: output))
     }
 
     public static func fetch(codexHome: URL, now: Date = Date()) throws -> ChatUsageReport {

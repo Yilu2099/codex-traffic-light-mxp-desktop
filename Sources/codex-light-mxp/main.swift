@@ -91,7 +91,7 @@ do {
 
     switch command {
     case "chat-usage":
-        let report = try ChatUsageCollector.fetch(codexHome: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex"))
+        let report = try ChatUsageCollector.fetch(codexHome: ProcessInfo.processInfo.environment["CODEX_HOME"].map { URL(fileURLWithPath: $0) } ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex"))
         FileHandle.standardOutput.write(try JSONEncoder().encode(report))
         print("")
     case "official-usage":
