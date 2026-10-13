@@ -1041,11 +1041,12 @@ public struct TeamUsageSyncService: Sendable {
         // Official account availability must not gate reliable local metadata.
         let officialUsage = try? cachedOfficialUsage()
         let sessionFileIndex = CodexSessionFileIndex(codexHome: configuration.codexHome)
-        let todayLiveUsage = TodayCodexUsageCollector().collect(
+        let nativeUsage = TodayCodexUsageCollector().collect(
             codexHome: configuration.codexHome,
             sessionFileIndex: sessionFileIndex,
             now: now
         )
+        let todayLiveUsage = DotTokenUsageObserver.merging(nativeUsage, codexHome: configuration.codexHome, index: sessionFileIndex)
         let interactionReport = CodexGrindHistoryCollector().collectIncremental(
             codexHome: configuration.codexHome,
             sessionFileIndex: sessionFileIndex,

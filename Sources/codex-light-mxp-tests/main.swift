@@ -4688,7 +4688,45 @@ func testComputerHistorySummariesAreBoundedAndPrivate() throws {
     try expectEqual(report.rows[0].id.count, 64, "identity is hashed")
 }
 
+func testDotTokenUsageBoundaries() throws {
+    let raw: [String: Any] = ["inputTokens": 100.0, "cachedInputTokens": 90.0, "outputTokens": 20.0, "reasoningOutputTokens": 10.0, "totalTokens": 120.0]
+    try expectEqual(DotTokenLedger.tokenTotal(raw), 120, "integral floating point counts accepted")
+    for invalid: Any in [true, -1, 1.5, Double.infinity] {
+        var bad = raw; bad["inputTokens"] = invalid
+        try expect(DotTokenLedger.tokenTotal(bad) == nil, "invalid counter rejected")
+    }
+    var bad = raw; bad["cachedInputTokens"] = 101
+    try expect(DotTokenLedger.tokenTotal(bad) == nil, "cache cannot exceed input")
+    bad = raw; bad["totalTokens"] = 121
+    try expect(DotTokenLedger.tokenTotal(bad) == nil, "inconsistent sum rejected")
+    let lines = "/Applications/ChatGPT.app/codex -c forced_login_method=\"chatgpt\" exec-server --environment-id mini-env\n/bin/echo codex exec-server --environment-id wrong\ncodex app-server --environment-id wrong"
+    try expectEqual(DotTokenUsageObserver.executorIDs(in: lines), Set(["mini-env"]), "only actual local executor selected")
+    let before = ISO8601DateFormatter().date(from: "2026-10-12T15:59:59Z")!, after = ISO8601DateFormatter().date(from: "2026-10-12T16:00:01Z")!
+    var ledger = DotTokenLedger()
+    ledger.observe(key: "dot", total: 1000, baseline: true, now: before)
+    ledger.observe(key: "dot", total: 1100, baseline: false, now: before)
+    ledger.observe(key: "dot", total: 1100, baseline: false, now: before)
+    ledger.observe(key: "dot", total: 1300, baseline: false, now: after)
+    ledger.observe(key: "dot", total: 5000, baseline: true, now: after)
+    ledger.observe(key: "dot", total: 20, baseline: false, now: after)
+    ledger.observe(key: "dot", total: 50, baseline: false, now: after)
+    let restored = try JSONDecoder().decode(DotTokenLedger.self, from: JSONEncoder().encode(ledger))
+    let report = TodayLiveUsageReport(day: "2026-10-13", tokens: 7, utcDay: "2026-10-12", utcTokens: 8, updatedAt: "")
+    let merged = restored.merging(report, now: after)
+    try expectEqual(merged.tokens, 237, "local midnight, duplicate, reset and reconnect boundaries")
+    try expectEqual(merged.utcTokens, 338, "UTC continuation uses its own day")
+    try expectEqual(merged.recent30MinuteTokens, 330, "only observed increments in recent window")
+    try expectEqual(restored.merging(report, now: after, nativeKeys: ["dot"]), report, "native overlap excluded from all counters")
+    ledger.observe(key: "dot", total: 30_000_050, baseline: false, now: after)
+    ledger.observe(key: "dot", total: 30_000_150, baseline: false, now: after)
+    let reviewed = ledger.merging(report, now: after)
+    try expectEqual(reviewed.tokens, 337, "suspicious spike cannot block next valid increment")
+    try expectEqual(reviewed.pendingTokens, 30_000_000, "spike is quarantined, not discarded silently")
+    try expectEqual(reviewed.anomalyCount, 1, "anomaly is visible")
+}
+
 let tests: [(String, () throws -> Void)] = [
+    ("dot token usage boundaries", testDotTokenUsageBoundaries),
     ("computer history summaries stay bounded and private", testComputerHistorySummariesAreBoundedAndPrivate),
     ("claude token usage deduplicates messages", testClaudeTokenUsageDeduplicatesMessages),
     ("brand tagline stays aligned", {

@@ -21,6 +21,7 @@ func usage() {
            \(CommandContract.clientCommandName) quota --stdin [--json]
            \(CommandContract.clientCommandName) quota --app-server [--json]
            \(CommandContract.clientCommandName) chat-usage [--json]
+           \(CommandContract.clientCommandName) dot-usage [--task <thread-id>] [--json]
            \(CommandContract.clientCommandName) official-usage [--month YYYY-MM] [--json]
 
     """.data(using: .utf8)!)
@@ -90,6 +91,23 @@ do {
     let store = StateStore()
 
     switch command {
+    case "dot-usage":
+        let home = ProcessInfo.processInfo.environment["CODEX_HOME"].map { URL(fileURLWithPath: $0) }
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex")
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent("wanhe-dot-test-\(UUID().uuidString).json")
+        let finished = DispatchSemaphore(value: 0)
+        let taskID = options.taskID
+        Task.detached {
+            let observer = DotTokenUsageObserver(codexHome: home, stateURL: path, testThreadID: taskID)
+            let runner = Task { await observer.run() }
+            try? await Task.sleep(for: .seconds(60))
+            runner.cancel()
+            await runner.value
+            if let data = try? Data(contentsOf: path) { FileHandle.standardOutput.write(data); print("") }
+            else { print("{\"status\":\"waiting\"}") }
+            finished.signal()
+        }
+        finished.wait()
     case "computer-history":
         let report = ComputerHistoryCollector.collect(codexHome: ProcessInfo.processInfo.environment["CODEX_HOME"].map { URL(fileURLWithPath: $0) } ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex"))
         FileHandle.standardOutput.write(try JSONEncoder().encode(report))
