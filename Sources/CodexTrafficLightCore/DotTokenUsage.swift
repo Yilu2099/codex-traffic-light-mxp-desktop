@@ -15,6 +15,7 @@ public struct DotTokenLedger: Codable, Sendable {
     public var updatedAt = ""
     public var status = "waiting"
     public var accountHash = ""
+    public var lastError: String?
 
     public init() {}
 
@@ -81,6 +82,8 @@ public struct DotTokenLedger: Codable, Sendable {
     }
 }
 
+private struct DotRPCFailure: Error, Sendable { let code: Int }
+
 public actor DotTokenUsageObserver {
     private let codexHome: URL
     private let stateURL: URL
@@ -90,6 +93,8 @@ public actor DotTokenUsageObserver {
     private var requestID = 0
     private var subscriptions = Set<String>()
     private var baselines = Set<String>()
+    private var retryAfter: [String: Date] = [:]
+    private var stage = "connect"
     private var executors = Set<String>()
     private var account = ""
     private var ledger: DotTokenLedger
@@ -115,6 +120,17 @@ public actor DotTokenUsageObserver {
             for index in [1, 2] { if let range = Range(match.range(at: index), in: line) { return String(line[range]) } }
             return nil
         })
+    }
+
+    public static func isLocalDotThread(_ thread: [String: Any], executors: Set<String>, now: Date = Date()) -> Bool {
+        guard thread["originator"] as? String == "codex_work_cca", thread["threadSource"] as? String == "aeon_child",
+              thread["path"] == nil || thread["path"] is NSNull, thread["ephemeral"] as? Bool != true,
+              let environments = thread["environments"] as? [[String: Any]], environments.count == 1,
+              let environment = environments[0]["environmentId"] as? String, executors.contains(environment),
+              let updated = thread["updatedAt"] as? NSNumber, updated.doubleValue.isFinite,
+              updated.doubleValue >= now.timeIntervalSince1970 - 86400,
+              updated.doubleValue <= now.timeIntervalSince1970 + 300 else { return false }
+        return true
     }
 
     private func localExecutors() -> Set<String> {
@@ -158,6 +174,7 @@ public actor DotTokenUsageObserver {
             }
             do {
                 account = currentAccount
+                stage = "connect"
                 let hash = DotTokenLedger.key(account: account, thread: "account")
                 if ledger.accountHash != hash { ledger = DotTokenLedger(); ledger.accountHash = hash; save() }
                 var request = URLRequest(url: URL(string: "wss://codex-cloud-backend.chatgpt.com/")!)
@@ -179,6 +196,8 @@ public actor DotTokenUsageObserver {
                     guard !executors.isEmpty else { throw URLError(.badServerResponse) }
                 }
                 setStatus("connected")
+                ledger.lastError = nil
+                save()
                 while !Task.isCancelled {
                     guard let (latestToken, latestAccount) = auth(), latestToken == token, latestAccount == account else { break }
                     let latest = testThreadID == nil ? localExecutors() : executors
@@ -186,7 +205,14 @@ public actor DotTokenUsageObserver {
                     try await discover()
                     try await Task.sleep(for: .seconds(5))
                 }
-            } catch { if !Task.isCancelled { setStatus("unavailable") } }
+            } catch {
+                if !Task.isCancelled {
+                    let code = (error as? DotRPCFailure)?.code ?? (error as NSError).code
+                    ledger.lastError = "\(stage):\(code)"
+                    ledger.status = "unavailable"
+                    save()
+                }
+            }
             disconnect()
             try? await Task.sleep(for: .seconds(10))
         }
@@ -194,16 +220,23 @@ public actor DotTokenUsageObserver {
     }
 
     private func rpc(_ method: String, _ params: [String: Any]) async throws -> Data {
+        try Task.checkCancellation()
+        guard let transport = socket else { throw URLError(.notConnectedToInternet) }
+        stage = method
         requestID += 1
         let id = requestID
         let data = try JSONSerialization.data(withJSONObject: ["id": id, "method": method, "params": params])
-        return try await withCheckedThrowingContinuation { continuation in
-            pending[id] = continuation
-            Task {
-                do { try await socket?.send(.data(data)) } catch { fail(id) }
-                try? await Task.sleep(for: .seconds(15))
-                fail(id)
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                pending[id] = continuation
+                Task { do { try await transport.send(.data(data)) } catch { fail(id) } }
+                Task {
+                    try? await Task.sleep(for: .seconds(15))
+                    fail(id)
+                }
             }
+        } onCancel: {
+            Task { await self.fail(id) }
         }
     }
 
@@ -215,23 +248,28 @@ public actor DotTokenUsageObserver {
         receiver?.cancel(); receiver = nil
         socket?.cancel(with: .goingAway, reason: nil); socket = nil
         for id in Array(pending.keys) { fail(id) }
-        subscriptions.removeAll(); baselines.removeAll()
+        subscriptions.removeAll(); baselines.removeAll(); retryAfter.removeAll()
     }
 
     private func discover() async throws {
         var cursor: String?
         for _ in 0..<10 {
+            try Task.checkCancellation()
             let data = try await rpc("thread/list", ["archived": false, "limit": 100, "sortKey": "updated_at", "sortDirection": "desc", "originators": ["codex_work_cca"], "cursor": cursor as Any? ?? NSNull()])
             let page = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
             for thread in page["data"] as? [[String: Any]] ?? [] {
-                guard thread["originator"] as? String == "codex_work_cca", thread["threadSource"] as? String == "aeon_child",
-                      thread["path"] == nil || thread["path"] is NSNull, thread["ephemeral"] as? Bool != true,
-                      let id = thread["id"] as? String,
-                      let environments = thread["environments"] as? [[String: Any]], environments.count == 1,
-                      let environment = environments[0]["environmentId"] as? String, executors.contains(environment),
+                guard Self.isLocalDotThread(thread, executors: executors), let id = thread["id"] as? String,
+                      (retryAfter[id] ?? .distantPast) <= Date(),
                       !subscriptions.contains(id) else { continue }
                 subscriptions.insert(id)
-                _ = try await rpc("thread/resume", ["threadId": id, "excludeTurns": true])
+                do {
+                    _ = try await rpc("thread/resume", ["threadId": id, "excludeTurns": true])
+                } catch let error as DotRPCFailure {
+                    subscriptions.remove(id)
+                    retryAfter[id] = Date().addingTimeInterval(60)
+                    ledger.lastError = "thread/resume:\(error.code)"
+                    save()
+                }
             }
             cursor = page["nextCursor"] as? String
             if cursor == nil { break }
@@ -242,11 +280,12 @@ public actor DotTokenUsageObserver {
         do {
             while !Task.isCancelled {
                 let frame = try await task.receive()
+                guard socket === task, !Task.isCancelled else { return }
                 let data: Data
                 switch frame { case .data(let value): data = value; case .string(let value): data = Data(value.utf8); @unknown default: continue }
                 guard let message = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
                 if let id = message["id"] as? Int, let continuation = pending.removeValue(forKey: id) {
-                    if message["error"] != nil { continuation.resume(throwing: URLError(.badServerResponse)) }
+                    if let error = message["error"] as? [String: Any] { continuation.resume(throwing: DotRPCFailure(code: error["code"] as? Int ?? -1)) }
                     else { continuation.resume(returning: try JSONSerialization.data(withJSONObject: message["result"] ?? [:])) }
                     continue
                 }
@@ -258,7 +297,7 @@ public actor DotTokenUsageObserver {
                                baseline: baselines.insert(thread).inserted, now: Date())
                 save()
             }
-        } catch { for id in Array(pending.keys) { fail(id) } }
+        } catch { if socket === task { for id in Array(pending.keys) { fail(id) } } }
     }
 
     public static func merging(_ report: TodayLiveUsageReport, codexHome: URL, index: CodexSessionFileIndex) -> TodayLiveUsageReport {

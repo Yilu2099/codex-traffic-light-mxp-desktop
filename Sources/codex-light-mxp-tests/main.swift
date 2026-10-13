@@ -4702,6 +4702,13 @@ func testDotTokenUsageBoundaries() throws {
     let lines = "/Applications/ChatGPT.app/codex -c forced_login_method=\"chatgpt\" exec-server --environment-id mini-env\n/bin/echo codex exec-server --environment-id wrong\ncodex app-server --environment-id wrong"
     try expectEqual(DotTokenUsageObserver.executorIDs(in: lines), Set(["mini-env"]), "only actual local executor selected")
     let before = ISO8601DateFormatter().date(from: "2026-10-12T15:59:59Z")!, after = ISO8601DateFormatter().date(from: "2026-10-12T16:00:01Z")!
+    let thread: [String: Any] = ["originator": "codex_work_cca", "threadSource": "aeon_child", "path": NSNull(), "environments": [["environmentId": "mini-env"]], "updatedAt": after.timeIntervalSince1970]
+    try expect(DotTokenUsageObserver.isLocalDotThread(thread, executors: ["mini-env"], now: after), "active local dot thread matches")
+    try expect(!DotTokenUsageObserver.isLocalDotThread(thread, executors: ["studio-env"], now: after), "other computer cannot contribute")
+    var old = thread; old["updatedAt"] = after.timeIntervalSince1970 - 90000
+    try expect(!DotTokenUsageObserver.isLocalDotThread(old, executors: ["mini-env"], now: after), "stale historical subscriptions excluded")
+    old = thread; old["environments"] = [["environmentId": "mini-env"], ["environmentId": "studio-env"]]
+    try expect(!DotTokenUsageObserver.isLocalDotThread(old, executors: ["mini-env"], now: after), "ambiguous execution environment excluded")
     var ledger = DotTokenLedger()
     ledger.observe(key: "dot", total: 1000, baseline: true, now: before)
     ledger.observe(key: "dot", total: 1100, baseline: false, now: before)
