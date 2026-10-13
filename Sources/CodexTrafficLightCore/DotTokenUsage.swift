@@ -64,6 +64,11 @@ public struct DotTokenLedger: Codable, Sendable {
         SHA256.hash(data: Data("wanhe-dot-v1|\(account)|\(thread)".utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
+    public func latestIncrementAt(now: Date = Date()) -> Date? {
+        entries.values.flatMap { $0.recent.keys }.compactMap { SharedDateFormatters.shared.iso8601Date(from: $0) }
+            .filter { $0 <= now && $0 >= now.addingTimeInterval(-1800) }.max()
+    }
+
     public func merging(_ report: TodayLiveUsageReport, now: Date = Date(), nativeKeys: Set<String> = []) -> TodayLiveUsageReport {
         var result = report
         let included = entries.filter { !nativeKeys.contains($0.key) }.values
@@ -103,6 +108,11 @@ public actor DotTokenUsageObserver {
     public static var stateURL: URL {
         if let path = ProcessInfo.processInfo.environment["WANHE_DOT_STATE_FILE"], path.hasPrefix("/") { return URL(fileURLWithPath: path) }
         return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".wanhe-codex-token/dot-token-usage.json")
+    }
+
+    public static func latestActivity(now: Date = Date()) -> Date? {
+        guard let data = try? Data(contentsOf: stateURL), let ledger = try? JSONDecoder().decode(DotTokenLedger.self, from: data) else { return nil }
+        return ledger.latestIncrementAt(now: now)
     }
 
     public static func runInHelper(codexHome: URL) async {

@@ -193,7 +193,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
         let dates = [TeamUsageSyncService.presenceMarkerURL(), TeamUsageSyncService.taskActivityMarkerURL()].compactMap {
             (try? $0.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
         }
-        guard TeamSyncSchedule.shouldSync(now: Date(), lastSyncAt: lastTeamSyncAt, lastActivityAt: dates.max(), activeInterval: Defaults.teamSyncRefreshSeconds) else { return }
+        let activity = (dates + [DotTokenUsageObserver.latestActivity()].compactMap { $0 }).max()
+        guard TeamSyncSchedule.shouldSync(now: Date(), lastSyncAt: lastTeamSyncAt, lastActivityAt: activity, activeInterval: Defaults.teamSyncRefreshSeconds) else { return }
         syncTeamData()
     }
 
