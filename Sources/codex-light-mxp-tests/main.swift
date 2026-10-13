@@ -4688,6 +4688,39 @@ func testComputerHistorySummariesAreBoundedAndPrivate() throws {
     try expectEqual(report.rows[0].id.count, 64, "identity is hashed")
 }
 
+func testDotHelperStopsWithParent() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("dot-helper-test-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let cli = URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent().appendingPathComponent("codex-light-mxp")
+    let parent = Process(), output = Pipe()
+    parent.executableURL = URL(fileURLWithPath: "/bin/sh")
+    parent.arguments = ["-c", "\"\(cli.path)\" dot-observer & child=$!; echo $child; wait $child"]
+    parent.environment = ["HOME": root.path, "PATH": "/usr/bin:/bin", "CODEX_HOME": root.path, "WANHE_DOT_STATE_FILE": root.appendingPathComponent("dot.json").path]
+    parent.standardOutput = output
+    parent.standardError = FileHandle.nullDevice
+    try parent.run()
+    defer { if parent.isRunning { parent.terminate() } }
+    let child = Int32(String(decoding: output.fileHandleForReading.availableData, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines))!
+    defer { if kill(child, 0) == 0 { kill(child, SIGTERM) } }
+    let lock = root.appendingPathComponent("dot.json.lock")
+    let deadline = Date().addingTimeInterval(5)
+    while !FileManager.default.fileExists(atPath: lock.path), Date() < deadline { Thread.sleep(forTimeInterval: 0.05) }
+    try expect(FileManager.default.fileExists(atPath: lock.path), "isolated helper acquired lock")
+    let duplicate = Process()
+    duplicate.executableURL = cli; duplicate.arguments = ["dot-observer"]
+    duplicate.environment = parent.environment
+    try duplicate.run()
+    let duplicateDeadline = Date().addingTimeInterval(5)
+    while duplicate.isRunning, Date() < duplicateDeadline { Thread.sleep(forTimeInterval: 0.05) }
+    if duplicate.isRunning { duplicate.terminate(); throw TestFailure(description: "duplicate helper did not exit") }
+    try expectEqual(duplicate.terminationStatus, 0, "duplicate collector cannot write concurrently")
+    parent.terminate(); parent.waitUntilExit()
+    let exitDeadline = Date().addingTimeInterval(10)
+    while kill(child, 0) == 0, Date() < exitDeadline { Thread.sleep(forTimeInterval: 0.1) }
+    try expect(kill(child, 0) != 0, "helper exits when its parent goes away")
+}
+
 func testDotTokenUsageBoundaries() throws {
     let raw: [String: Any] = ["inputTokens": 100.0, "cachedInputTokens": 90.0, "outputTokens": 20.0, "reasoningOutputTokens": 10.0, "totalTokens": 120.0]
     try expectEqual(DotTokenLedger.tokenTotal(raw), 120, "integral floating point counts accepted")
@@ -4733,6 +4766,7 @@ func testDotTokenUsageBoundaries() throws {
 }
 
 let tests: [(String, () throws -> Void)] = [
+    ("dot helper is single instance and exits with parent", testDotHelperStopsWithParent),
     ("dot token usage boundaries", testDotTokenUsageBoundaries),
     ("computer history summaries stay bounded and private", testComputerHistorySummariesAreBoundedAndPrivate),
     ("claude token usage deduplicates messages", testClaudeTokenUsageDeduplicatesMessages),

@@ -141,8 +141,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
             return
         }
         teamSyncConfiguration = configuration
-        let observer = DotTokenUsageObserver(codexHome: configuration.codexHome)
-        dotUsageTask = Task { await observer.run() }
+        dotUsageTask = Task { await DotTokenUsageObserver.runInHelper(codexHome: configuration.codexHome) }
         let websiteURL = TeamUsageSyncService(configuration: configuration).websiteURL
         statusBar.applyTeamRanking(nil, websiteURL: websiteURL, syncDetail: "正在读取团队数据…")
         refreshTeamRanking()

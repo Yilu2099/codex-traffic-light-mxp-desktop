@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 import CodexTrafficLightCore
 
 struct CLIOptions {
@@ -91,6 +92,25 @@ do {
     let store = StateStore()
 
     switch command {
+    case "dot-observer":
+        let home = ProcessInfo.processInfo.environment["CODEX_HOME"].map { URL(fileURLWithPath: $0) }
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex")
+        try FileManager.default.createDirectory(at: DotTokenUsageObserver.stateURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let lock = open(DotTokenUsageObserver.stateURL.appendingPathExtension("lock").path, O_CREAT | O_RDWR, 0o600)
+        guard lock >= 0 else { exit(1) }
+        guard flock(lock, LOCK_EX | LOCK_NB) == 0 else { close(lock); exit(0) }
+        defer { flock(lock, LOCK_UN); close(lock) }
+        let parent = getppid(), finished = DispatchSemaphore(value: 0)
+        guard parent > 1 else { exit(1) }
+        Task.detached {
+            let observer = DotTokenUsageObserver(codexHome: home)
+            let runner = Task { await observer.run() }
+            while getppid() == parent { try? await Task.sleep(for: .seconds(2)) }
+            runner.cancel()
+            await runner.value
+            finished.signal()
+        }
+        finished.wait()
     case "dot-usage":
         let home = ProcessInfo.processInfo.environment["CODEX_HOME"].map { URL(fileURLWithPath: $0) }
             ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex")

@@ -101,7 +101,31 @@ public actor DotTokenUsageObserver {
     private let testThreadID: String?
 
     public static var stateURL: URL {
-        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".wanhe-codex-token/dot-token-usage.json")
+        if let path = ProcessInfo.processInfo.environment["WANHE_DOT_STATE_FILE"], path.hasPrefix("/") { return URL(fileURLWithPath: path) }
+        return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".wanhe-codex-token/dot-token-usage.json")
+    }
+
+    public static func runInHelper(codexHome: URL) async {
+        while !Task.isCancelled {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent().appendingPathComponent("codex-light-mxp")
+            process.arguments = ["dot-observer"]
+            process.environment = ["HOME": FileManager.default.homeDirectoryForCurrentUser.path, "PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "CODEX_HOME": codexHome.path]
+            process.environment?["WANHE_DOT_STATE_FILE"] = stateURL.path
+            process.standardInput = FileHandle.nullDevice
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            await withTaskCancellationHandler {
+                do {
+                    try process.run()
+                    while process.isRunning && !Task.isCancelled { try await Task.sleep(for: .seconds(5)) }
+                } catch {}
+                if process.isRunning { process.terminate() }
+            } onCancel: {
+                if process.isRunning { process.terminate() }
+            }
+            try? await Task.sleep(for: .seconds(10))
+        }
     }
 
     public init(codexHome: URL, stateURL: URL = DotTokenUsageObserver.stateURL, testThreadID: String? = nil) {
