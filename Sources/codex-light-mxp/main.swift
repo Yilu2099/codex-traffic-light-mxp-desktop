@@ -23,6 +23,10 @@ func usage() {
            \(CommandContract.clientCommandName) quota --app-server [--json]
            \(CommandContract.clientCommandName) chat-usage [--json]
            \(CommandContract.clientCommandName) dot-usage [--task <thread-id>] [--json]
+           \(CommandContract.clientCommandName) dot-input-audit [--json]
+           \(CommandContract.clientCommandName) device-input-audit [--json]
+           \(CommandContract.clientCommandName) native-input-audit [--json]
+           \(CommandContract.clientCommandName) human-input-shadow [--json]
            \(CommandContract.clientCommandName) official-usage [--month YYYY-MM] [--json]
 
     """.data(using: .utf8)!)
@@ -92,6 +96,39 @@ do {
     let store = StateStore()
 
     switch command {
+    case "dot-input-audit", "human-input-shadow":
+        let home = ProcessInfo.processInfo.environment["CODEX_HOME"].map { URL(fileURLWithPath: $0) }
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex")
+        let finished = DispatchSemaphore(value: 0)
+        let shadow = command == "human-input-shadow"
+        Task.detached {
+            do {
+                let identity = try DotInputIdentity(codexHome: home)
+                let salt = Data((0..<32).map { _ in UInt8.random(in: 0...255) })
+                let report = try await DotInputCollector().collect(identity: identity, transport: DotInputHTTP(identity: identity), salt: salt)
+                let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
+                if shadow {
+                    let native = HumanInputProvenanceAudit().collect(codexHome: home, salt: salt)
+                    let result = HumanWorkdayShadow(dot: report, native: native, device: DeviceInputSnapshot.read())
+                    FileHandle.standardOutput.write(try encoder.encode(result)); print("")
+                } else { FileHandle.standardOutput.write(try encoder.encode(report)); print("") }
+                finished.signal()
+            } catch {
+                let message = (error as? DotInputError)?.localizedDescription ?? "Dot 只读核对失败，未更改统计。"
+                FileHandle.standardError.write(Data((message + "\n").utf8)); exit(1)
+            }
+        }
+        finished.wait()
+    case "native-input-audit":
+        let home = ProcessInfo.processInfo.environment["CODEX_HOME"].map { URL(fileURLWithPath: $0) }
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex")
+        let salt = Data((0..<32).map { _ in UInt8.random(in: 0...255) })
+        let report = HumanInputProvenanceAudit().collect(codexHome: home, salt: salt)
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
+        FileHandle.standardOutput.write(try encoder.encode(report)); print("")
+    case "device-input-audit":
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
+        FileHandle.standardOutput.write(try encoder.encode(DeviceInputSnapshot.read())); print("")
     case "dot-observer":
         let home = ProcessInfo.processInfo.environment["CODEX_HOME"].map { URL(fileURLWithPath: $0) }
             ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex")

@@ -96,3 +96,21 @@ WANHE_UPDATE_ROLLOUT=10 ./publish-update.command
 ```
 
 4. 核对 GitHub、服务端更新清单、真实状态栏、网站和后台设备版本后，再调整到 100%。
+
+## 真人消息时间只读试验
+
+以下命令只在当前电脑读取本人已登录账号及本机会话元数据，不发送消息、不刷新登录、不上传、不改开工收工记录，也不安装或更新状态栏。Dot 只访问当前账号选定的主 Dot，依次核对账号、房间和本人/Dot 成员身份。凭据只在内存使用；输出不包含账号、房间、原始消息 ID、正文或附件。
+
+```sh
+swift run codex-light-mxp dot-input-audit --json
+swift run codex-light-mxp native-input-audit --json
+swift run codex-light-mxp device-input-audit --json
+swift run codex-light-mxp human-input-shadow --json
+```
+
+- Dot 取本人原始消息的 `created_at`，保留原始精度；Dot 输出、更新、重复、未来时间及明确自动触发不延后消息时间。最多读取 3 页/60 条，`windowLimited` 为真时不能把样本首条宣称为全天开工。
+- 本地诊断最多读取 16 个近期会话的有限头部和尾部。明确自动触发单独分类；来源缺失保留未知，子代理排除。`composer` 仅证明输入框来源，不能证明物理真人；自动轮次后续追加消息也不继承自动来源。
+- 影子结果使用 `Asia/Hong_Kong` 和 05:00 工作日边界。只合并本人 Dot 消息和明确用户提交；`firstObservedMessageAt` 仅为已观察样本首条，覆盖不足始终标注，不覆盖正式开工记录。
+- 设备诊断只读系统键鼠空闲时长及会话状态。它不能证明工作质量或人在操作 Codex，也不作为真人消息的替代或否决条件；不记录按键内容、鼠标轨迹或屏幕。
+
+本轮仅用于本人账号只读核对，不自动启用周期采集，也不进入现有团队上报。最近窗口、旧客户端缺来源和脚本模拟输入框的边界须完成后续验证，再决定正式接入；失败不能回退为 Token、心跳或轮次启动时间。

@@ -4770,6 +4770,11 @@ func testDotTokenUsageBoundaries() throws {
 }
 
 let tests: [(String, () throws -> Void)] = [
+    ("native input handles large headers and excludes subagents", testNativeInputLargeHeaderAndSubagentBoundary),
+    ("human workday shadow preserves message boundaries", testHumanWorkdayShadowPreservesMessageBoundary),
+    ("dot human input is read only and bound to owner", testDotHumanInputReadOnly),
+    ("native input sources exclude automatic initial inputs", testNativeHumanInputProvenance),
+    ("device input is only a supporting signal", testDeviceInputSignalDoesNotCertifyWork),
     ("dot helper is single instance and exits with parent", testDotHelperStopsWithParent),
     ("dot token usage boundaries", testDotTokenUsageBoundaries),
     ("computer history summaries stay bounded and private", testComputerHistorySummariesAreBoundedAndPrivate),
