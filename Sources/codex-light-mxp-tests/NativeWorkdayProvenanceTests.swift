@@ -77,6 +77,12 @@ func testNativeWorkdayMigrationOutboxAndCursorAttribution() throws {
     try expectEqual(human.sessions.first?.lastNightUserAt, "2026-10-14T20:58:30.000Z", "composer attribution survives a cursor boundary")
     let encoded = String(data: try Data(contentsOf: state), encoding: .utf8)!
     try expect(!encoded.contains("fixture input"), "persistent state never stores source text")
+    collector.acknowledgeUploaded(stateURL: state)
+    try nativeAppend(try nativeMessage("future-human", at: "2026-10-14T21:00:00Z"), to: file)
+    let early = collector.collectIncremental(codexHome: home, now: now, stateURL: state)
+    try expect(early.sessions.isEmpty, "future row waits without inventing a present-time interaction")
+    let later = collector.collectIncremental(codexHome: home, now: DotInputCollector.parse("2026-10-14T21:01:00Z")!, stateURL: state)
+    try expectEqual(later.sessions.first?.firstDayUserAt, "2026-10-14T21:00:00.000Z", "future row remains at the cursor and is counted after its real time arrives")
 }
 
 func testNativeWorkdayPartialReplayNeverClaimsCoverage() throws {
