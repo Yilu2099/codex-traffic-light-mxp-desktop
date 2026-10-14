@@ -381,6 +381,7 @@ public struct TeamUsagePayload: Codable, Equatable, Sendable {
     public var officialUsage: OfficialCodexUsageReport?
     public var chatUsage: ChatUsageReport? = nil
     public var computerHistory: ComputerHistoryReport? = nil
+    public var humanInputMetadata: HumanInputMetadata? = nil
     public var todayLiveUsage: TodayLiveUsageReport
     public var claudeDailyUsage: [ClaudeDailyTokens]?
     public var sessionActivity: [TeamSessionActivity]
@@ -397,7 +398,7 @@ public struct TeamUsagePayload: Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case collector, collectedAt, profile, device, quota, quotaDiagnostic, officialUsage, todayLiveUsage, claudeDailyUsage
         case sessionActivity, sessionActivityMode, sessionActivityCutoffDay, interactionSummary, grindHistory, grindHistoryMode
-        case projects, inputEvents, sessions, usageOnly, chatUsage, computerHistory
+        case projects, inputEvents, sessions, usageOnly, chatUsage, computerHistory, humanInputMetadata
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -411,11 +412,25 @@ public struct TeamUsagePayload: Codable, Equatable, Sendable {
         try container.encodeIfPresent(officialUsage, forKey: .officialUsage)
         try container.encodeIfPresent(chatUsage, forKey: .chatUsage)
         try container.encodeIfPresent(computerHistory, forKey: .computerHistory)
+        try container.encodeIfPresent(humanInputMetadata, forKey: .humanInputMetadata)
         try container.encode(todayLiveUsage, forKey: .todayLiveUsage)
         try container.encodeIfPresent(claudeDailyUsage, forKey: .claudeDailyUsage)
         // Retain only daily timestamp bounds. The constant key keeps the existing
         // server protocol compatible without transmitting conversation identities.
-        if !interactionSummary.isEmpty {
+        if grindHistoryMode == "interaction_v8" {
+            let confirmed = interactionSummary.filter { $0.inputProvenance == "user_submission" }
+            let days = Dictionary(grouping: confirmed, by: \.day)
+            let timestamps = days.keys.sorted().map { day -> [String: String] in
+                let rows = days[day]!
+                var row = ["sessionId": "workday", "day": day, "inputProvenance": "user_submission"]
+                row["firstDayUserAt"] = rows.compactMap(\.firstDayUserAt).min()
+                row["lastDayUserAt"] = rows.compactMap(\.lastDayUserAt).max()
+                row["lastNightUserAt"] = rows.compactMap(\.lastNightUserAt).max()
+                return row
+            }
+            try container.encode(timestamps, forKey: .interactionSummary)
+            try container.encode("interaction_v8", forKey: .grindHistoryMode)
+        } else if !interactionSummary.isEmpty {
             let days = Dictionary(grouping: interactionSummary, by: \.day)
             let timestamps = days.keys.sorted().map { day -> [String: String] in
                 let rows = days[day]!
@@ -439,6 +454,7 @@ public struct TeamSessionInteractionSummary: Codable, Equatable, Sendable {
     public var dayTurnCount: Int
     public var lastNightUserAt: String?
     public var nightTurnCount: Int
+    public var inputProvenance: String?
 
     public init(
         sessionId: String,
@@ -447,7 +463,8 @@ public struct TeamSessionInteractionSummary: Codable, Equatable, Sendable {
         lastDayUserAt: String? = nil,
         dayTurnCount: Int = 0,
         lastNightUserAt: String? = nil,
-        nightTurnCount: Int = 0
+        nightTurnCount: Int = 0,
+        inputProvenance: String? = nil
     ) {
         self.sessionId = sessionId
         self.day = day
@@ -456,6 +473,7 @@ public struct TeamSessionInteractionSummary: Codable, Equatable, Sendable {
         self.dayTurnCount = dayTurnCount
         self.lastNightUserAt = lastNightUserAt
         self.nightTurnCount = nightTurnCount
+        self.inputProvenance = inputProvenance
     }
 }
 
@@ -466,6 +484,8 @@ public struct TeamUsageSyncResult: Codable, Equatable, Sendable {
     public var inputEventIds: [String]?
     public var sessionActivityModeAccepted: String?
     public var sessionActivityDurable: Bool?
+    public var humanInputModeAccepted: String? = nil
+    public var humanInputDurable: Bool? = nil
 }
 
 public struct TeamServerCapabilities: Codable, Equatable, Sendable {
@@ -1053,6 +1073,11 @@ public struct TeamUsageSyncService: Sendable {
             days: min(30, configuration.collectDays),
             now: now
         )
+        let pilot = HumanInputIntegration.enabled(configuration: configuration)
+        let nativeCoverage: NativeInputCoverage? = {
+            guard let start = interactionReport.coverageStartDay, let end = interactionReport.coverageEndDay else { return nil }
+            return NativeInputCoverage(complete: interactionReport.coverageComplete, startDay: start, endDay: end, throughAt: interactionReport.coverageThroughAt)
+        }()
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return TeamUsagePayload(
@@ -1071,14 +1096,15 @@ public struct TeamUsageSyncService: Sendable {
             officialUsage: officialUsage,
             chatUsage: ChatUsageCollector.cached(codexHome: configuration.codexHome),
             computerHistory: ComputerHistoryCollector.collect(codexHome: configuration.codexHome, now: now),
+            humanInputMetadata: pilot ? HumanInputMetadata(dot: HumanInputIntegration.cachedDot(configuration: configuration, now: now), nativeCoverage: nativeCoverage) : nil,
             todayLiveUsage: todayLiveUsage,
             claudeDailyUsage: nil,
             sessionActivity: [],
             sessionActivityMode: nil,
             sessionActivityCutoffDay: nil,
-            interactionSummary: interactionReport.sessions,
+            interactionSummary: pilot ? interactionReport.sessions : interactionReport.sessions + interactionReport.legacyUnknownSessions,
             grindHistory: [],
-            grindHistoryMode: "",
+            grindHistoryMode: pilot ? "interaction_v8" : "",
             projects: [],
             inputEvents: [],
             sessions: []
@@ -1133,7 +1159,9 @@ public struct TeamUsageSyncService: Sendable {
               result.status == "ok" else {
             throw TeamUsageSyncError.invalidResponse
         }
-        CodexGrindHistoryCollector().acknowledgeUploaded()
+        if payload.grindHistoryMode != "interaction_v8" || (result.humanInputModeAccepted == "interaction_v8" && result.humanInputDurable == true) {
+            CodexGrindHistoryCollector().acknowledgeUploaded()
+        }
         return result
     }
 

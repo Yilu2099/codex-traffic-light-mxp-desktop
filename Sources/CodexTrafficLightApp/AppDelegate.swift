@@ -33,6 +33,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
     private var rankingCache: [StatusRankingRange: TeamRankingSnapshot] = [:]
     private var isRankingCacheWarming = false
     private var dotUsageTask: Task<Void, Never>?
+    private var dotInputTask: Task<Void, Never>?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if let release = Bundle.main.executableURL?.deletingLastPathComponent() {
@@ -136,12 +137,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
 
     private func configureTeamIntegration() {
         dotUsageTask?.cancel()
+        dotInputTask?.cancel()
         guard let configuration = TeamSyncConfiguration.load() else {
             statusBar.applyTeamRanking(nil, websiteURL: nil, syncDetail: "团队排行榜尚未注册")
             return
         }
         teamSyncConfiguration = configuration
         dotUsageTask = Task { await DotTokenUsageObserver.runInHelper(codexHome: configuration.codexHome) }
+        dotInputTask = Task.detached(priority: .utility) { await HumanInputIntegration.run(configuration: configuration) }
         let websiteURL = TeamUsageSyncService(configuration: configuration).websiteURL
         statusBar.applyTeamRanking(nil, websiteURL: websiteURL, syncDetail: "正在读取团队数据…")
         refreshTeamRanking()

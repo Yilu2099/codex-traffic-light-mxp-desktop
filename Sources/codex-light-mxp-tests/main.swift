@@ -1688,13 +1688,13 @@ func testGrindHistoryCollectorReadsOnlyEventTimestamps() throws {
         #"{"timestamp":"2026-08-21T18:04:52.000Z","type":"response_item","payload":{"type":"message","role":"user","private":"do not inspect"}}"#,
         #"{"timestamp":"2026-08-21T19:06:08.000Z","type":"event_msg","payload":{"type":"agent_message","private":"do not inspect"}}"#,
         #"{"timestamp":"2026-08-21T22:14:00.000Z","type":"event_msg","payload":{"type":"agent_message","private":"do not inspect"}}"#,
-    ].joined(separator: "\n")
+    ].joined(separator: "\n").appending("\n")
     try contents.write(to: file, atomically: true, encoding: .utf8)
     let morningFile = sessions.appendingPathComponent("rollout-2026-08-22T09-42-45-01a02722-77db-79d0-af46-8e9267c19584.jsonl")
     try [
         #"{"timestamp":"2026-08-22T01:42:47.000Z","type":"session_meta","payload":{"private":"do not inspect"}}"#,
         #"{"timestamp":"2026-08-22T02:30:00.000Z","type":"response_item","payload":{"type":"message","role":"user","private":"do not inspect"}}"#,
-    ].joined(separator: "\n")
+    ].joined(separator: "\n").appending("\n")
         .write(to: morningFile, atomically: true, encoding: .utf8)
     let continuedConversation = sessions.appendingPathComponent("rollout-2026-08-21T19-30-00-01a025a7-5636-7730-a6f7-b0c98fae3d95.jsonl")
     try [
@@ -1703,7 +1703,7 @@ func testGrindHistoryCollectorReadsOnlyEventTimestamps() throws {
         #"{"timestamp":"2026-08-22T02:03:00.500Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"first authored turn"}]}}"#,
         #"{"timestamp":"2026-08-22T02:08:12.000Z","type":"event_msg","payload":{"type":"user_message"}}"#,
         #"{"timestamp":"2026-08-22T02:08:12.400Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"second authored turn"}]}}"#,
-    ].joined(separator: "\n")
+    ].joined(separator: "\n").appending("\n")
         .write(to: continuedConversation, atomically: true, encoding: .utf8)
     let environmentOnlyConversation = sessions.appendingPathComponent("rollout-2026-08-22T07-31-00-01a02710-a3b7-7a12-8f5e-1de50869504a.jsonl")
     try #"{"timestamp":"2026-08-21T23:31:00.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Continue where you left off. The previous model attempt failed or timed out."},{"type":"input_text","text":"自动重放的原始任务内容不应计为真人开工"},{"type":"input_image","image_url":"hidden"}]}}"#
@@ -1712,7 +1712,7 @@ func testGrindHistoryCollectorReadsOnlyEventTimestamps() throws {
     try [
         #"{"timestamp":"2026-08-22T02:57:13.000Z","type":"session_meta","payload":{}}"#,
         #"{"timestamp":"2026-08-22T02:57:20.000Z","type":"response_item","payload":{"type":"message","role":"user"}}"#,
-    ].joined(separator: "\n")
+    ].joined(separator: "\n").appending("\n")
         .write(to: laterNewConversation, atomically: true, encoding: .utf8)
     let afternoonOnly = sessions.appendingPathComponent("rollout-2026-08-23T14-15-00-01a027ce-7a41-75a3-9277-aaf9945bc022.jsonl")
     try #"{"timestamp":"2026-08-23T06:15:09.000Z","type":"response_item","payload":{"type":"message","role":"user"}}"#
@@ -1726,10 +1726,11 @@ func testGrindHistoryCollectorReadsOnlyEventTimestamps() throws {
     try FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: afternoonOnly.path)
 
     let report = CodexGrindHistoryCollector().collectDetailed(codexHome: root, days: 30, now: now)
-    try expectEqual(report.history, [
-        TeamGrindHistoryDay(grindDay: "2026-08-22", dayGrindTime: "10:03", nightGrindTime: nil),
+    try expectEqual(report.legacyUnknownHistory, [
+        TeamGrindHistoryDay(grindDay: "2026-08-22", dayGrindTime: "10:03", nightGrindTime: nil, inputProvenance: "legacy_unknown"),
     ], "grind history should require authored text and ignore attachment-only or environment-only setup")
-    let continued = report.sessions.first { $0.sessionId == "01a025a7-5636-7730-a6f7-b0c98fae3d95" && $0.day == "2026-08-22" }
+    try expect(report.sessions.isEmpty, "missing protocol attribution must remain separate from confirmed human statistics")
+    let continued = report.legacyUnknownSessions.first { $0.sessionId == "01a025a7-5636-7730-a6f7-b0c98fae3d95" && $0.day == "2026-08-22" }
     try expectEqual(continued?.dayTurnCount, 2, "interaction summary should deduplicate duplicate encodings of one user turn")
     try expectEqual(continued?.firstDayUserAt, "2026-08-22T02:03:00.500Z", "interaction summary should retain the first authored turn in an old conversation")
     try expectEqual(continued?.lastDayUserAt, "2026-08-22T02:08:12.400Z", "interaction summary should retain the last authored turn in an old conversation")
@@ -2038,11 +2039,11 @@ func testGrindHistoryIncrementalCollectorBackfillsThirtyDaysOnce() throws {
     try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: root) }
     let file = sessions.appendingPathComponent("rollout-2026-08-23T10-00-00-11111111-1111-1111-1111-111111111111.jsonl")
-    try #"{"timestamp":"2026-08-23T02:00:00.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"历史输入"}]}}"#.write(to: file, atomically: true, encoding: .utf8)
+    try (#"{"timestamp":"2026-08-23T02:00:00.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"历史输入"}]}}"# + "\n").write(to: file, atomically: true, encoding: .utf8)
     let now = ISO8601DateFormatter().date(from: "2026-08-23T08:00:00Z")!
     let collector = CodexGrindHistoryCollector()
     let baseline = collector.collectIncremental(codexHome: root.appendingPathComponent("codex"), now: now, stateURL: stateURL)
-    try expectEqual(baseline.sessions.first?.dayTurnCount, 1, "first install should backfill recent human-input timestamps")
+    try expectEqual(baseline.legacyUnknownSessions.first?.dayTurnCount, 1, "first install should backfill recent human-input timestamps")
     try expect(!(try String(contentsOf: stateURL, encoding: .utf8)).contains("历史输入"), "grind backfill state must never retain conversation text")
     collector.acknowledgeUploaded(stateURL: stateURL)
     let appended = #"{"timestamp":"2026-08-23T08:01:00.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"更新后的输入"}]}}"#
@@ -2051,12 +2052,12 @@ func testGrindHistoryIncrementalCollectorBackfillsThirtyDaysOnce() throws {
     try handle.write(contentsOf: Data(("\n" + appended + "\n").utf8))
     try handle.close()
     let updated = collector.collectIncremental(codexHome: root.appendingPathComponent("codex"), now: now.addingTimeInterval(60), stateURL: stateURL)
-    try expectEqual(updated.sessions.first?.dayTurnCount, 1, "incremental interaction collector should count only appended turns")
+    try expectEqual(updated.legacyUnknownSessions.first?.dayTurnCount, 1, "incremental interaction collector should count only appended turns")
     collector.acknowledgeUploaded(stateURL: stateURL)
     let stateInode = try FileManager.default.attributesOfItem(atPath: stateURL.path)[.systemFileNumber] as? NSNumber
     let unchanged = collector.collectIncremental(codexHome: root.appendingPathComponent("codex"), now: now.addingTimeInterval(120), stateURL: stateURL)
     let unchangedStateInode = try FileManager.default.attributesOfItem(atPath: stateURL.path)[.systemFileNumber] as? NSNumber
-    try expect(unchanged.sessions.isEmpty, "incremental interaction collector must not rescan unchanged files")
+    try expect(unchanged.legacyUnknownSessions.isEmpty, "incremental interaction collector must not rescan unchanged files")
     try expectEqual(unchangedStateInode, stateInode, "unchanged interaction tails should not rewrite collector state")
 }
 
@@ -2070,6 +2071,7 @@ func testGrindIncrementalDrainsMoreThanSixteenNewFiles() throws {
     let now = ISO8601DateFormatter().date(from: "2026-08-25T08:00:00Z")!
     let collector = CodexGrindHistoryCollector()
     _ = collector.collectIncremental(codexHome: codexHome, now: now, stateURL: stateURL)
+    collector.acknowledgeUploaded(stateURL: stateURL)
 
     for index in 0..<20 {
         let id = String(format: "00000000-0000-0000-0000-%012d", index)
@@ -2082,9 +2084,9 @@ func testGrindIncrementalDrainsMoreThanSixteenNewFiles() throws {
     let first = collector.collectIncremental(codexHome: codexHome, now: now.addingTimeInterval(60), stateURL: stateURL)
     collector.acknowledgeUploaded(stateURL: stateURL)
     let second = collector.collectIncremental(codexHome: codexHome, now: now.addingTimeInterval(120), stateURL: stateURL)
-    let drained = Set((first.sessions + second.sessions).map(\.sessionId))
-    try expectEqual(first.sessions.count, 16, "one bounded sync should process at most sixteen changed rollout files")
-    try expectEqual(second.sessions.count, 4, "the next sync must drain the remaining registered offsets")
+    let drained = Set((first.legacyUnknownSessions + second.legacyUnknownSessions).map(\.sessionId))
+    try expectEqual(first.legacyUnknownSessions.count, 16, "one bounded sync should process at most sixteen changed rollout files")
+    try expectEqual(second.legacyUnknownSessions.count, 4, "the next sync must drain the remaining registered offsets")
     try expectEqual(drained.count, 20, "advancing global freshness must never baseline pending files at EOF")
 }
 
@@ -2101,6 +2103,7 @@ func testGrindIncrementalReReadsTruncatedReplacement() throws {
     try FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: file.path)
     let collector = CodexGrindHistoryCollector()
     _ = collector.collectIncremental(codexHome: codexHome, now: now, stateURL: stateURL)
+    collector.acknowledgeUploaded(stateURL: stateURL)
 
     let replacement = #"{"timestamp":"2026-08-25T08:01:00.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"截断替换后的完整输入"}]}}"# + "\n"
     try replacement.write(to: file, atomically: true, encoding: .utf8)
@@ -2110,7 +2113,7 @@ func testGrindIncrementalReReadsTruncatedReplacement() throws {
         now: now.addingTimeInterval(60),
         stateURL: stateURL
     )
-    try expectEqual(report.sessions.first?.dayTurnCount, 1, "a smaller replacement file must invalidate and restart its old byte offset")
+    try expectEqual(report.legacyUnknownSessions.first?.dayTurnCount, 1, "a smaller replacement file must invalidate and restart its old byte offset")
 }
 
 func testGrindMigratesLegacyPathCursorAfterArchiveMove() throws {
@@ -2140,7 +2143,7 @@ func testGrindMigratesLegacyPathCursorAfterArchiveMove() throws {
         now: now,
         stateURL: stateURL
     )
-    try expectEqual(report.sessions.first?.dayTurnCount, 1, "a legacy live-path cursor should migrate by rollout basename after archiving")
+    try expectEqual(report.legacyUnknownSessions.first?.dayTurnCount, 1, "a legacy live-path cursor should migrate by rollout basename after archiving")
     let migrated = try String(contentsOf: stateURL, encoding: .utf8)
     try expect(!migrated.contains(oldLivePath), "the migrated state should discard its obsolete absolute path key")
     try expect(migrated.contains(filename), "the migrated state should persist the stable rollout key")
@@ -2163,10 +2166,11 @@ func testTailCollectorsPreservePartialRowsAcrossArchiveMove() throws {
     try Data().write(to: grindFile)
     let grind = CodexGrindHistoryCollector()
     _ = grind.collectIncremental(codexHome: codexHome, now: now, stateURL: grindState)
+    grind.acknowledgeUploaded(stateURL: grindState)
     let interaction = #"{"timestamp":"2026-08-25T03:01:00.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"半行完成"}]}}"#
     try interaction.write(to: grindFile, atomically: false, encoding: .utf8)
     try FileManager.default.setAttributes([.modificationDate: now.addingTimeInterval(60)], ofItemAtPath: grindFile.path)
-    try expect(grind.collectIncremental(codexHome: codexHome, now: now.addingTimeInterval(60), stateURL: grindState).sessions.isEmpty, "an EOF partial interaction row must wait for its newline")
+    try expect(grind.collectIncremental(codexHome: codexHome, now: now.addingTimeInterval(60), stateURL: grindState).legacyUnknownSessions.isEmpty, "an EOF partial interaction row must wait for its newline")
     let movedGrind = archived.appendingPathComponent(grindName)
     try FileManager.default.moveItem(at: grindFile, to: movedGrind)
     grindFile = movedGrind
@@ -2175,9 +2179,9 @@ func testTailCollectorsPreservePartialRowsAcrossArchiveMove() throws {
     try grindHandle.write(contentsOf: Data("\n".utf8))
     try grindHandle.close()
     let completed = grind.collectIncremental(codexHome: codexHome, now: now.addingTimeInterval(120), stateURL: grindState)
-    try expectEqual(completed.sessions.first?.dayTurnCount, 1, "a stable rollout key must resume the partial row after archiving")
+    try expectEqual(completed.legacyUnknownSessions.first?.dayTurnCount, 1, "a stable rollout key must resume the partial row after archiving")
     grind.acknowledgeUploaded(stateURL: grindState)
-    try expect(grind.collectIncremental(codexHome: codexHome, now: now.addingTimeInterval(180), stateURL: grindState).sessions.isEmpty, "the completed moved row must not be counted twice")
+    try expect(grind.collectIncremental(codexHome: codexHome, now: now.addingTimeInterval(180), stateURL: grindState).legacyUnknownSessions.isEmpty, "the completed moved row must not be counted twice")
 
     let tokenName = "rollout-2026-08-25T11-10-00-44444444-4444-4444-4444-444444444444.jsonl"
     var tokenFile = sessions.appendingPathComponent(tokenName)
@@ -2214,6 +2218,7 @@ func testCollectorsReadSessionFirstDiscoveredAfterArchiving() throws {
     let grind = CodexGrindHistoryCollector()
     let today = TodayCodexUsageCollector(stateURL: todayState)
     _ = grind.collectIncremental(codexHome: codexHome, now: now, stateURL: grindState)
+    grind.acknowledgeUploaded(stateURL: grindState)
     _ = today.collect(codexHome: codexHome, now: now)
 
     let file = archived.appendingPathComponent(
@@ -2232,7 +2237,7 @@ func testCollectorsReadSessionFirstDiscoveredAfterArchiving() throws {
         stateURL: grindState
     )
     let todayReport = today.collect(codexHome: codexHome, now: now.addingTimeInterval(120))
-    try expectEqual(grindReport.sessions.first?.dayTurnCount, 1, "a session created and archived between polls must still contribute work activity")
+    try expectEqual(grindReport.legacyUnknownSessions.first?.dayTurnCount, 1, "a session created and archived between polls must still contribute work activity")
     try expectEqual(todayReport.tokens, 42, "a session first discovered in archived_sessions must still contribute today's tokens")
 }
 
@@ -2248,14 +2253,15 @@ func testGrindOversizedRowDoesNotBlockNewerEvents() throws {
     let now = ISO8601DateFormatter().date(from: "2026-08-25T04:00:00Z")!
     let collector = CodexGrindHistoryCollector()
     _ = collector.collectIncremental(codexHome: codexHome, now: now, stateURL: stateURL)
+    collector.acknowledgeUploaded(stateURL: stateURL)
     let event = #"{"timestamp":"2026-08-25T04:01:00.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"超大行后的正常输入"}]}}"#
     try (String(repeating: "x", count: 300_000) + "\n" + event + "\n").write(
         to: file, atomically: false, encoding: .utf8
     )
     try FileManager.default.setAttributes([.modificationDate: now.addingTimeInterval(60)], ofItemAtPath: file.path)
-    try expect(collector.collectIncremental(codexHome: codexHome, now: now.addingTimeInterval(60), stateURL: stateURL).sessions.isEmpty, "the first bounded chunk may skip an oversized row")
+    try expect(collector.collectIncremental(codexHome: codexHome, now: now.addingTimeInterval(60), stateURL: stateURL).legacyUnknownSessions.isEmpty, "the first bounded chunk may skip an oversized row")
     let resumed = collector.collectIncremental(codexHome: codexHome, now: now.addingTimeInterval(120), stateURL: stateURL)
-    try expectEqual(resumed.sessions.first?.dayTurnCount, 1, "a skipped oversized row must not block later complete JSONL events")
+    try expectEqual(resumed.legacyUnknownSessions.first?.dayTurnCount, 1, "a skipped oversized row must not block later complete JSONL events")
 }
 
 func testGrindReReadsSameSizeAtomicReplacement() throws {
@@ -2276,11 +2282,11 @@ func testGrindReReadsSameSizeAtomicReplacement() throws {
     collector.acknowledgeUploaded(stateURL: stateURL)
     try later.write(to: file, atomically: true, encoding: .utf8)
     let changed = collector.collectIncremental(codexHome: home, now: now.addingTimeInterval(60), stateURL: stateURL)
-    try expectEqual(changed.sessions.first?.lastNightUserAt, "2026-09-30T17:26:00.000Z", "a replacement with unchanged size must not inherit the previous file's EOF")
-    try expectEqual(changed.history.first?.grindDay, "2026-09-30", "01:26 local belongs to the previous workday")
+    try expectEqual(changed.legacyUnknownSessions.first?.lastNightUserAt, "2026-09-30T17:26:00.000Z", "a replacement with unchanged size must not inherit the previous file's EOF")
+    try expectEqual(changed.legacyUnknownHistory.first?.grindDay, "2026-09-30", "01:26 local belongs to the previous workday")
     collector.acknowledgeUploaded(stateURL: stateURL)
     let repeated = collector.collectIncremental(codexHome: home, now: now.addingTimeInterval(120), stateURL: stateURL)
-    try expect(repeated.sessions.isEmpty, "an unchanged replacement must not replay after acknowledgement")
+    try expect(repeated.legacyUnknownSessions.isEmpty, "an unchanged replacement must not replay after acknowledgement")
 }
 
 func testGrindRecoversLargeHumanInputAcrossReadChunks() throws {
@@ -2295,15 +2301,16 @@ func testGrindRecoversLargeHumanInputAcrossReadChunks() throws {
     let now = ISO8601DateFormatter().date(from: "2026-09-30T17:30:00Z")!
     let collector = CodexGrindHistoryCollector()
     _ = collector.collectIncremental(codexHome: home, now: now, stateURL: stateURL)
+    collector.acknowledgeUploaded(stateURL: stateURL)
     let row = #"{"timestamp":"2026-09-30T17:26:00.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"PRIVATE-LARGE-"# + String(repeating: "x", count: 300_000) + #""}]}}"# + "\n"
     try row.write(to: file, atomically: false, encoding: .utf8)
     let first = collector.collectIncremental(codexHome: home, now: now, stateURL: stateURL)
-    try expect(first.sessions.isEmpty, "the first bounded read must wait for the complete large row")
+    try expect(first.legacyUnknownSessions.isEmpty, "the first bounded read must wait for the complete large row")
     let resumed = collector.collectIncremental(codexHome: home, now: now.addingTimeInterval(60), stateURL: stateURL)
-    try expectEqual(resumed.sessions.first?.lastNightUserAt, "2026-09-30T17:26:00.000Z", "a valid human input spanning chunks must not be discarded")
+    try expectEqual(resumed.legacyUnknownSessions.first?.lastNightUserAt, "2026-09-30T17:26:00.000Z", "a valid human input spanning chunks must not be discarded")
     try expect(!(try String(contentsOf: stateURL, encoding: .utf8)).contains("PRIVATE-LARGE"), "chunk recovery state must contain offsets, never message text")
     collector.acknowledgeUploaded(stateURL: stateURL)
-    try expect(collector.collectIncremental(codexHome: home, now: now.addingTimeInterval(120), stateURL: stateURL).sessions.isEmpty, "recovery must not replay acknowledged inputs")
+    try expect(collector.collectIncremental(codexHome: home, now: now.addingTimeInterval(120), stateURL: stateURL).legacyUnknownSessions.isEmpty, "recovery must not replay acknowledged inputs")
 }
 
 func testGrindExcludesWhitespaceFormattedSubagentMetadata() throws {
@@ -4771,6 +4778,11 @@ func testDotTokenUsageBoundaries() throws {
 
 let tests: [(String, () throws -> Void)] = [
     ("native input handles large headers and excludes subagents", testNativeInputLargeHeaderAndSubagentBoundary),
+    ("human input wire excludes unknown sources and identities", testHumanInputWireSeparatesConfirmedAndUnknown),
+    ("native provenance separates unknown and automation", testNativeWorkdayProvenanceSeparatesUnknownAndAutomation),
+    ("native provenance migration persists outbox and attribution", testNativeWorkdayMigrationOutboxAndCursorAttribution),
+    ("native provenance partial replay has no full coverage", testNativeWorkdayPartialReplayNeverClaimsCoverage),
+    ("dot sampling resumes and preserves privacy", testDotSamplingRecoveryAndPrivacy),
     ("human workday shadow preserves message boundaries", testHumanWorkdayShadowPreservesMessageBoundary),
     ("dot human input is read only and bound to owner", testDotHumanInputReadOnly),
     ("native input sources exclude automatic initial inputs", testNativeHumanInputProvenance),

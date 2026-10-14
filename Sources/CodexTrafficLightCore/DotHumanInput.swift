@@ -169,6 +169,19 @@ public struct DotInputCollector: Sendable {
     }
     public func collect(identity: DotInputIdentity, transport: any DotInputReadTransport,
                         salt: Data, maxPages: Int = 3, now: Date = Date()) async throws -> DotInputReport {
+        try await window(identity: identity, transport: transport, salt: salt, maxPages: maxPages, now: now).report
+    }
+    struct Window: Sendable {
+        var report: DotInputReport
+        var binding: String
+        var nextCursor: String?
+        var oldestAt: Date?
+        var newestAt: Date?
+        var ordered: Bool
+        var exhausted: Bool
+    }
+    func window(identity: DotInputIdentity, transport: any DotInputReadTransport,
+                        salt: Data, maxPages: Int = 3, now: Date = Date(), before: String? = nil) async throws -> Window {
         guard salt.count >= 16 else { throw DotInputError.unavailable("private_salt") }
         let began = ProcessInfo.processInfo.systemUptime
         let decoder = JSONDecoder()
@@ -194,13 +207,20 @@ public struct DotInputCollector: Sendable {
               dotMembers.count == 1, dotMembers[0].account_user_id != owner else { throw DotInputError.unavailable("room_identity") }
         var report = DotInputReport(collectedAt: iso(now), identityVerified: true, pages: 0, windowLimited: false,
                                     ownerMessages: [], excludedDotMessages: 0, excludedAutomaticMessages: 0, invalidMessages: 0)
-        var cursor: String?, seen = Set<String>(), cursors = Set<String>()
+        var cursor = before, seen = Set<String>(), cursors = Set<String>()
+        var oldest: Date?, newest: Date?, ordered = true, previousOldest: Date?, exhausted = false
+        let binding = HMAC<SHA256>.authenticationCode(for: Data([identity.account, owner, roomID].joined(separator: "|").utf8), using: SymmetricKey(data: salt)).map { String(format: "%02x", $0) }.joined()
         for _ in 0..<max(1, min(maxPages, 5)) {
             var query = ["limit": "20"]
             if let cursor { query["before"] = cursor }
             let page = try decoder.decode(Page.self, from: await transport.get(path + "/messages", query: query))
             guard page.items.count <= 20 else { throw DotInputError.unavailable("page_limit") }
             report.pages += 1
+            let dates = page.items.compactMap { $0.created_at.flatMap(parseDotInputDate) }
+            if dates.count != page.items.count || zip(dates, dates.dropFirst()).contains(where: { $0 > $1 }) { ordered = false }
+            if let prior = previousOldest, let maximum = dates.max(), maximum > prior { ordered = false }
+            if let minimum = dates.min() { oldest = min(oldest ?? minimum, minimum); previousOldest = minimum }
+            if let maximum = dates.max() { newest = max(newest ?? maximum, maximum) }
             for message in page.items where seen.insert(message.id).inserted {
                 if message.account_user_id == dotMembers[0].account_user_id { report.excludedDotMessages += 1; continue }
                 guard message.account_user_id == owner, message.role == "user", message.room_id == nil || message.room_id == roomID,
@@ -211,14 +231,14 @@ public struct DotInputCollector: Sendable {
                 report.ownerMessages.append(HumanInputEvent(eventKey: key, sourceAt: source, source: "dot_room",
                                                            classification: "owner_message", trigger: nil))
             }
-            guard page.items.count == 20 else { report.windowLimited = false; break }
+            guard page.items.count == 20 else { report.windowLimited = false; cursor = nil; exhausted = true; break }
             report.windowLimited = true
             guard let before = page.prev_cursor ?? page.items.first?.id, !before.isEmpty, cursors.insert(before).inserted else { break }
             cursor = before
         }
         report.collectedAt = iso(now.addingTimeInterval(ProcessInfo.processInfo.systemUptime - began))
         report.ownerMessages.sort { (parseDotInputDate($0.sourceAt) ?? .distantPast) < (parseDotInputDate($1.sourceAt) ?? .distantPast) }
-        return report
+        return Window(report: report, binding: binding, nextCursor: cursor, oldestAt: oldest, newestAt: newest, ordered: ordered, exhausted: exhausted)
     }
     public static func parse(_ value: String) -> Date? { parseDotInputDate(value) }
 }

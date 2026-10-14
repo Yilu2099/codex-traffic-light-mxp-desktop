@@ -101,12 +101,25 @@ public struct TeamGrindHistoryDay: Codable, Equatable, Sendable {
     public var grindDay: String
     public var dayGrindTime: String?
     public var nightGrindTime: String?
+    public var inputProvenance: String?
 
-    public init(grindDay: String, dayGrindTime: String? = nil, nightGrindTime: String? = nil) {
+    public init(grindDay: String, dayGrindTime: String? = nil, nightGrindTime: String? = nil, inputProvenance: String? = nil) {
         self.grindDay = grindDay
         self.dayGrindTime = dayGrindTime
         self.nightGrindTime = nightGrindTime
+        self.inputProvenance = inputProvenance
     }
+}
+
+public struct NativeWorkdayCollectionReport: Sendable {
+    public var history: [TeamGrindHistoryDay]
+    public var sessions: [TeamSessionInteractionSummary]
+    public var legacyUnknownHistory: [TeamGrindHistoryDay]
+    public var legacyUnknownSessions: [TeamSessionInteractionSummary]
+    public var coverageComplete: Bool
+    public var coverageStartDay: String?
+    public var coverageEndDay: String?
+    public var coverageThroughAt: String?
 }
 
 public struct OfficialCodexUsageCollector: Sendable {
@@ -379,6 +392,14 @@ public struct CodexGrindHistoryCollector: Sendable {
         var pendingSessions: [TeamSessionInteractionSummary]? = nil
         var fileIdentifiers: [String: String]? = nil
         var partialRowStarts: [String: Int64]? = nil
+        var attribution: [String: NativeInputTurnState]? = nil
+        var pendingLegacyHistory: [TeamGrindHistoryDay]? = nil
+        var pendingLegacySessions: [TeamSessionInteractionSummary]? = nil
+        var replayRequired: Bool? = nil
+        var coverageComplete: Bool? = nil
+        var coverageStartDay: String? = nil
+        var coverageEndDay: String? = nil
+        var coverageThroughAt: String? = nil
     }
     private struct InteractionDates {
         var day: [Date] = []
@@ -401,6 +422,7 @@ public struct CodexGrindHistoryCollector: Sendable {
                 "<recommended_plugins>", "# AGENTS.md instructions", "<environment_context>",
                 "<app-context>", "<permissions instructions>", "<collaboration_mode>",
                 "<apps_instructions>", "<plugins_instructions>",
+                "<external_codex_apps_open_page>", "<codex_internal_context", "<turn_aborted>",
                 "Continue where you left off. The previous model attempt failed or timed out.",
                 "The following is the Codex agent history",
             ]
@@ -482,84 +504,142 @@ public struct CodexGrindHistoryCollector: Sendable {
         codexHome: URL,
         days: Int = 30,
         now: Date = Date()
-    ) -> (history: [TeamGrindHistoryDay], sessions: [TeamSessionInteractionSummary]) {
-        let cutoff = now.addingTimeInterval(-Double(max(1, days) + 1) * 86_400)
-        let roots = ["sessions", "archived_sessions"].map { codexHome.appendingPathComponent($0) }
-        var history: [String: (day: Date?, night: Date?)] = [:]
-        var interactionDates: [String: InteractionDates] = [:]
+    ) -> NativeWorkdayCollectionReport {
+        fullReplay(codexHome: codexHome, days: days, now: now).report
+    }
 
-        func recordUserInteraction(_ date: Date, sessionID: String) {
-            guard date >= cutoff else { return }
-            let components = Calendar(identifier: .gregorian).dateComponents(in: timezone, from: date)
-            guard let hour = components.hour else { return }
-            let day = grindDay(for: date, hour: hour)
-            var current = history[day] ?? (nil, nil)
-            if hour >= 5, current.day == nil || date < current.day! { current.day = date }
-            if hour >= 23 || hour < 5, current.night == nil || date > current.night! { current.night = date }
-            history[day] = current
+    private func replayRange(days: Int, now: Date) -> (start: Date, startDay: String, endDay: String) {
+        var calendar = Calendar(identifier: .gregorian); calendar.timeZone = timezone
+        let morning = calendar.date(byAdding: .hour, value: 5, to: calendar.startOfDay(for: now))!
+        let current = now < morning ? calendar.date(byAdding: .day, value: -1, to: morning)! : morning
+        let start = calendar.date(byAdding: .day, value: -(max(1, min(days, 30)) - 1), to: current)!
+        return (start, grindDay(for: start, hour: 5), grindDay(for: current, hour: 5))
+    }
 
-            let key = "\(sessionID)|\(day)"
-            var summary = interactionDates[key] ?? InteractionDates()
-            if hour >= 5 { summary.day.append(date) }
-            if hour >= 23 || hour < 5 { summary.night.append(date) }
-            interactionDates[key] = summary
+    private func fullReplay(codexHome: URL, days: Int, now: Date) -> (report: NativeWorkdayCollectionReport, offsets: [String: Int64], attribution: [String: NativeInputTurnState]) {
+        let range = replayRange(days: days, now: now)
+        let files = CodexSessionFileIndex(codexHome: codexHome).uniqueFiles().filter { file in
+            // Unchanged logs whose creation and last write both predate this workday
+            // range cannot contribute a later append. Active long sessions still replay
+            // from their header so no attribution is inferred from a tail window.
+            file.modifiedAt >= range.start
+                || (CodexSessionFileCounter().timestampFromFilename(file.url.lastPathComponent) ?? file.modifiedAt) >= range.start
         }
+        var confirmed: [String: InteractionDates] = [:], unknown: [String: InteractionDates] = [:]
+        var offsets: [String: Int64] = [:], attribution: [String: NativeInputTurnState] = [:]
+        // A missing/unreadable session root is not evidence that the prior history is empty.
+        var complete = nativeInventoryComplete(codexHome)
+        for file in files {
+            var state = NativeInputTurnState(), inputs: [NativeInputTurnState.Input] = []
+            let result = scanNativeLines(file: file, start: 0, maximumBytes: Int64.max) { line in
+                if line.isEmpty { state.trigger = nil; state.turnID = nil; return true }
+                let previous = state
+                guard let event = state.consume(line) else { return true }
+                if event.date > now { state = previous; return false }
+                guard event.date >= range.start, event.classification != "automatic" else { return true }
+                inputs.append(event)
+                return true
+            }
+            for event in inputs where !state.hasModernMessages || event.type == "response_item" {
+                let session = sessionID(from: file.url)
+                if event.classification == "user_submission" { record(event.date, session: session, into: &confirmed) }
+                else { record(event.date, session: session, into: &unknown) }
+            }
+            complete = complete && result.complete && !state.malformedRowSeen
+            offsets[file.stableKey] = result.offset
+            attribution[file.stableKey] = state
+        }
+        let human = summaries(confirmed, provenance: "user_submission")
+        let legacy = summaries(unknown, provenance: "legacy_unknown")
+        return (NativeWorkdayCollectionReport(history: human.history, sessions: human.sessions,
+            legacyUnknownHistory: legacy.history, legacyUnknownSessions: legacy.sessions,
+            coverageComplete: complete, coverageStartDay: range.startDay, coverageEndDay: range.endDay, coverageThroughAt: isoString(now)), offsets, attribution)
+    }
 
-        for root in roots {
-            guard let enumerator = FileManager.default.enumerator(
-                at: root,
-                includingPropertiesForKeys: [.contentModificationDateKey],
-                options: [.skipsHiddenFiles]
-            ) else { continue }
-            for case let url as URL in enumerator where url.pathExtension == "jsonl" {
-                let modifiedAt = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
-                let startedAt = CodexSessionFileCounter().timestampFromFilename(url.lastPathComponent) ?? modifiedAt
-                guard max(startedAt, modifiedAt) >= cutoff else { continue }
-                let sessionID = sessionID(from: url)
-                var authoredResponseDates: [Date] = []
-                var legacyEventDates: [Date] = []
-                guard !isSubagentSession(url) else { continue }
-                enumerateRecentLines(in: url) { line in
-                    guard line.contains("\"user_message\"") || line.contains("\"role\":\"user\"") else { return }
-                    guard let event = try? JSONDecoder().decode(EventEnvelope.self, from: Data(line.utf8)),
-                          let timestamp = event.timestamp,
-                          let date = Self.isoDate(timestamp) else { return }
-                    if event.isAuthoredResponse { authoredResponseDates.append(date) }
-                    if event.isLegacyUserEvent { legacyEventDates.append(date) }
-                }
-                // Modern Codex stores authored UI messages as response_item records.
-                // event_msg user_message is only a legacy fallback because modern
-                // files can also contain replay, automation and setup messages there.
-                let dates = authoredResponseDates.isEmpty ? legacyEventDates : authoredResponseDates
-                for date in dates { recordUserInteraction(date, sessionID: sessionID) }
+    private func nativeInventoryComplete(_ home: URL) -> Bool {
+        var complete = FileManager.default.fileExists(atPath: home.appendingPathComponent("sessions").path)
+        for name in ["sessions", "archived_sessions"] {
+            let root = home.appendingPathComponent(name)
+            guard FileManager.default.fileExists(atPath: root.path) else { continue }
+            guard let entries = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey],
+                options: [.skipsHiddenFiles], errorHandler: { _, _ in complete = false; return true }) else { complete = false; continue }
+            for case let url as URL in entries where url.pathExtension == "jsonl" {
+                if (try? url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])) == nil { complete = false }
             }
         }
+        return complete
+    }
 
-        let grindHistory = history.keys.sorted().suffix(max(1, days)).map { day in
-            let item = history[day] ?? (nil, nil)
-            return TeamGrindHistoryDay(
-                grindDay: day,
-                dayGrindTime: item.day.map(timeString),
-                nightGrindTime: item.night.map(timeString)
-            )
-        }
-        let sessionSummaries = interactionDates.keys.sorted().compactMap { key -> TeamSessionInteractionSummary? in
-            guard let values = interactionDates[key] else { return nil }
+    private func record(_ date: Date, session: String, into values: inout [String: InteractionDates]) {
+        let hour = Calendar(identifier: .gregorian).dateComponents(in: timezone, from: date).hour ?? 0
+        let day = grindDay(for: date, hour: hour), key = "\(session)|\(day)"
+        var item = values[key] ?? InteractionDates()
+        if hour >= 5 { item.day.append(date) }
+        if hour >= 23 || hour < 5 { item.night.append(date) }
+        values[key] = item
+    }
+
+    private func summaries(_ values: [String: InteractionDates], provenance: String) -> (history: [TeamGrindHistoryDay], sessions: [TeamSessionInteractionSummary]) {
+        var history: [String: (day: Date?, night: Date?)] = [:]
+        let sessions = values.keys.sorted().compactMap { key -> TeamSessionInteractionSummary? in
+            guard let dates = values[key] else { return nil }
             let parts = key.split(separator: "|", maxSplits: 1).map(String.init)
             guard parts.count == 2 else { return nil }
-            let dayDates = uniqueTurns(values.day)
-            let nightDates = uniqueTurns(values.night)
-            return TeamSessionInteractionSummary(
-                sessionId: parts[0],
-                day: parts[1],
-                firstDayUserAt: dayDates.first.map(isoString),
-                lastDayUserAt: dayDates.last.map(isoString),
-                dayTurnCount: dayDates.count,
-                lastNightUserAt: nightDates.last.map(isoString),
-                nightTurnCount: nightDates.count
-            )
+            let day = uniqueTurns(dates.day), night = uniqueTurns(dates.night)
+            var h = history[parts[1]] ?? (nil, nil)
+            if let first = day.first, h.day == nil || first < h.day! { h.day = first }
+            if let last = night.last, h.night == nil || last > h.night! { h.night = last }
+            history[parts[1]] = h
+            return TeamSessionInteractionSummary(sessionId: parts[0], day: parts[1],
+                firstDayUserAt: day.first.map(isoString), lastDayUserAt: day.last.map(isoString), dayTurnCount: day.count,
+                lastNightUserAt: night.last.map(isoString), nightTurnCount: night.count, inputProvenance: provenance)
         }
-        return (grindHistory, sessionSummaries)
+        let days = history.keys.sorted().map { day in
+            TeamGrindHistoryDay(grindDay: day, dayGrindTime: history[day]!.day.map(timeString),
+                nightGrindTime: history[day]!.night.map(timeString), inputProvenance: provenance)
+        }
+        return (days, sessions)
+    }
+
+    /// Streams all complete rows without retaining content between calls. A partial EOF
+    /// or oversized row prevents authoritative replacement of any historical range.
+    private func scanNativeLines(file: CodexSessionFileIndex.Entry, start: Int64, maximumBytes: Int64, discardingOversizedRow: Bool = false,
+                                 visit: (Data) -> Bool) -> (offset: Int64, complete: Bool, discardingOversizedRow: Bool) {
+        guard let handle = try? FileHandle(forReadingFrom: file.url) else { return (start, false, discardingOversizedRow) }
+        defer { try? handle.close() }
+        do {
+            try handle.seek(toOffset: UInt64(max(0, start)))
+            let target = min(file.size, start + min(maximumBytes, Int64.max - start))
+            var offset = start, rowStart = start, buffer = Data(), oversized = discardingOversizedRow, complete = !discardingOversizedRow
+            while offset < target {
+                let count = Int(min(64 * 1024, target - offset))
+                guard let chunk = try handle.read(upToCount: count), !chunk.isEmpty else { return (rowStart, false, oversized) }
+                offset += Int64(chunk.count)
+                buffer.append(chunk)
+                while let newline = buffer.firstIndex(of: 10) {
+                    let row = Data(buffer.prefix(upTo: newline))
+                    if !oversized, row.count <= 4 * 1024 * 1024 {
+                        if !visit(row) { return (rowStart, false, false) }
+                    } else { complete = false; _ = visit(Data()) }
+                    rowStart += Int64(newline + 1)
+                    buffer.removeSubrange(...newline)
+                    oversized = false
+                }
+                if buffer.count > 4 * 1024 * 1024 {
+                    complete = false; oversized = true; _ = visit(Data())
+                    rowStart += Int64(buffer.count); buffer.removeAll(keepingCapacity: true)
+                }
+            }
+            // Normal appends belong to the next delta; replacement, truncation or deletion
+            // invalidate the captured EOF snapshot proof.
+            let current = try? file.url.resourceValues(forKeys: [.fileSizeKey, .fileResourceIdentifierKey])
+            let currentID = current?.fileResourceIdentifier.map { String(describing: $0) }
+            let unchanged = (current?.fileSize.map(Int64.init) ?? -1) >= file.size
+                && (file.fileIdentifier == nil || currentID == file.fileIdentifier)
+            // Do not advance into a partial row. The next poll reassembles it from disk.
+            return (buffer.isEmpty && !oversized ? offset : rowStart,
+                    complete && unchanged && buffer.isEmpty && !oversized && target == file.size, oversized)
+        } catch { return (start, false, discardingOversizedRow) }
     }
 
     /// Tails only bytes appended after the collector starts. The server merges these
@@ -571,7 +651,7 @@ public struct CodexGrindHistoryCollector: Sendable {
         now: Date = Date(),
         stateURL: URL = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".wanhe-codex-token/grind-live.json")
-    ) -> (history: [TeamGrindHistoryDay], sessions: [TeamSessionInteractionSummary]) {
+    ) -> NativeWorkdayCollectionReport {
         collectIncremental(
             codexHome: codexHome,
             sessionFileIndex: CodexSessionFileIndex(codexHome: codexHome),
@@ -586,204 +666,93 @@ public struct CodexGrindHistoryCollector: Sendable {
         sessionFileIndex: CodexSessionFileIndex,
         days: Int = 30,
         now: Date = Date(),
-        stateURL: URL = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".wanhe-codex-token/grind-live.json")
-    ) -> (history: [TeamGrindHistoryDay], sessions: [TeamSessionInteractionSummary]) {
-        let cutoff = now.addingTimeInterval(-Double(max(1, days) + 1) * 86_400)
-        var files = sessionFileIndex.uniqueFiles(modifiedSince: cutoff)
-        files.sort { $0.modifiedAt > $1.modifiedAt }
-        let loadedState = (try? Data(contentsOf: stateURL))
-            .flatMap { try? JSONDecoder().decode(IncrementalState.self, from: $0) }
-        var state = loadedState
-            ?? IncrementalState(initialized: false, updatedAt: isoString(now), fileOffsets: [:])
-        var stateChanged = loadedState == nil
-        if !state.initialized || state.collectionVersion != 2 {
-            // First install (and the one-time v2 migration) reads only authored-user
-            // timestamps from the recent 30-day window. Conversation text, assistant
-            // replies, attachments, injected context and subagent sessions are never
-            // retained in this state or included in the upload.
-            let backfill = collectDetailed(codexHome: codexHome, days: min(30, days), now: now)
-            for file in files { state.fileOffsets[file.stableKey] = file.size }
-            state.fileIdentifiers = Dictionary(uniqueKeysWithValues: files.compactMap { file in
+        stateURL: URL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".wanhe-codex-token/grind-live.json")
+    ) -> NativeWorkdayCollectionReport {
+        let range = replayRange(days: days, now: now)
+        let loaded = (try? Data(contentsOf: stateURL)).flatMap { try? JSONDecoder().decode(IncrementalState.self, from: $0) }
+        var state = loaded ?? IncrementalState(initialized: false, updatedAt: isoString(now), fileOffsets: [:])
+        if state.collectionVersion == 3, state.coverageComplete == true { return pendingReport(state) }
+        if !state.initialized || state.collectionVersion != 3 || state.replayRequired == true {
+            let replay = fullReplay(codexHome: codexHome, days: days, now: now)
+            // Never merge pre-provenance pending summaries: those can contain automation.
+            state.fileOffsets = replay.offsets; state.attribution = replay.attribution
+            state.fileIdentifiers = Dictionary(uniqueKeysWithValues: sessionFileIndex.uniqueFiles().compactMap { file in
                 file.fileIdentifier.map { (file.stableKey, $0) }
             })
-            state.partialRowStarts = [:]
-            state.initialized = true
-            state.collectionVersion = 2
-            state.pendingHistory = mergeHistory(state.pendingHistory ?? [], backfill.history)
-            state.pendingSessions = mergeSessions(state.pendingSessions ?? [], backfill.sessions)
-            state.updatedAt = isoString(now)
-            saveIncrementalState(state, to: stateURL)
-            return (state.pendingHistory ?? [], state.pendingSessions ?? [])
+            state.initialized = true; state.collectionVersion = 3; state.partialRowStarts = [:]
+            state.pendingHistory = replay.report.history; state.pendingSessions = replay.report.sessions
+            state.pendingLegacyHistory = replay.report.legacyUnknownHistory; state.pendingLegacySessions = replay.report.legacyUnknownSessions
+            state.replayRequired = !replay.report.coverageComplete
+            state.coverageComplete = replay.report.coverageComplete
+            state.coverageStartDay = replay.report.coverageStartDay; state.coverageEndDay = replay.report.coverageEndDay
+            state.coverageThroughAt = replay.report.coverageThroughAt
+            state.updatedAt = isoString(now); saveIncrementalState(state, to: stateURL)
+            return pendingReport(state)
         }
-
-        // Register every candidate before applying the per-run read budget.
-        // Pending new live files retain offset zero, so files beyond the first
-        // 16 are drained on later syncs instead of being baselined at EOF.
-        var identifiers = state.fileIdentifiers ?? [:]
+        var files = sessionFileIndex.uniqueFiles(modifiedSince: range.start)
+        files.sort { $0.modifiedAt > $1.modifiedAt }
+        var confirmed: [String: InteractionDates] = [:], unknown: [String: InteractionDates] = [:]
+        var attributions = state.attribution ?? [:], identifiers = state.fileIdentifiers ?? [:]
+        var processed = 0
         for file in files {
             let key = file.stableKey
-            if let identifier = file.fileIdentifier {
-                if let previous = identifiers[key], previous != identifier {
-                    // A new inode at the same rollout filename must not inherit
-                    // EOF, even when the replacement has exactly the same size.
-                    state.fileOffsets[key] = 0
-                    state.partialRowStarts?.removeValue(forKey: key)
-                    stateChanged = true
-                }
-                if identifiers[key] != identifier {
-                    identifiers[key] = identifier
-                    stateChanged = true
-                }
+            if let id = file.fileIdentifier, let old = identifiers[key], old != id {
+                state.fileOffsets[key] = 0; attributions[key] = nil; state.partialRowStarts?[key] = nil
             }
-            if state.fileOffsets[key] == nil, let legacyOffset = state.fileOffsets[file.path] {
-                state.fileOffsets[key] = legacyOffset
-                state.fileOffsets.removeValue(forKey: file.path)
-                stateChanged = true
-            } else if state.fileOffsets[key] == nil,
-                      let movedLegacy = state.fileOffsets.first(where: {
-                          $0.key.contains("/")
-                              && URL(fileURLWithPath: $0.key).lastPathComponent == key
-                      }) {
-                // A pre-stable-key state may still name the old sessions path
-                // after Codex has already moved the file into archived_sessions.
-                state.fileOffsets[key] = movedLegacy.value
-                state.fileOffsets.removeValue(forKey: movedLegacy.key)
-                stateChanged = true
-            } else if state.fileOffsets[key] == nil {
-                // Initialization already baselines all historical files. Any
-                // rollout first discovered later is new work, even if Codex
-                // created and archived the short session between two polls.
-                state.fileOffsets[key] = 0
-                stateChanged = true
+            if let id = file.fileIdentifier { identifiers[key] = id }
+            if state.fileOffsets[key] == nil {
+                // Old absolute-path cursor keys can survive a move into archived_sessions.
+                let previous = state.fileOffsets.first { URL(fileURLWithPath: $0.key).lastPathComponent == key }
+                state.fileOffsets[key] = previous?.value ?? 0
+                if let previous, previous.key != key { state.fileOffsets.removeValue(forKey: previous.key) }
             }
+            var start = state.fileOffsets[key] ?? 0
+            if start > file.size { start = 0; attributions[key] = nil; state.partialRowStarts?[key] = nil }
+            guard start < file.size, processed < 16 else { continue }
+            var attribution = attributions[key] ?? NativeInputTurnState()
+            if attribution.isSubagent { state.fileOffsets[key] = file.size; processed += 1; continue }
+            let progress = max(start, state.partialRowStarts?[key] ?? start)
+            let budget = min(4 * 1024 * 1024 + 256 * 1024, 256 * 1024 + progress - start)
+            let result = scanNativeLines(file: file, start: start, maximumBytes: budget, discardingOversizedRow: attribution.discardingOversizedRow) { line in
+                if line.isEmpty { attribution.trigger = nil; attribution.turnID = nil; return true }
+                let previous = attribution
+                guard let event = attribution.consume(line) else { return true }
+                if event.date > now { attribution = previous; return false }
+                guard event.date >= range.start, event.classification != "automatic" else { return true }
+                let session = sessionID(from: file.url)
+                if event.classification == "user_submission" { record(event.date, session: session, into: &confirmed) }
+                else { record(event.date, session: session, into: &unknown) }
+                return true
+            }
+            let target = min(file.size, start + budget)
+            if result.offset < target { state.partialRowStarts?[key] = target }
+            else { state.partialRowStarts?.removeValue(forKey: key) }
+            attribution.discardingOversizedRow = result.discardingOversizedRow
+            state.fileOffsets[key] = result.offset; attributions[key] = attribution; processed += 1
+            // Daily deltas never claim authoritative range coverage.
+            state.coverageComplete = false
         }
-        state.fileIdentifiers = identifiers
-        var interactionDates: [String: InteractionDates] = [:]
-        var history: [String: (day: Date?, night: Date?)] = [:]
-        var processed = 0
-        for file in files where processed < 16 {
-            let key = file.stableKey
-            let knownOffset = state.fileOffsets[key]
-            let start = knownOffset.map { offset in
-                // Truncation or in-place replacement invalidates the former
-                // byte boundary. Re-read this one file so complete new events
-                // already present before the next sync are not lost.
-                offset > file.size ? 0 : max(0, offset)
-            } ?? file.size
-            if let knownOffset, knownOffset > file.size {
-                state.partialRowStarts?.removeValue(forKey: key)
-            }
-            guard start < file.size else {
-                if knownOffset != file.size { stateChanged = true }
-                state.fileOffsets[key] = file.size
-                continue
-            }
-            if isSubagentSession(file.url) {
-                state.fileOffsets[key] = file.size
-                state.partialRowStarts?.removeValue(forKey: key)
-                stateChanged = true
-                processed += 1
-                continue
-            }
-            guard let handle = try? FileHandle(forReadingFrom: file.url) else { continue }
-            try? handle.seek(toOffset: UInt64(start))
-            let data = (try? handle.read(upToCount: 256 * 1_024)) ?? Data()
-            defer { try? handle.close() }
-            guard !data.isEmpty else { continue }
-            guard let newline = data.lastIndex(of: 0x0A) else {
-                let reachedEOF = start + Int64(data.count) >= file.size
-                if !reachedEOF {
-                    // Skip one bounded piece of an oversized JSONL row so it
-                    // cannot block every newer event forever. At EOF, retain
-                    // the offset because an ordinary partial row may complete.
-                    state.fileOffsets[key] = start + Int64(data.count)
-                    var partialStarts = state.partialRowStarts ?? [:]
-                    partialStarts[key] = partialStarts[key] ?? start
-                    state.partialRowStarts = partialStarts
-                    stateChanged = true
-                }
-                processed += 1
-                continue
-            }
-            var complete = Data(data.prefix(through: newline))
-            if let rowStart = state.partialRowStarts?[key], rowStart < start,
-               let firstNewline = complete.firstIndex(of: 0x0A) {
-                let rowLength = start - rowStart + Int64(firstNewline + 1)
-                // Only offsets survive between polls. Reassemble a complete
-                // bounded row in memory; never persist message text.
-                if rowLength <= 4 * 1_024 * 1_024 {
-                    try? handle.seek(toOffset: UInt64(rowStart))
-                    let row = (try? handle.read(upToCount: Int(rowLength))) ?? Data()
-                    if row.count != Int(rowLength) { continue }
-                    complete = row + complete.dropFirst(firstNewline + 1)
-                } else {
-                    complete = Data(complete.dropFirst(firstNewline + 1))
-                }
-            }
-            state.partialRowStarts?.removeValue(forKey: key)
-            var modern: [Date] = []
-            var legacy: [Date] = []
-            for line in complete.split(separator: 0x0A) {
-                guard let event = try? JSONDecoder().decode(EventEnvelope.self, from: Data(line)),
-                      let timestamp = event.timestamp,
-                      let date = Self.isoDate(timestamp), date >= cutoff else { continue }
-                if event.isAuthoredResponse { modern.append(date) }
-                if event.isLegacyUserEvent { legacy.append(date) }
-            }
-            let session = sessionID(from: file.url)
-            for date in modern.isEmpty ? legacy : modern {
-                let components = Calendar(identifier: .gregorian).dateComponents(in: timezone, from: date)
-                guard let hour = components.hour else { continue }
-                let day = grindDay(for: date, hour: hour)
-                var item = history[day] ?? (nil, nil)
-                if hour >= 5, item.day == nil || date < item.day! { item.day = date }
-                if hour >= 23 || hour < 5, item.night == nil || date > item.night! { item.night = date }
-                history[day] = item
-                let key = "\(session)|\(day)"
-                var values = interactionDates[key] ?? InteractionDates()
-                if hour >= 5 { values.day.append(date) }
-                if hour >= 23 || hour < 5 { values.night.append(date) }
-                interactionDates[key] = values
-            }
-            state.fileOffsets[key] = start + Int64(newline + 1)
-            stateChanged = true
-            processed += 1
-        }
-        let activeKeys = Set(files.map(\.stableKey))
-        let previousOffsetCount = state.fileOffsets.count
+        let human = summaries(confirmed, provenance: "user_submission"), legacy = summaries(unknown, provenance: "legacy_unknown")
+        state.pendingHistory = mergeHistory(state.pendingHistory ?? [], human.history)
+        state.pendingSessions = mergeSessions(state.pendingSessions ?? [], human.sessions)
+        state.pendingLegacyHistory = mergeHistory(state.pendingLegacyHistory ?? [], legacy.history)
+        state.pendingLegacySessions = mergeSessions(state.pendingLegacySessions ?? [], legacy.sessions)
+        let activeKeys = Set(files.map(\.stableKey)), previousOffsetCount = state.fileOffsets.count
+        let identifiersChanged = state.fileIdentifiers != identifiers
         state.fileOffsets = state.fileOffsets.filter { activeKeys.contains($0.key) }
-        state.fileIdentifiers = state.fileIdentifiers?.filter { activeKeys.contains($0.key) }
         state.partialRowStarts = state.partialRowStarts?.filter { activeKeys.contains($0.key) }
-        if state.fileOffsets.count != previousOffsetCount { stateChanged = true }
-        let sessions = interactionDates.compactMap { key, values -> TeamSessionInteractionSummary? in
-            let parts = key.split(separator: "|", maxSplits: 1).map(String.init)
-            guard parts.count == 2 else { return nil }
-            let dayDates = uniqueTurns(values.day)
-            let nightDates = uniqueTurns(values.night)
-            return TeamSessionInteractionSummary(
-                sessionId: parts[0], day: parts[1],
-                firstDayUserAt: dayDates.first.map(isoString),
-                lastDayUserAt: dayDates.last.map(isoString), dayTurnCount: dayDates.count,
-                lastNightUserAt: nightDates.last.map(isoString), nightTurnCount: nightDates.count
-            )
+        state.attribution = attributions.filter { activeKeys.contains($0.key) }
+        state.fileIdentifiers = identifiers.filter { activeKeys.contains($0.key) }
+        if processed > 0 || identifiersChanged || state.fileOffsets.count != previousOffsetCount {
+            state.updatedAt = isoString(now); saveIncrementalState(state, to: stateURL)
         }
-        let grind = history.keys.sorted().map { day in
-            let item = history[day] ?? (nil, nil)
-            return TeamGrindHistoryDay(
-                grindDay: day, dayGrindTime: item.day.map(timeString), nightGrindTime: item.night.map(timeString)
-            )
-        }
-        if !grind.isEmpty || !sessions.isEmpty {
-            state.pendingHistory = mergeHistory(state.pendingHistory ?? [], grind)
-            state.pendingSessions = mergeSessions(state.pendingSessions ?? [], sessions)
-            stateChanged = true
-        }
-        if stateChanged {
-            state.updatedAt = isoString(now)
-            saveIncrementalState(state, to: stateURL)
-        }
-        return (state.pendingHistory ?? [], state.pendingSessions ?? [])
+        return pendingReport(state)
+    }
+
+    private func pendingReport(_ state: IncrementalState) -> NativeWorkdayCollectionReport {
+        NativeWorkdayCollectionReport(history: state.pendingHistory ?? [], sessions: state.pendingSessions ?? [],
+            legacyUnknownHistory: state.pendingLegacyHistory ?? [], legacyUnknownSessions: state.pendingLegacySessions ?? [],
+            coverageComplete: state.coverageComplete == true, coverageStartDay: state.coverageStartDay, coverageEndDay: state.coverageEndDay, coverageThroughAt: state.coverageThroughAt)
     }
 
     public func acknowledgeUploaded(
@@ -792,9 +761,13 @@ public struct CodexGrindHistoryCollector: Sendable {
     ) {
         guard let data = try? Data(contentsOf: stateURL),
               var state = try? JSONDecoder().decode(IncrementalState.self, from: data),
-              !(state.pendingHistory ?? []).isEmpty || !(state.pendingSessions ?? []).isEmpty else { return }
+              !(state.pendingHistory ?? []).isEmpty || !(state.pendingSessions ?? []).isEmpty
+                || !(state.pendingLegacyHistory ?? []).isEmpty || !(state.pendingLegacySessions ?? []).isEmpty
+                || state.coverageComplete == true else { return }
         state.pendingHistory = []
         state.pendingSessions = []
+        state.pendingLegacyHistory = []; state.pendingLegacySessions = []
+        state.coverageComplete = false; state.coverageStartDay = nil; state.coverageEndDay = nil; state.coverageThroughAt = nil
         state.updatedAt = isoString(Date())
         saveIncrementalState(state, to: stateURL)
     }
@@ -858,45 +831,6 @@ public struct CodexGrindHistoryCollector: Sendable {
     private func saveIncrementalState(_ state: IncrementalState, to url: URL) {
         try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         if let data = try? JSONEncoder().encode(state) { try? data.write(to: url, options: [.atomic]) }
-    }
-
-    private func enumerateRecentLines(in url: URL, maximumBytes: UInt64 = 4 * 1024 * 1024, visit: (String) -> Void) {
-        guard let handle = try? FileHandle(forReadingFrom: url) else { return }
-        defer { try? handle.close() }
-        let size = (try? handle.seekToEnd()) ?? 0
-        let start = size > maximumBytes ? size - maximumBytes : 0
-        try? handle.seek(toOffset: start)
-        var buffer = Data()
-        var shouldDiscardPartialLine = start > 0
-        while let chunk = try? handle.read(upToCount: 64 * 1024), !chunk.isEmpty {
-            buffer.append(chunk)
-            while let newline = buffer.firstIndex(of: 0x0A) {
-                let line = buffer.subdata(in: buffer.startIndex..<newline)
-                if shouldDiscardPartialLine {
-                    shouldDiscardPartialLine = false
-                } else if let text = String(data: line, encoding: .utf8) {
-                    visit(text)
-                }
-                buffer.removeSubrange(buffer.startIndex...newline)
-            }
-        }
-        if !shouldDiscardPartialLine, !buffer.isEmpty, let text = String(data: buffer, encoding: .utf8) { visit(text) }
-    }
-
-    private func isSubagentSession(_ url: URL) -> Bool {
-        guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
-        defer { try? handle.close() }
-        guard let data = try? handle.read(upToCount: 64 * 1024),
-              let text = String(data: data, encoding: .utf8) else { return false }
-        for line in text.split(separator: "\n") {
-            guard let data = String(line).data(using: .utf8),
-                  let event = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  event["type"] as? String == "session_meta",
-                  let payload = event["payload"] as? [String: Any],
-                  let source = payload["source"] as? [String: Any] else { continue }
-            if source["subagent"] != nil { return true }
-        }
-        return false
     }
 
     private func uniqueTurns(_ values: [Date]) -> [Date] {

@@ -96,7 +96,7 @@ do {
     let store = StateStore()
 
     switch command {
-    case "dot-input-audit", "human-input-shadow":
+    case "dot-input-audit", "human-input-shadow", "dot-input-sample":
         let home = ProcessInfo.processInfo.environment["CODEX_HOME"].map { URL(fileURLWithPath: $0) }
             ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex")
         let finished = DispatchSemaphore(value: 0)
@@ -104,6 +104,12 @@ do {
         Task.detached {
             do {
                 let identity = try DotInputIdentity(codexHome: home)
+                if command == "dot-input-sample" {
+                    let snapshot = try await DotInputSampler(cacheURL: DotInputSampler.defaultCacheURL(codexHome: home)).sample(identity: identity, transport: DotInputHTTP(identity: identity), maxPages: 5)
+                    let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
+                    FileHandle.standardOutput.write(try encoder.encode(snapshot)); print("")
+                    finished.signal(); return
+                }
                 let salt = Data((0..<32).map { _ in UInt8.random(in: 0...255) })
                 let report = try await DotInputCollector().collect(identity: identity, transport: DotInputHTTP(identity: identity), salt: salt)
                 let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
@@ -119,6 +125,13 @@ do {
             }
         }
         finished.wait()
+    case "human-input-preview":
+        guard let configuration = TeamSyncConfiguration.load(), HumanInputIntegration.enabled(configuration: configuration) else {
+            throw StateStoreError.invalidInput("human input preview requires the registered pilot account")
+        }
+        let payload = try TeamUsageSyncService(configuration: configuration).makePayload(quota: nil)
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
+        FileHandle.standardOutput.write(try encoder.encode(payload)); print("")
     case "native-input-audit":
         let home = ProcessInfo.processInfo.environment["CODEX_HOME"].map { URL(fileURLWithPath: $0) }
             ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex")
