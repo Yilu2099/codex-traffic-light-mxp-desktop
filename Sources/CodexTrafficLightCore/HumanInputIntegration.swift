@@ -30,13 +30,28 @@ public enum HumanInputIntegration {
         return DotInputSampler.read(cacheURL: DotInputSampler.defaultCacheURL(codexHome: configuration.codexHome), identity: identity, now: now)
     }
 
-    /// Failure cannot stop quota or native collection, or substitute a token/heartbeat timestamp.
+    /// Use the same helper identity as the verified CLI transport. An application
+    /// executable's default HTTP identity is rejected by the upstream read endpoint.
+    /// The child contains no credentials in argv or environment and is cancelled with the app.
     public static func run(configuration: TeamSyncConfiguration) async {
         guard enabled(configuration: configuration) else { return }
-        let sampler = DotInputSampler(cacheURL: DotInputSampler.defaultCacheURL(codexHome: configuration.codexHome))
         while !Task.isCancelled {
-            if let identity = try? DotInputIdentity(codexHome: configuration.codexHome) {
-                _ = try? await sampler.sample(identity: identity, transport: DotInputHTTP(identity: identity), maxPages: 5)
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent().appendingPathComponent("codex-light-mxp")
+            process.arguments = ["dot-input-sample", "--json"]
+            process.environment = ["HOME": FileManager.default.homeDirectoryForCurrentUser.path,
+                                   "PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "CODEX_HOME": configuration.codexHome.path]
+            process.standardInput = FileHandle.nullDevice
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            await withTaskCancellationHandler {
+                do {
+                    try process.run()
+                    while process.isRunning && !Task.isCancelled { try await Task.sleep(for: .seconds(1)) }
+                } catch {}
+                if process.isRunning { process.terminate() }
+            } onCancel: {
+                if process.isRunning { process.terminate() }
             }
             do { try await Task.sleep(for: .seconds(60)) } catch { return }
         }
