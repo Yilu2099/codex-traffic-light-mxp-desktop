@@ -482,6 +482,9 @@ public struct CodexGrindHistoryCollector: Sendable {
         }
     }
 
+    // Screenshot attachments are commonly several MiB in a single JSONL row.
+    // Retain a bounded ceiling shared by replay and incremental reassembly.
+    private static let maximumNativeRowBytes = 32 * 1024 * 1024
     private let timezone = TimeZone(identifier: "Asia/Shanghai")!
 
     public init() {}
@@ -611,23 +614,28 @@ public struct CodexGrindHistoryCollector: Sendable {
             try handle.seek(toOffset: UInt64(max(0, start)))
             let target = min(file.size, start + min(maximumBytes, Int64.max - start))
             var offset = start, rowStart = start, buffer = Data(), oversized = discardingOversizedRow, complete = !discardingOversizedRow
+            var searchedBytes = 0
             while offset < target {
                 let count = Int(min(64 * 1024, target - offset))
                 guard let chunk = try handle.read(upToCount: count), !chunk.isEmpty else { return (rowStart, false, oversized) }
                 offset += Int64(chunk.count)
                 buffer.append(chunk)
-                while let newline = buffer.firstIndex(of: 10) {
+                // Large attachment rows have no newline until their end. Search
+                // only newly appended bytes instead of rescanning the whole row.
+                while let newline = buffer[buffer.index(buffer.startIndex, offsetBy: searchedBytes)...].firstIndex(of: 10) {
                     let row = Data(buffer.prefix(upTo: newline))
-                    if !oversized, row.count <= 4 * 1024 * 1024 {
+                    if !oversized, row.count <= Self.maximumNativeRowBytes {
                         if !visit(row) { return (rowStart, false, false) }
                     } else { complete = false; _ = visit(Data()) }
                     rowStart += Int64(newline + 1)
                     buffer.removeSubrange(...newline)
+                    searchedBytes = 0
                     oversized = false
                 }
-                if buffer.count > 4 * 1024 * 1024 {
+                searchedBytes = buffer.count
+                if buffer.count > Self.maximumNativeRowBytes {
                     complete = false; oversized = true; _ = visit(Data())
-                    rowStart += Int64(buffer.count); buffer.removeAll(keepingCapacity: true)
+                    rowStart += Int64(buffer.count); buffer.removeAll(keepingCapacity: true); searchedBytes = 0
                 }
             }
             // Normal appends belong to the next delta; replacement, truncation or deletion
@@ -715,7 +723,10 @@ public struct CodexGrindHistoryCollector: Sendable {
             var attribution = attributions[key] ?? NativeInputTurnState()
             if attribution.isSubagent { state.fileOffsets[key] = file.size; processed += 1; continue }
             let progress = max(start, state.partialRowStarts?[key] ?? start)
-            let budget = min(4 * 1024 * 1024 + 256 * 1024, 256 * 1024 + progress - start)
+            // First inspect one small chunk. A known partial row is reassembled on
+            // the next poll within the same bounded ceiling, rather than taking
+            // dozens of sync intervals to consume one normal screenshot input.
+            let budget: Int64 = progress > start ? Int64(Self.maximumNativeRowBytes + 256 * 1024) : 256 * 1024
             let result = scanNativeLines(file: file, start: start, maximumBytes: budget, discardingOversizedRow: attribution.discardingOversizedRow) { line in
                 if line.isEmpty { attribution.trigger = nil; attribution.turnID = nil; return true }
                 let previous = attribution

@@ -121,4 +121,51 @@ func testNativeWorkdayPartialReplayNeverClaimsCoverage() throws {
     let complete = collector.collectIncremental(codexHome: home, now: now, stateURL: state)
     try expect(complete.coverageComplete, "completed EOF row retries full replay rather than permanently losing correction coverage")
     try expectEqual(complete.sessions.first?.nightTurnCount, 1, "completed source row counts once")
+    try checkNativeWorkdayLargeScreenshotRowBoundaries()
+}
+
+
+private func nativeScreenshotMessage(imageBytes: Int) throws -> Data {
+    try nativeFixtureLine("response_item", ["type": "message", "role": "user", "id": "screenshot-user",
+        "content": [["type": "input_text", "text": "PRIVATE-SCREENSHOT-PROMPT"],
+                    ["type": "input_image", "image_url": "data:image/png;base64," + String(repeating: "A", count: imageBytes)]]],
+        at: "2026-10-14T17:03:04Z")
+}
+
+private func checkNativeWorkdayLargeScreenshotRowBoundaries() throws {
+    let (root, file, state) = try nativeFixtureHome(); defer { try? FileManager.default.removeItem(at: root) }
+    let collector = CodexGrindHistoryCollector(), home = root.appendingPathComponent("codex"), now = DotInputCollector.parse("2026-10-14T20:00:00Z")!
+    var header = try nativeRoot(); header.append(try nativeStart("composer")); try header.write(to: file)
+    let baseline = collector.collectIncremental(codexHome: home, now: now, stateURL: state)
+    try expect(baseline.coverageComplete, "initial attributed screenshot session establishes full baseline")
+    collector.acknowledgeUploaded(stateURL: state)
+    let screenshot = try nativeScreenshotMessage(imageBytes: 5 * 1024 * 1024)
+    try expect(screenshot.count > 4 * 1024 * 1024, "screenshot regression must exceed the former row limit")
+    try nativeAppend(screenshot, to: file)
+    let partial = collector.collectIncremental(codexHome: home, now: now, stateURL: state)
+    try expect(partial.sessions.isEmpty && !partial.coverageComplete, "first bounded incremental chunk cannot fabricate a partial screenshot input")
+    let incremental = collector.collectIncremental(codexHome: home, now: now, stateURL: state)
+    try expectEqual(incremental.sessions.first?.lastNightUserAt, "2026-10-14T17:03:04.000Z", "large screenshot reassembles on the next poll with its original send time")
+    try expectEqual(incremental.sessions.first?.nightTurnCount, 1, "large screenshot counts once rather than counting payload fragments")
+    let full = collector.collectDetailed(codexHome: home, now: now)
+    try expect(full.coverageComplete, "valid screenshot above four MiB must not block full coverage")
+    try expectEqual(full.sessions.first?.lastNightUserAt, "2026-10-14T17:03:04.000Z", "full replay and incremental recovery agree on original input timestamp")
+    let disk = try Data(contentsOf: state)
+    let text = String(data: disk, encoding: .utf8)!
+    try expect(disk.count < 64 * 1024 && !text.contains("PRIVATE-SCREENSHOT") && !text.contains("data:image") && !text.contains(String(repeating: "A", count: 128)), "incremental state keeps only offsets and attribution, never screenshot or prompt content")
+    collector.acknowledgeUploaded(stateURL: state)
+    try expect(collector.collectIncremental(codexHome: home, now: now, stateURL: state).sessions.isEmpty, "acknowledged screenshot cannot be replayed")
+
+    var tooLarge = header
+    tooLarge.append(try nativeScreenshotMessage(imageBytes: 32 * 1024 * 1024))
+    tooLarge.append(try nativeStart("composer"))
+    tooLarge.append(try nativeMessage("after-oversize", at: "2026-10-14T17:10:00Z"))
+    try tooLarge.write(to: file)
+    let limited = collector.collectDetailed(codexHome: home, now: now)
+    try expect(!limited.coverageComplete, "row exceeding the bounded 32 MiB ceiling cannot claim complete coverage")
+    try expectEqual(limited.sessions.first?.nightTurnCount, 1, "over-limit row is excluded while a later complete attributed input remains observable")
+    try expectEqual(limited.sessions.first?.lastNightUserAt, "2026-10-14T17:10:00.000Z", "oversized attachment cannot move or replace the subsequent real input time")
+
+    var invalid = header; invalid.append(Data("{invalid-json}\n".utf8)); try invalid.write(to: file)
+    try expect(!collector.collectDetailed(codexHome: home, now: now).coverageComplete, "raising attachment ceiling must not waive malformed JSON coverage checks")
 }
