@@ -671,15 +671,18 @@ public struct CodexGrindHistoryCollector: Sendable {
         let range = replayRange(days: days, now: now)
         let loaded = (try? Data(contentsOf: stateURL)).flatMap { try? JSONDecoder().decode(IncrementalState.self, from: $0) }
         var state = loaded ?? IncrementalState(initialized: false, updatedAt: isoString(now), fileOffsets: [:])
-        if state.collectionVersion == 3, state.coverageComplete == true { return pendingReport(state) }
-        if !state.initialized || state.collectionVersion != 3 || state.replayRequired == true {
+        if state.collectionVersion == 4, state.coverageComplete == true { return pendingReport(state) }
+        if !state.initialized || state.collectionVersion != 4 || state.replayRequired == true {
             let replay = fullReplay(codexHome: codexHome, days: days, now: now)
+            // v4 replays v3 clients once so the server can durably establish coverage
+            // and isolate older device reports. Re-read the source logs instead of
+            // freezing a v3 outbox whose coverage was not persisted by that server.
             // Never merge pre-provenance pending summaries: those can contain automation.
             state.fileOffsets = replay.offsets; state.attribution = replay.attribution
             state.fileIdentifiers = Dictionary(uniqueKeysWithValues: sessionFileIndex.uniqueFiles().compactMap { file in
                 file.fileIdentifier.map { (file.stableKey, $0) }
             })
-            state.initialized = true; state.collectionVersion = 3; state.partialRowStarts = [:]
+            state.initialized = true; state.collectionVersion = 4; state.partialRowStarts = [:]
             state.pendingHistory = replay.report.history; state.pendingSessions = replay.report.sessions
             state.pendingLegacyHistory = replay.report.legacyUnknownHistory; state.pendingLegacySessions = replay.report.legacyUnknownSessions
             state.replayRequired = !replay.report.coverageComplete

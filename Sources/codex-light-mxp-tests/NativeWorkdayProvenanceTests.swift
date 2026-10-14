@@ -83,6 +83,29 @@ func testNativeWorkdayMigrationOutboxAndCursorAttribution() throws {
     try expect(early.sessions.isEmpty, "future row waits without inventing a present-time interaction")
     let later = collector.collectIncremental(codexHome: home, now: DotInputCollector.parse("2026-10-14T21:01:00Z")!, stateURL: state)
     try expectEqual(later.sessions.first?.firstDayUserAt, "2026-10-14T21:00:00.000Z", "future row remains at the cursor and is counted after its real time arrives")
+
+    // A deployed v3 client may have an unacknowledged complete snapshot, or have
+    // uploaded it before the server retained its scope. Both require a fresh v4 replay.
+    for oldComplete in [false, true] {
+        var old = try JSONSerialization.jsonObject(with: Data(contentsOf: state)) as! [String: Any]
+        old["collectionVersion"] = 3
+        old["coverageComplete"] = oldComplete
+        try JSONSerialization.data(withJSONObject: old).write(to: state)
+        if !oldComplete {
+            try nativeAppend(try nativeMessage("after-v3-snapshot", at: "2026-10-14T21:01:50Z"), to: file)
+        }
+        let sourceBefore = try Data(contentsOf: file)
+        let migrated = collector.collectIncremental(codexHome: home, now: DotInputCollector.parse("2026-10-14T21:02:00Z")!, stateURL: state)
+        try expect(migrated.coverageComplete, "v3 migration must re-establish complete coverage even when its old outbox was already complete")
+        try expectEqual(migrated.coverageEndDay, "2026-10-15", "migration recomputes the current full scope rather than replaying stale coverage")
+        try expectEqual(migrated.sessions.reduce(0) { $0 + $1.dayTurnCount + $1.nightTurnCount }, 4, "migration replays both original inputs and new source rows without retaining automatic activity")
+        let saved = try JSONSerialization.jsonObject(with: Data(contentsOf: state)) as! [String: Any]
+        try expectEqual(saved["collectionVersion"] as? Int, 4, "successful migration advances its persistent collection version")
+        try expectEqual(try Data(contentsOf: file), sourceBefore, "coverage migration is read-only against conversation files")
+        let retry = collector.collectIncremental(codexHome: home, now: DotInputCollector.parse("2026-10-14T21:03:00Z")!, stateURL: state)
+        try expectEqual(retry.sessions, migrated.sessions, "new complete scope remains in the durable outbox until acknowledgement")
+        try expectEqual(retry.coverageThroughAt, migrated.coverageThroughAt, "retry cannot change the captured scope timestamp")
+    }
 }
 
 func testNativeWorkdayPartialReplayNeverClaimsCoverage() throws {

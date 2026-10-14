@@ -21,8 +21,8 @@ public struct NativeInputCoverage: Codable, Equatable, Sendable {
 }
 
 public enum HumanInputIntegration {
-    // Own-account trial until source -> signed client -> server acceptance is verified.
-    public static func enabled(configuration: TeamSyncConfiguration) -> Bool { configuration.userID == "zlu" }
+    // Server-bound device credentials determine member identity; never trust a claimed member ID alone.
+    public static func enabled(configuration: TeamSyncConfiguration) -> Bool { !configuration.userID.isEmpty && !configuration.token.isEmpty }
 
     public static func cachedDot(configuration: TeamSyncConfiguration, now: Date = Date()) -> DotInputSnapshot? {
         guard enabled(configuration: configuration),
