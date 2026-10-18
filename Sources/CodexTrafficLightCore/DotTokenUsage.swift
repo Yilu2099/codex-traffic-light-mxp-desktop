@@ -5,6 +5,7 @@ import CoreFoundation
 public struct DotTokenLedger: Codable, Sendable {
     public struct Entry: Codable, Sendable {
         public var total: Int = 0
+        public var observedAt: String?
         public var local: [String: Int] = [:]
         public var utc: [String: Int] = [:]
         public var recent: [String: Int] = [:]
@@ -37,12 +38,22 @@ public struct DotTokenLedger: Codable, Sendable {
 
     public mutating func observe(key: String, total: Int, baseline: Bool, now: Date) {
         var entry = entries[key] ?? Entry()
-        let observed = baseline ? 0 : max(0, total - entry.total)
-        let delta = observed <= 20_000_000 ? observed : 0
-        entry.total = total
         let localDay = SharedDateFormatters.shared.shanghaiDay.string(from: now)
         let utcDay = String(SharedDateFormatters.shared.iso8601Fractional.string(from: now).prefix(10))
-        if observed > 20_000_000 {
+        // A reconnect is not a new lifetime baseline for a known thread.
+        // Only attribute its gap when both accounting days are unambiguous.
+        let previous = entry.observedAt.flatMap { SharedDateFormatters.shared.iso8601Date(from: $0) }
+        let sameDays = previous.map {
+            $0 <= now && SharedDateFormatters.shared.shanghaiDay.string(from: $0) == localDay
+                && String(SharedDateFormatters.shared.iso8601Fractional.string(from: $0).prefix(10)) == utcDay
+        } ?? false
+        let known = entries[key] != nil
+        let observed = baseline && !known ? 0 : max(0, total - entry.total)
+        let ambiguous = baseline && known && !sameDays
+        let delta = observed <= 20_000_000 && !ambiguous ? observed : 0
+        entry.total = total
+        entry.observedAt = SharedDateFormatters.shared.iso8601Fractional.string(from: now)
+        if observed > 0 && (observed > 20_000_000 || ambiguous) {
             entry.pending[localDay, default: 0] += observed
             entry.anomalies[localDay, default: 0] += 1
         }
