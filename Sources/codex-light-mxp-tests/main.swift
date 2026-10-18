@@ -4838,6 +4838,25 @@ func testDotTokenUsageBoundaries() throws {
 
 }
 
+func testDesktopAuxiliaryAuditPrivacyAndRetry() throws {
+    let now = Date(), stamp = SharedDateFormatters.shared.iso8601Fractional.string(from: now.addingTimeInterval(-60))
+    let line = "\(stamp) info [ephemeral-generation] ephemeral_generation_token_usage feature=thread_title private=SECRET inputTokens=90 cachedInputTokens=80 outputTokens=10 reasoningOutputTokens=2 totalTokens=100"
+    let record = DesktopAuxiliaryTokenAudit.record(line, now: now)!
+    try expectEqual(record.values["pending"], 100, "unattributed helper usage stays pending")
+    try expect(record.account == nil && record.values["counted"] == nil, "no invented billing attribution")
+    try expect(!String(decoding: JSONEncoder().encode(record), as: UTF8.self).contains("SECRET"), "no log body leaves the device")
+    try expect(DesktopAuxiliaryTokenAudit.record(line.replacingOccurrences(of: "totalTokens=100", with: "totalTokens=101"), now: now) == nil, "invalid components cannot enter audit")
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("aux-audit-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let logs = root.appendingPathComponent("logs"); try FileManager.default.createDirectory(at: logs, withIntermediateDirectories: true)
+    try Data((line + "\n").utf8).write(to: logs.appendingPathComponent("desktop.log"))
+    let audit = TokenCollectionAudit(root: root.appendingPathComponent("audit"))
+    DesktopAuxiliaryTokenAudit.collect(logRoot: logs, audit: audit, now: now)
+    let first = try audit.nextBatch()!
+    DesktopAuxiliaryTokenAudit.collect(logRoot: logs, audit: audit, now: now)
+    try expectEqual(try audit.nextBatch()!.through, first.through, "repeated collection does not duplicate helper records")
+}
+
 func testTokenCollectionAuditDurableQueue() throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent("token-audit-test-\(UUID().uuidString)")
     defer { try? FileManager.default.removeItem(at: root) }
@@ -4864,6 +4883,7 @@ func testTokenCollectionAuditDurableQueue() throws {
 }
 
 let tests: [(String, () throws -> Void)] = [
+    ("desktop auxiliary audit preserves unknown billing and privacy", testDesktopAuxiliaryAuditPrivacyAndRetry),
     ("token audit retains observations across retry and crash", testTokenCollectionAuditDurableQueue),
     ("native input handles large headers and excludes subagents", testNativeInputLargeHeaderAndSubagentBoundary),
     ("human input wire excludes unknown sources and identities", testHumanInputWireSeparatesConfirmedAndUnknown),

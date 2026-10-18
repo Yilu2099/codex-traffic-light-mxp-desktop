@@ -1066,6 +1066,7 @@ public struct TeamUsageSyncService: Sendable {
             sessionFileIndex: sessionFileIndex,
             now: now
         )
+        DesktopAuxiliaryTokenAudit.collect(now: now)
         let todayLiveUsage = DotTokenUsageObserver.merging(nativeUsage, codexHome: configuration.codexHome, index: sessionFileIndex)
         TokenCollectionAudit().append([.init(source: "combined", kind: "checkpoint", reason: "snapshot", account: TokenCollectionAudit.account(configuration.codexHome), values: [
             "nativeLocal": nativeUsage.tokens, "nativeUTC": nativeUsage.utcTokens ?? 0,
