@@ -4776,6 +4776,21 @@ func testDotTokenUsageBoundaries() throws {
     try expect(!DotTokenUsageObserver.isLocalDotThread(old, executors: ["mini-env"], now: after), "stale historical subscriptions excluded")
     old = thread; old["environments"] = [["environmentId": "mini-env"], ["environmentId": "studio-env"]]
     try expect(!DotTokenUsageObserver.isLocalDotThread(old, executors: ["mini-env"], now: after), "ambiguous execution environment excluded")
+    var fresh = DotTokenLedger()
+    var metadata: [String: Any] = ["createdAt": after.timeIntervalSince1970, "forkedFromId": NSNull(), "parentThreadId": NSNull()]
+    try expect(fresh.prepareFirstObservation(key: "new", thread: metadata, observingSince: before, now: after), "new task has a proven zero checkpoint before subscribing")
+    fresh.observe(key: "new", total: 1234, baseline: true, now: after)
+    fresh.observe(key: "new", total: 1234, baseline: false, now: after)
+    try expectEqual(fresh.entries["new"]?.local["2026-10-13"], 1234, "first completed request is counted exactly once")
+    try expect(!fresh.prepareFirstObservation(key: "new", thread: metadata, observingSince: before, now: after), "rediscovery cannot reset a persisted checkpoint")
+    metadata["createdAt"] = before.addingTimeInterval(-1).timeIntervalSince1970
+    try expect(!fresh.prepareFirstObservation(key: "old", thread: metadata, observingSince: before, now: after), "pre-connection history cannot be treated as new")
+    metadata["createdAt"] = after.timeIntervalSince1970
+    metadata["forkedFromId"] = "parent"
+    try expect(!fresh.prepareFirstObservation(key: "fork", thread: metadata, observingSince: before, now: after), "forked cumulative history cannot start from zero")
+    metadata["forkedFromId"] = NSNull(); metadata.removeValue(forKey: "parentThreadId")
+    try expect(!fresh.prepareFirstObservation(key: "unknown", thread: metadata, observingSince: before, now: after), "missing inheritance metadata is not proof")
+    try expect(!fresh.prepareFirstObservation(key: "disconnected", thread: metadata, observingSince: nil, now: after), "disconnection cannot establish a fresh checkpoint")
     var ledger = DotTokenLedger()
     ledger.observe(key: "dot", total: 1000, baseline: true, now: before)
     try expect(ledger.latestIncrementAt(now: after) == nil, "baseline cannot imply new activity")

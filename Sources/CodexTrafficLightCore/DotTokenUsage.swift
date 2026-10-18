@@ -36,6 +36,25 @@ public struct DotTokenLedger: Codable, Sendable {
         return values["totalTokens"]
     }
 
+    /// Only a non-forked thread born during this connection has a proven zero
+    /// starting point. Older/unknown threads retain the lifetime baseline rule.
+    @discardableResult
+    public mutating func prepareFirstObservation(key: String, thread: [String: Any], observingSince: Date?, now: Date) -> Bool {
+        guard entries[key] == nil, let observingSince,
+              thread["forkedFromId"] is NSNull, thread["parentThreadId"] is NSNull,
+              let created = thread["createdAt"] as? NSNumber,
+              CFGetTypeID(created) != CFBooleanGetTypeID(), created.doubleValue.isFinite,
+              created.doubleValue >= observingSince.timeIntervalSince1970,
+              created.doubleValue <= now.timeIntervalSince1970 else { return false }
+        let start = Date(timeIntervalSince1970: created.doubleValue)
+        var entry = Entry()
+        entry.observedAt = SharedDateFormatters.shared.iso8601Fractional.string(from: start)
+        entry.local[SharedDateFormatters.shared.shanghaiDay.string(from: start)] = 0
+        entry.utc[String(entry.observedAt!.prefix(10))] = 0
+        entries[key] = entry
+        return true
+    }
+
     public mutating func observe(key: String, total: Int, baseline: Bool, now: Date) {
         var entry = entries[key] ?? Entry()
         let localDay = SharedDateFormatters.shared.shanghaiDay.string(from: now)
@@ -109,6 +128,7 @@ public actor DotTokenUsageObserver {
     private var requestID = 0
     private var subscriptions = Set<String>()
     private var baselines = Set<String>()
+    private var observingSince: Date?
     private var retryAfter: [String: Date] = [:]
     private var stage = "connect"
     private var executors = Set<String>()
@@ -240,6 +260,7 @@ public actor DotTokenUsageObserver {
                     executors = Set(environments.compactMap { $0["environmentId"] as? String })
                     guard !executors.isEmpty else { throw URLError(.badServerResponse) }
                 }
+                observingSince = Date()
                 setStatus("connected")
                 ledger.lastError = nil
                 save()
@@ -293,7 +314,7 @@ public actor DotTokenUsageObserver {
         receiver?.cancel(); receiver = nil
         socket?.cancel(with: .goingAway, reason: nil); socket = nil
         for id in Array(pending.keys) { fail(id) }
-        subscriptions.removeAll(); baselines.removeAll(); retryAfter.removeAll()
+        subscriptions.removeAll(); baselines.removeAll(); retryAfter.removeAll(); observingSince = nil
     }
 
     private func discover() async throws {
@@ -306,6 +327,8 @@ public actor DotTokenUsageObserver {
                 guard Self.isLocalDotThread(thread, executors: executors), let id = thread["id"] as? String,
                       (retryAfter[id] ?? .distantPast) <= Date(),
                       !subscriptions.contains(id) else { continue }
+                let key = DotTokenLedger.key(account: account, thread: id)
+                if ledger.prepareFirstObservation(key: key, thread: thread, observingSince: observingSince, now: Date()) { save() }
                 subscriptions.insert(id)
                 do {
                     _ = try await rpc("thread/resume", ["threadId": id, "excludeTurns": true])
