@@ -70,6 +70,7 @@ public struct TodayCodexUsageCollector: Sendable {
         var updatedAt: String
         var fileOffsets: [String: Int64]
         var sessionCumulativeTokens: [String: Int]
+        var importedTurns: [String: Bool]?
         var eventValidationVersion: Int?
         /// Separate from the parser version: only a fresh day may claim v4's
         /// authority to replace a lower same-day server counter.
@@ -100,6 +101,7 @@ public struct TodayCodexUsageCollector: Sendable {
         var events: [CandidateEvent]
         var nextOffset: Int64
         var cumulative: Int?
+        var importedTurn: Bool = false
     }
 
     /// If an older Codex event omits `model_context_window`, quarantine only
@@ -265,10 +267,13 @@ public struct TodayCodexUsageCollector: Sendable {
                     file: file.url,
                     from: startOffset,
                     previousCumulative: state.sessionCumulativeTokens[sessionID(file)],
+                    importedTurn: state.importedTurns?[sessionID(file)] ?? false,
                     minimumCountedAt: knownOffset == nil && startOffset == 0
                         ? newSessionWatermark(file: file, previousUpdate: previousUpdate)
                         : nil
                 )
+                state.importedTurns = state.importedTurns ?? [:]
+                state.importedTurns?[sessionID(file)] = result.importedTurn
                 candidates.append(contentsOf: result.events)
                 state.fileOffsets[key] = result.nextOffset
                 stateChanged = true
@@ -334,6 +339,7 @@ public struct TodayCodexUsageCollector: Sendable {
         let previousSessionCount = state.sessionCumulativeTokens.count
         state.fileOffsets = state.fileOffsets.filter { activeKeys.contains($0.key) }
         state.sessionCumulativeTokens = state.sessionCumulativeTokens.filter { activeSessionIDs.contains($0.key) }
+        state.importedTurns = state.importedTurns?.filter { activeSessionIDs.contains($0.key) }
         if state.fileOffsets.count != previousOffsetCount || state.sessionCumulativeTokens.count != previousSessionCount {
             stateChanged = true
         }
@@ -379,27 +385,39 @@ public struct TodayCodexUsageCollector: Sendable {
         file: URL,
         from offset: Int64,
         previousCumulative: Int?,
+        importedTurn: Bool = false,
         minimumCountedAt: Date? = nil
     ) -> AppendedUsageResult {
         guard let handle = try? FileHandle(forReadingFrom: file) else {
-            return AppendedUsageResult(events: [], nextOffset: offset, cumulative: previousCumulative)
+            return AppendedUsageResult(events: [], nextOffset: offset, cumulative: previousCumulative, importedTurn: importedTurn)
         }
         defer { try? handle.close() }
         do {
             try handle.seek(toOffset: UInt64(offset))
             let data = try handle.readToEnd() ?? Data()
             guard let lastNewline = data.lastIndex(of: 0x0A) else {
-                return AppendedUsageResult(events: [], nextOffset: offset, cumulative: previousCumulative)
+                return AppendedUsageResult(events: [], nextOffset: offset, cumulative: previousCumulative, importedTurn: importedTurn)
             }
             let complete = data.prefix(through: lastNewline)
             var cumulative = previousCumulative
+            var importedTurn = importedTurn
             var candidates: [CandidateEvent] = []
             for rawLine in complete.split(separator: 0x0A) {
                 let line = Data(rawLine)
-                guard line.range(of: Data("\"token_count\"".utf8)) != nil,
+                guard line.range(of: Data("\"token_count\"".utf8)) != nil
+                    || line.range(of: Data("\"task_started\"".utf8)) != nil
+                    || line.range(of: Data("\"task_complete\"".utf8)) != nil,
                       let event = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
-                      let payload = event["payload"] as? [String: Any],
-                      payload["type"] as? String == "token_count",
+                      let payload = event["payload"] as? [String: Any] else { continue }
+                if payload["type"] as? String == "task_started" {
+                    importedTurn = (payload["turn_id"] as? String)?.hasPrefix("external-import-") == true
+                    continue
+                }
+                if payload["type"] as? String == "task_complete" {
+                    importedTurn = false
+                    continue
+                }
+                guard payload["type"] as? String == "token_count",
                       let info = payload["info"] as? [String: Any],
                       let totalUsage = usageSample(info["total_token_usage"]) else { continue }
                 guard let timestamp = date(event["timestamp"]) else { continue }
@@ -419,6 +437,8 @@ public struct TodayCodexUsageCollector: Sendable {
                     candidateTokens = lastUsage?.totalTokens ?? current
                 }
                 cumulative = current
+                // Imported history is a cumulative baseline, never fresh inference.
+                guard !importedTurn else { continue }
                 guard candidateTokens > 0 else { continue }
                 // A newly discovered fork can contain a byte-for-byte copy of
                 // earlier token rows. They establish the cumulative baseline
@@ -441,10 +461,11 @@ public struct TodayCodexUsageCollector: Sendable {
             return AppendedUsageResult(
                 events: candidates,
                 nextOffset: offset + Int64(complete.count),
-                cumulative: cumulative
+                cumulative: cumulative,
+                importedTurn: importedTurn
             )
         } catch {
-            return AppendedUsageResult(events: [], nextOffset: offset, cumulative: previousCumulative)
+            return AppendedUsageResult(events: [], nextOffset: offset, cumulative: previousCumulative, importedTurn: importedTurn)
         }
     }
 

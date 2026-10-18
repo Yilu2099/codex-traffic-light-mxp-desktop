@@ -1952,6 +1952,33 @@ func testTodayLiveCollectorBaselinesCopiedHistoryInNewFork() throws {
     try expectEqual(report.recent30MinuteTokens, 100_000, "only post-fork work belongs in the recent window")
 }
 
+func testTodayLiveCollectorExcludesImportedTurnsAcrossPolls() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("import-token-\(UUID().uuidString)")
+    let home = root.appendingPathComponent("codex")
+    let sessions = home.appendingPathComponent("sessions")
+    try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let collector = TodayCodexUsageCollector(stateURL: root.appendingPathComponent("state.json"))
+    let now = ISO8601DateFormatter().date(from: "2026-10-18T08:00:00Z")!
+    _ = collector.collect(codexHome: home, now: now)
+    let file = sessions.appendingPathComponent("rollout-2026-10-18T16-00-00-11111111-1111-1111-1111-111111111111.jsonl")
+    func append(_ rows: String, seconds: Double) throws {
+        if !FileManager.default.fileExists(atPath: file.path) { try Data().write(to: file) }
+        let handle = try FileHandle(forWritingTo: file)
+        try handle.seekToEnd(); try handle.write(contentsOf: Data((rows + "\n").utf8)); try handle.close()
+        try FileManager.default.setAttributes([.modificationDate: now.addingTimeInterval(seconds)], ofItemAtPath: file.path)
+    }
+    try append(#"{"type":"event_msg","timestamp":"2026-10-18T08:00:01Z","payload":{"type":"task_started","turn_id":"external-import-turn-1"}}"#, seconds: 1)
+    _ = collector.collect(codexHome: home, now: now.addingTimeInterval(1))
+    try append(#"{"type":"event_msg","timestamp":"2026-10-18T08:00:02Z","payload":{"type":"token_count","info":{"last_token_usage":{"total_tokens":39017},"total_token_usage":{"total_tokens":39017}}}}"#, seconds: 2)
+    let imported = collector.collect(codexHome: home, now: now.addingTimeInterval(2))
+    try expectEqual(imported.tokens, 0, "imported usage must not count, even when its marker was read in an earlier poll")
+    try expectEqual(imported.pendingTokens, 0, "imported history is not anomalous current usage")
+    try append(#"{"type":"event_msg","timestamp":"2026-10-18T08:00:03Z","payload":{"type":"task_complete","turn_id":"external-import-turn-1"}}"# + "\n" + #"{"type":"event_msg","timestamp":"2026-10-18T08:00:04Z","payload":{"type":"task_started","turn_id":"real-turn-1"}}"# + "\n" + #"{"type":"event_msg","timestamp":"2026-10-18T08:00:05Z","payload":{"type":"token_count","info":{"last_token_usage":{"total_tokens":100},"total_token_usage":{"total_tokens":39117}}}}"#, seconds: 5)
+    let genuine = collector.collect(codexHome: home, now: now.addingTimeInterval(5))
+    try expectEqual(genuine.tokens, 100, "a genuine continuation counts only the increment after the imported baseline")
+}
+
 func testTodayLiveCollectorFutureTimestampDoesNotPoisonEarlierValidWork() throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent("future-token-tail-\(UUID().uuidString)")
     let sessions = root.appendingPathComponent("codex/sessions")
@@ -4881,6 +4908,7 @@ let tests: [(String, () throws -> Void)] = [
     ("today live collector safely migrates v2", testTodayLiveCollectorMigratesV2WithoutResetAndClearsPendingNextDay),
     ("today live collector isolates future timestamps", testTodayLiveCollectorFutureTimestampDoesNotPoisonEarlierValidWork),
     ("today live collector baselines copied fork history", testTodayLiveCollectorBaselinesCopiedHistoryInNewFork),
+    ("today live collector excludes imported usage across polls", testTodayLiveCollectorExcludesImportedTurnsAcrossPolls),
     ("today live collector splits local and UTC days", testTodayLiveCollectorSplitsLocalAndUTCDayAtSettlementBoundary),
     ("today live collector protects legacy UTC baseline", testTodayLiveCollectorDoesNotTrustLegacyMidDayStateAsUTCBaseline),
     ("grind history collector safely backfills thirty days", testGrindHistoryIncrementalCollectorBackfillsThirtyDaysOnce),
