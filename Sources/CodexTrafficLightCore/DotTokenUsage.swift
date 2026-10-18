@@ -231,7 +231,7 @@ public actor DotTokenUsageObserver {
     private func setStatus(_ status: String) {
         if ledger.status != status {
             ledger.status = status; save()
-            audit.append([.init(source: "dot_local", kind: "connection", reason: status == "connected" ? "connected" : "unavailable", account: ledger.accountHash)])
+            if status != "connected" { audit.append([.init(source: "dot_local", kind: "connection", reason: "unavailable", account: ledger.accountHash)]) }
         }
     }
 
@@ -266,6 +266,7 @@ public actor DotTokenUsageObserver {
                     guard !executors.isEmpty else { throw URLError(.badServerResponse) }
                 }
                 observingSince = Date()
+                audit.append([.init(source: "dot_local", kind: "connection", reason: "connected", account: ledger.accountHash)])
                 setStatus("connected")
                 audit.append(ledger.entries.map { key, entry in
                     .init(source: "dot_local", kind: "baseline", reason: "audit_enabled", key: key, account: ledger.accountHash, eventAt: entry.observedAt, values: ["cumulative": entry.total])
