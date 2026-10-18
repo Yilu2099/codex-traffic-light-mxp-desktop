@@ -120,6 +120,7 @@ public struct DotTokenLedger: Codable, Sendable {
 private struct DotRPCFailure: Error, Sendable { let code: Int }
 
 public actor DotTokenUsageObserver {
+    private var audit: TokenCollectionAudit { TokenCollectionAudit(root: stateURL.deletingLastPathComponent().appendingPathComponent("token-audit")) }
     private let codexHome: URL
     private let stateURL: URL
     private var socket: URLSessionWebSocketTask?
@@ -129,6 +130,7 @@ public actor DotTokenUsageObserver {
     private var subscriptions = Set<String>()
     private var baselines = Set<String>()
     private var observingSince: Date?
+    private var nextInventoryAt = Date.distantPast
     private var retryAfter: [String: Date] = [:]
     private var stage = "connect"
     private var executors = Set<String>()
@@ -227,7 +229,10 @@ public actor DotTokenUsageObserver {
     }
 
     private func setStatus(_ status: String) {
-        if ledger.status != status { ledger.status = status; save() }
+        if ledger.status != status {
+            ledger.status = status; save()
+            audit.append([.init(source: "dot_local", kind: "connection", reason: status == "connected" ? "connected" : "unavailable", account: ledger.accountHash)])
+        }
     }
 
     public func run() async {
@@ -262,6 +267,9 @@ public actor DotTokenUsageObserver {
                 }
                 observingSince = Date()
                 setStatus("connected")
+                audit.append(ledger.entries.map { key, entry in
+                    .init(source: "dot_local", kind: "baseline", reason: "audit_enabled", key: key, account: ledger.accountHash, eventAt: entry.observedAt, values: ["cumulative": entry.total])
+                })
                 ledger.lastError = nil
                 save()
                 while !Task.isCancelled {
@@ -269,6 +277,8 @@ public actor DotTokenUsageObserver {
                     let latest = testThreadID == nil ? localExecutors() : executors
                     guard latest == executors else { break }
                     try await discover()
+                    do { try await inventoryOtherSources() }
+                    catch { audit.append([.init(source: "collector", kind: "failure", reason: "inventory_unavailable", account: ledger.accountHash)]) }
                     try await Task.sleep(for: .seconds(5))
                 }
             } catch {
@@ -314,7 +324,38 @@ public actor DotTokenUsageObserver {
         receiver?.cancel(); receiver = nil
         socket?.cancel(with: .goingAway, reason: nil); socket = nil
         for id in Array(pending.keys) { fail(id) }
+        if observingSince != nil { audit.append([.init(source: "dot_local", kind: "connection", reason: "disconnected", account: ledger.accountHash)]) }
         subscriptions.removeAll(); baselines.removeAll(); retryAfter.removeAll(); observingSince = nil
+    }
+
+    /// Inventory metadata only; unsupported source token counts remain unknown.
+    private func inventoryOtherSources() async throws {
+        let now = Date()
+        guard now >= nextInventoryAt else { return }
+        nextInventoryAt = now.addingTimeInterval(900)
+        var records: [TokenCollectionAudit.Record] = []
+        for archived in [false, true] {
+            var cursor: String?
+            for _ in 0..<10 {
+                let data = try await rpc("thread/list", ["archived": archived, "limit": 100, "sortKey": "updated_at", "sortDirection": "desc", "cursor": cursor as Any? ?? NSNull()])
+                let page = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
+                for thread in page["data"] as? [[String: Any]] ?? [] {
+                    guard !Self.isLocalDotThread(thread, executors: executors, now: now), let id = thread["id"] as? String,
+                          let updated = thread["updatedAt"] as? NSNumber, updated.doubleValue.isFinite,
+                          updated.doubleValue >= now.timeIntervalSince1970 - 86400, updated.doubleValue <= now.timeIntervalSince1970 + 300 else { continue }
+                    let origin = thread["originator"] as? String ?? "other"
+                    let source = origin == "codex_work_cca" && thread["threadSource"] as? String == "aeon_child" ? "dot_other_device" : "cloud_other"
+                    var r = TokenCollectionAudit.Record(source: source, kind: "excluded", reason: "unsupported_source", key: DotTokenLedger.key(account: account, thread: id), account: ledger.accountHash, values: ["sourceUpdatedAt": Int(updated.doubleValue)])
+                    r.origin = ["codex_cloud", "codex_work_mobile", "codex_work_web", "codex_work_cca"].contains(origin) ? origin : "other"
+                    if let parent = thread["parentThreadId"] as? String { r.parent = DotTokenLedger.key(account: account, thread: parent) }
+                    records.append(r)
+                }
+                cursor = page["nextCursor"] as? String
+                if cursor == nil { break }
+            }
+            if cursor != nil { records.append(.init(source: "collector", kind: "failure", reason: "inventory_limit", account: ledger.accountHash)) }
+        }
+        audit.append(records)
     }
 
     private func discover() async throws {
@@ -328,7 +369,9 @@ public actor DotTokenUsageObserver {
                       (retryAfter[id] ?? .distantPast) <= Date(),
                       !subscriptions.contains(id) else { continue }
                 let key = DotTokenLedger.key(account: account, thread: id)
-                if ledger.prepareFirstObservation(key: key, thread: thread, observingSince: observingSince, now: Date()) { save() }
+                if ledger.prepareFirstObservation(key: key, thread: thread, observingSince: observingSince, now: Date()) {
+                    audit.append([.init(source: "dot_local", kind: "baseline", reason: "fresh_zero", key: key, account: ledger.accountHash, values: ["cumulative": 0])]); save()
+                }
                 subscriptions.insert(id)
                 do {
                     _ = try await rpc("thread/resume", ["threadId": id, "excludeTurns": true])
@@ -361,8 +404,20 @@ public actor DotTokenUsageObserver {
                       let params = message["params"] as? [String: Any], let thread = params["threadId"] as? String,
                       subscriptions.contains(thread), let usage = params["tokenUsage"] as? [String: Any],
                       let raw = usage["total"] as? [String: Any], let total = DotTokenLedger.tokenTotal(raw) else { continue }
-                ledger.observe(key: DotTokenLedger.key(account: account, thread: thread), total: total,
-                               baseline: baselines.insert(thread).inserted, now: Date())
+                let now = Date(), key = DotTokenLedger.key(account: account, thread: thread)
+                let previous = ledger.entries[key], baseline = baselines.insert(thread).inserted
+                ledger.observe(key: key, total: total, baseline: baseline, now: now)
+                let day = SharedDateFormatters.shared.shanghaiDay.string(from: now)
+                let entry = ledger.entries[key]!
+                let counted = (entry.local[day] ?? 0) - (previous?.local[day] ?? 0)
+                let pending = (entry.pending[day] ?? 0) - (previous?.pending[day] ?? 0)
+                var values = ["cumulative": total, "counted": counted, "pending": pending]
+                if let previous { values["previous"] = previous.total; values["delta"] = max(0, total - previous.total) }
+                for (field, name) in [("inputTokens", "input"), ("cachedInputTokens", "cached"), ("outputTokens", "output"), ("reasoningOutputTokens", "reasoning"), ("cacheWriteInputTokens", "cacheWrite")] {
+                    if let value = raw[field] as? Int { values[name] = value }
+                }
+                let reason = previous == nil && baseline ? "first_existing" : total < (previous?.total ?? 0) ? "cumulative_reset" : pending > 0 ? "unattributed_or_large" : counted > 0 ? "confirmed" : "duplicate"
+                audit.append([.init(source: "dot_local", kind: counted > 0 ? "increment" : pending > 0 ? "pending" : previous == nil ? "baseline" : "excluded", reason: reason, key: key, account: ledger.accountHash, values: values, now: now)])
                 save()
             }
         } catch { if socket === task { for id in Array(pending.keys) { fail(id) } } }
@@ -379,6 +434,9 @@ public actor DotTokenUsageObserver {
             let name = file.url.lastPathComponent
             guard let range = name.range(of: pattern, options: .regularExpression) else { return nil }
             return DotTokenLedger.key(account: account, thread: String(name[range]))
+        })
+        TokenCollectionAudit(root: stateURL.deletingLastPathComponent().appendingPathComponent("token-audit")).append(ledger.entries.keys.filter { nativeKeys.contains($0) }.map {
+            .init(source: "dot_local", kind: "excluded", reason: "native_overlap", key: $0, account: ledger.accountHash)
         })
         return ledger.merging(report, nativeKeys: nativeKeys)
     }

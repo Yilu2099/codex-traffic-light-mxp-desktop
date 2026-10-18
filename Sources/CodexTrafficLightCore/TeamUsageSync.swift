@@ -1067,6 +1067,11 @@ public struct TeamUsageSyncService: Sendable {
             now: now
         )
         let todayLiveUsage = DotTokenUsageObserver.merging(nativeUsage, codexHome: configuration.codexHome, index: sessionFileIndex)
+        TokenCollectionAudit().append([.init(source: "combined", kind: "checkpoint", reason: "snapshot", account: TokenCollectionAudit.account(configuration.codexHome), values: [
+            "nativeLocal": nativeUsage.tokens, "nativeUTC": nativeUsage.utcTokens ?? 0,
+            "dotLocal": todayLiveUsage.tokens - nativeUsage.tokens, "dotUTC": (todayLiveUsage.utcTokens ?? 0) - (nativeUsage.utcTokens ?? 0),
+            "totalLocal": todayLiveUsage.tokens, "totalUTC": todayLiveUsage.utcTokens ?? 0, "utcAvailable": todayLiveUsage.utcTokens == nil ? 0 : 1,
+            "pending": todayLiveUsage.pendingTokens ?? 0, "dotSupported": 1, "cloudSupported": 0, "otherSupported": 0])])
         let interactionReport = CodexGrindHistoryCollector().collectIncremental(
             codexHome: configuration.codexHome,
             sessionFileIndex: sessionFileIndex,
@@ -1162,6 +1167,7 @@ public struct TeamUsageSyncService: Sendable {
         if payload.grindHistoryMode != "interaction_v8" || (result.humanInputModeAccepted == "interaction_v8" && result.humanInputDurable == true) {
             CodexGrindHistoryCollector().acknowledgeUploaded()
         }
+        await TokenCollectionAudit().upload(configuration: configuration)
         return result
     }
 

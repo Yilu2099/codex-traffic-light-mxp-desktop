@@ -61,6 +61,7 @@ public struct TodayCodexUsageCollector: Sendable {
     }
 
     private struct State: Codable {
+        var auditVersion: Int?
         var initialized: Bool
         var day: String
         var tokens: Int
@@ -95,6 +96,7 @@ public struct TodayCodexUsageCollector: Sendable {
         var timestamp: Date
         var tokens: Int
         var structurallyValid: Bool
+        var audit: TokenCollectionAudit.Record
     }
 
     private struct AppendedUsageResult {
@@ -102,6 +104,7 @@ public struct TodayCodexUsageCollector: Sendable {
         var nextOffset: Int64
         var cumulative: Int?
         var importedTurn: Bool = false
+        var audit: [TokenCollectionAudit.Record] = []
     }
 
     /// If an older Codex event omits `model_context_window`, quarantine only
@@ -166,7 +169,18 @@ public struct TodayCodexUsageCollector: Sendable {
         let day = dayString(now)
         let utcDay = utcDayString(now)
         let files = recentJSONLFiles(sessionFileIndex: sessionFileIndex, now: now)
+        let audit = TokenCollectionAudit(root: stateURL.deletingLastPathComponent().appendingPathComponent("token-audit"))
+        let account = TokenCollectionAudit.account(codexHome)
+        var observations: [TokenCollectionAudit.Record] = []
         let loadedState = loadState()
+        let needsAuditBaseline = loadedState?.auditVersion != 1
+        if needsAuditBaseline, let loadedState {
+            for file in files {
+                var values = ["offset": Int(loadedState.fileOffsets[file.stableKey] ?? 0)]
+                values["cumulative"] = loadedState.sessionCumulativeTokens[sessionID(file)]
+                observations.append(.init(source: nativeSource(file.url), kind: "baseline", reason: "audit_enabled", key: TokenCollectionAudit.hash(sessionID(file)), account: account, values: values, now: now))
+            }
+        }
         var state = loadedState ?? State(
             initialized: false,
             day: day,
@@ -223,6 +237,7 @@ public struct TodayCodexUsageCollector: Sendable {
         if !state.initialized {
             for file in files {
                 state.fileOffsets[file.stableKey] = file.size
+                observations.append(.init(source: nativeSource(file.url), kind: "baseline", reason: "first_existing", key: TokenCollectionAudit.hash(sessionID(file)), account: account, values: ["offset": Int(file.size)], now: now))
             }
             state.initialized = true
             state.eventValidationVersion = 4
@@ -268,6 +283,8 @@ public struct TodayCodexUsageCollector: Sendable {
                     from: startOffset,
                     previousCumulative: state.sessionCumulativeTokens[sessionID(file)],
                     importedTurn: state.importedTurns?[sessionID(file)] ?? false,
+                    auditAccount: account,
+                    auditNow: now,
                     minimumCountedAt: knownOffset == nil && startOffset == 0
                         ? newSessionWatermark(file: file, previousUpdate: previousUpdate)
                         : nil
@@ -275,6 +292,7 @@ public struct TodayCodexUsageCollector: Sendable {
                 state.importedTurns = state.importedTurns ?? [:]
                 state.importedTurns?[sessionID(file)] = result.importedTurn
                 candidates.append(contentsOf: result.events)
+                observations.append(contentsOf: result.audit)
                 state.fileOffsets[key] = result.nextOffset
                 stateChanged = true
                 if let cumulative = result.cumulative {
@@ -303,6 +321,11 @@ public struct TodayCodexUsageCollector: Sendable {
                         // must not advance or prune the real rolling window.
                         confirmed = false
                     }
+                    var observation = candidate.audit
+                    observation.kind = confirmed ? "increment" : "pending"
+                    observation.reason = !timestampIsPlausible ? "future_timestamp" : !candidate.structurallyValid ? "invalid_event" : !confirmed ? "rate_limit" : "confirmed"
+                    observation.values["counted"] = confirmed && (dayString(candidate.timestamp) == day || utcDayString(candidate.timestamp) == utcDay) ? candidate.tokens : 0
+                    observations.append(observation)
                     if dayString(candidate.timestamp) == day {
                         if confirmed {
                             state.tokens += candidate.tokens
@@ -344,6 +367,7 @@ public struct TodayCodexUsageCollector: Sendable {
             stateChanged = true
         }
         let collectedAt = isoString(now)
+        if audit.append(observations, now: now), needsAuditBaseline { state.auditVersion = 1; stateChanged = true }
         if stateChanged {
             state.updatedAt = collectedAt
             saveState(state)
@@ -386,10 +410,13 @@ public struct TodayCodexUsageCollector: Sendable {
         from offset: Int64,
         previousCumulative: Int?,
         importedTurn: Bool = false,
+        auditAccount: String? = nil,
+        auditNow: Date = Date(),
         minimumCountedAt: Date? = nil
     ) -> AppendedUsageResult {
         guard let handle = try? FileHandle(forReadingFrom: file) else {
-            return AppendedUsageResult(events: [], nextOffset: offset, cumulative: previousCumulative, importedTurn: importedTurn)
+            return AppendedUsageResult(events: [], nextOffset: offset, cumulative: previousCumulative, importedTurn: importedTurn,
+                audit: [.init(source: "native_unknown", kind: "failure", reason: "read_failed", key: TokenCollectionAudit.hash(sessionID(file)), now: auditNow)])
         }
         defer { try? handle.close() }
         do {
@@ -402,7 +429,12 @@ public struct TodayCodexUsageCollector: Sendable {
             var cumulative = previousCumulative
             var importedTurn = importedTurn
             var candidates: [CandidateEvent] = []
+            var observations: [TokenCollectionAudit.Record] = []
+            let auditKey = TokenCollectionAudit.hash(sessionID(file))
+            let source = nativeSource(file)
+            var lineOffset = offset
             for rawLine in complete.split(separator: 0x0A) {
+                lineOffset += Int64(rawLine.count + 1)
                 let line = Data(rawLine)
                 guard line.range(of: Data("\"token_count\"".utf8)) != nil
                     || line.range(of: Data("\"task_started\"".utf8)) != nil
@@ -436,14 +468,20 @@ public struct TodayCodexUsageCollector: Sendable {
                 } else {
                     candidateTokens = lastUsage?.totalTokens ?? current
                 }
+                var values = ["cumulative": current, "delta": candidateTokens, "offset": Int(lineOffset)]
+                if let cumulative { values["previous"] = cumulative }
+                for (k, v) in [("input", totalUsage.inputTokens), ("cached", totalUsage.cachedInputTokens), ("output", totalUsage.outputTokens), ("reasoning", totalUsage.reasoningOutputTokens), ("cacheWrite", totalUsage.cacheWriteInputTokens)] { if let v { values[k] = v } }
+                let eventAt = isoString(timestamp)
+                var observation = TokenCollectionAudit.Record(source: source, kind: "excluded", reason: "duplicate", key: auditKey, account: auditAccount, eventAt: eventAt, values: values, now: auditNow)
+                observation.eventKey = TokenCollectionAudit.hash("native|\(auditKey)|\(current)|\(eventAt)")
                 cumulative = current
                 // Imported history is a cumulative baseline, never fresh inference.
-                guard !importedTurn else { continue }
-                guard candidateTokens > 0 else { continue }
+                guard !importedTurn else { observation.reason = "external_import"; observations.append(observation); continue }
+                guard candidateTokens > 0 else { observations.append(observation); continue }
                 // A newly discovered fork can contain a byte-for-byte copy of
                 // earlier token rows. They establish the cumulative baseline
                 // but do not become new work on this device/day.
-                if let minimumCountedAt, timestamp < minimumCountedAt { continue }
+                if let minimumCountedAt, timestamp < minimumCountedAt { observation.reason = "copied_history"; observations.append(observation); continue }
                 let contextWindow = positiveInteger(info["model_context_window"])
                 let maximum = contextWindow ?? Self.fallbackMaximumSingleEventTokens
                 let lastMatchesDelta = lastUsage.map { $0.totalTokens == candidateTokens } ?? true
@@ -455,18 +493,30 @@ public struct TodayCodexUsageCollector: Sendable {
                 candidates.append(CandidateEvent(
                     timestamp: timestamp,
                     tokens: candidateTokens,
-                    structurallyValid: valid
+                    structurallyValid: valid,
+                    audit: observation
                 ))
             }
             return AppendedUsageResult(
                 events: candidates,
                 nextOffset: offset + Int64(complete.count),
                 cumulative: cumulative,
-                importedTurn: importedTurn
+                importedTurn: importedTurn,
+                audit: observations
             )
         } catch {
             return AppendedUsageResult(events: [], nextOffset: offset, cumulative: previousCumulative, importedTurn: importedTurn)
         }
+    }
+
+    private func nativeSource(_ file: URL) -> String {
+        guard let handle = try? FileHandle(forReadingFrom: file) else { return "native_unknown" }
+        defer { try? handle.close() }
+        guard let data = try? handle.read(upToCount: 64 * 1024), let first = data.split(separator: 10).first,
+              let row = try? JSONSerialization.jsonObject(with: Data(first)) as? [String: Any],
+              let payload = row["payload"] as? [String: Any] else { return "native_unknown" }
+        if let source = payload["source"] as? [String: Any], source["subagent"] != nil || source["subAgent"] != nil { return "native_subagent" }
+        return ["cli", "vscode", "exec", "appServer", "desktop"].contains(payload["source"] as? String ?? "") ? "native_user" : "native_unknown"
     }
 
     private func usageSample(_ value: Any?) -> UsageSample? {
@@ -542,7 +592,8 @@ public struct TodayCodexUsageCollector: Sendable {
     private func saveState(_ state: State) {
         try? FileManager.default.createDirectory(at: stateURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         guard let data = try? JSONEncoder().encode(state) else { return }
-        try? data.write(to: stateURL, options: [.atomic])
+        do { try data.write(to: stateURL, options: [.atomic]) }
+        catch { TokenCollectionAudit(root: stateURL.deletingLastPathComponent().appendingPathComponent("token-audit")).append([.init(source: "collector", kind: "failure", reason: "state_write_failed")]) }
     }
 
     private func sessionID(_ url: URL) -> String {

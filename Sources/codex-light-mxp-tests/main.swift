@@ -1772,6 +1772,10 @@ func testTodayLiveCollectorStartsAtEOFAndCountsOnlyAppendedUsage() throws {
     let persisted = try String(contentsOf: stateURL, encoding: .utf8)
     try expect(!persisted.contains("private text"), "collector state must never persist conversation text")
     try expect(persisted.contains("11111111-1111-1111-1111-111111111111"), "active cumulative session state must survive pruning")
+    let batch = try TokenCollectionAudit(root: stateURL.deletingLastPathComponent().appendingPathComponent("token-audit")).nextBatch()!
+    try expect(batch.events.contains { $0.kind == "increment" && $0.values["counted"] == 50 && $0.values["cumulative"] == 150 }, "source event and the actual decision are journaled")
+    try expect(!String(data: try JSONEncoder().encode(batch), encoding: .utf8)!.contains("private text"), "audit contains no conversation text")
+
 }
 
 func testTodayLiveCollectorRejectsSplitInheritedSpikeInNewShortSession() throws {
@@ -4834,7 +4838,33 @@ func testDotTokenUsageBoundaries() throws {
 
 }
 
+func testTokenCollectionAuditDurableQueue() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("token-audit-test-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let journal = TokenCollectionAudit(root: root)
+    journal.append((0..<350).map { .init(source: "native_subagent", kind: "increment", reason: "confirmed", values: ["counted": $0]) })
+    let first = try journal.nextBatch()!
+    try expectEqual(first.events.count, 300, "upload size stays bounded")
+    let retry = try journal.nextBatch()!
+    try expectEqual(retry.through, first.through, "failed transmission cannot advance the queue")
+    try expectEqual(retry.events.map(\.id), first.events.map(\.id), "retransmissions retain immutable event identities")
+    try journal.acknowledge(first)
+    let second = try journal.nextBatch()!
+    try expectEqual(second.events.count, 51, "all observations and the opening coverage marker survive batching")
+    let files = try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil).filter { $0.pathExtension == "jsonl" }
+    let h = try FileHandle(forWritingTo: files[0]); try h.seekToEnd(); try h.write(contentsOf: Data("{unfinished".utf8)); try h.close()
+    journal.append([.init(source: "collector", kind: "checkpoint", reason: "snapshot")])
+    let recovered = try journal.nextBatch()!
+    try expectEqual(recovered.events.count, 53, "crash tail is replaced by an explicit failure marker")
+    try expect(recovered.events.contains { $0.kind == "failure" && $0.reason == "partial_write" }, "lost bytes remain visible")
+    try journal.acknowledge(recovered)
+    try journal.acknowledge(first)
+    let drained = try journal.nextBatch()
+    try expect(drained == nil, "a late older receipt cannot regress acknowledgement")
+}
+
 let tests: [(String, () throws -> Void)] = [
+    ("token audit retains observations across retry and crash", testTokenCollectionAuditDurableQueue),
     ("native input handles large headers and excludes subagents", testNativeInputLargeHeaderAndSubagentBoundary),
     ("human input wire excludes unknown sources and identities", testHumanInputWireSeparatesConfirmedAndUnknown),
     ("native provenance separates unknown and automation", testNativeWorkdayProvenanceSeparatesUnknownAndAutomation),
