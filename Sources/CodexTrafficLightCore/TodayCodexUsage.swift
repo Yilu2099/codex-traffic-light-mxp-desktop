@@ -505,7 +505,8 @@ public struct TodayCodexUsageCollector: Sendable {
                 audit: observations
             )
         } catch {
-            return AppendedUsageResult(events: [], nextOffset: offset, cumulative: previousCumulative, importedTurn: importedTurn)
+            return AppendedUsageResult(events: [], nextOffset: offset, cumulative: previousCumulative, importedTurn: importedTurn,
+                audit: [.init(source: "native_unknown", kind: "failure", reason: "read_failed", key: TokenCollectionAudit.hash(sessionID(file)), account: auditAccount, now: auditNow)])
         }
     }
 
