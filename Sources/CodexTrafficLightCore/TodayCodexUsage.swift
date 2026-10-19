@@ -437,6 +437,7 @@ public struct TodayCodexUsageCollector: Sendable {
                 lineOffset += Int64(rawLine.count + 1)
                 let line = Data(rawLine)
                 guard line.range(of: Data("\"token_count\"".utf8)) != nil
+                    || line.range(of: Data("\"token_usage_record\"".utf8)) != nil
                     || line.range(of: Data("\"task_started\"".utf8)) != nil
                     || line.range(of: Data("\"task_complete\"".utf8)) != nil,
                       let event = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
@@ -449,9 +450,15 @@ public struct TodayCodexUsageCollector: Sendable {
                     importedTurn = false
                     continue
                 }
-                guard payload["type"] as? String == "token_count",
-                      let info = payload["info"] as? [String: Any],
-                      let totalUsage = usageSample(info["total_token_usage"]) else { continue }
+                let info: [String: Any]
+                if event["type"] as? String == "token_usage_record" {
+                    // Both formats share the thread cumulative counter, so the legacy echo adds zero.
+                    info = ["total_token_usage": payload["thread_token_usage"] as Any,
+                            "last_token_usage": payload["usage"] as Any]
+                } else if payload["type"] as? String == "token_count", let legacy = payload["info"] as? [String: Any] {
+                    info = legacy
+                } else { continue }
+                guard let totalUsage = usageSample(info["total_token_usage"]) else { continue }
                 guard let timestamp = date(event["timestamp"]) else { continue }
                 let current = totalUsage.totalTokens
                 guard current > 0 else { continue }
