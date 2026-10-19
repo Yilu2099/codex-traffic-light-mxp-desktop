@@ -1982,13 +1982,33 @@ func testTodayLiveCollectorExcludesImportedTurnsAcrossPolls() throws {
     let genuine = collector.collect(codexHome: home, now: now.addingTimeInterval(5))
     try expectEqual(genuine.tokens, 100, "a genuine continuation counts only the increment after the imported baseline")
     try append(#"{"type":"token_usage_record","timestamp":"2026-10-18T08:00:06Z","payload":{"usage":{"total_tokens":50},"thread_token_usage":{"total_tokens":39167}}}"#, seconds: 6)
-    try expectEqual(collector.collect(codexHome: home, now: now.addingTimeInterval(6)).tokens, 150, "new-format-only usage is counted")
+    try expectEqual(collector.collect(codexHome: home, now: now.addingTimeInterval(6)).tokens, 100, "alternate cumulative counters never modify legacy accounting")
     try append(#"{"type":"event_msg","timestamp":"2026-10-18T08:00:07Z","payload":{"type":"token_count","info":{"last_token_usage":{"total_tokens":50},"total_token_usage":{"total_tokens":39167}}}}"#, seconds: 7)
     try expectEqual(collector.collect(codexHome: home, now: now.addingTimeInterval(7)).tokens, 150, "legacy echo in the next poll is not counted twice")
     try append(#"{"type":"token_usage_record","timestamp":"2026-10-18T08:00:08Z","payload":{"usage":{"input_tokens":10,"output_tokens":5,"total_tokens":50},"thread_token_usage":{"total_tokens":39217}}}"#, seconds: 8)
     let invalid = collector.collect(codexHome: home, now: now.addingTimeInterval(8))
     try expectEqual(invalid.tokens, 150, "new-format invalid components cannot enter confirmed usage")
-    try expectEqual(invalid.pendingTokens, 50, "new-format invalid usage remains pending")
+    try expectEqual(invalid.pendingTokens, 0, "alternate records cannot manufacture a quarantine")
+    try append(#"{"type":"token_usage_record","timestamp":"2026-10-18T08:00:09Z","payload":{"usage":{"total_tokens":100},"thread_token_usage":{"total_tokens":40000}}}"# + "\n" + #"{"type":"event_msg","timestamp":"2026-10-18T08:00:10Z","payload":{"type":"token_count","info":{"last_token_usage":{"total_tokens":100},"total_token_usage":{"total_tokens":39267}}}}"#, seconds: 10)
+    // Reproduce the exact persisted quarantine produced by 1.2.145.
+    let stateFile = root.appendingPathComponent("state.json")
+    var stored = try JSONSerialization.jsonObject(with: Data(contentsOf: stateFile)) as! [String: Any]
+    stored.removeValue(forKey: "repairedMixedCounters")
+    stored["pendingTokens"] = 933; stored["anomalyCount"] = 2
+    let length = (try FileManager.default.attributesOfItem(atPath: file.path)[.size] as! NSNumber).intValue
+    stored["fileOffsets"] = (stored["fileOffsets"] as! [String: Int]).mapValues { _ in length }
+    try JSONSerialization.data(withJSONObject: stored).write(to: stateFile)
+    let audit = TokenCollectionAudit(root: root.appendingPathComponent("token-audit"))
+    let key = TokenCollectionAudit.hash("11111111-1111-1111-1111-111111111111")
+    for (stamp, total, delta) in [("2026-10-18T08:00:09.000Z", 40000, 833), ("2026-10-18T08:00:10.000Z", 39267, 100)] {
+        var r = TokenCollectionAudit.Record(source: "native_user", kind: "pending", reason: "invalid_event", key: key, eventAt: stamp, values: ["delta": delta], now: now.addingTimeInterval(10))
+        r.version = "1.2.145"; r.eventKey = TokenCollectionAudit.hash("native|\(key)|\(total)|\(stamp)")
+        try expect(audit.append([r], now: now.addingTimeInterval(10)), "repair evidence saved")
+    }
+    let repaired = collector.collect(codexHome: home, now: now.addingTimeInterval(11))
+    try expectEqual(repaired.tokens, 250, "only the verified legacy increment is recovered")
+    try expectEqual(repaired.pendingTokens, 0, "mixed-counter phantom quarantine removed")
+    try expectEqual(collector.collect(codexHome: home, now: now.addingTimeInterval(12)).tokens, 250, "repair is idempotent")
 }
 
 func testTodayLiveCollectorFutureTimestampDoesNotPoisonEarlierValidWork() throws {

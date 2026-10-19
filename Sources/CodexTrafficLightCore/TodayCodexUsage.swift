@@ -62,6 +62,7 @@ public struct TodayCodexUsageCollector: Sendable {
 
     private struct State: Codable {
         var auditVersion: Int?
+        var repairedMixedCounters: Bool?
         var initialized: Bool
         var day: String
         var tokens: Int
@@ -97,6 +98,7 @@ public struct TodayCodexUsageCollector: Sendable {
         var tokens: Int
         var structurallyValid: Bool
         var audit: TokenCollectionAudit.Record
+        var alternateEventKey: String? = nil
     }
 
     private struct AppendedUsageResult {
@@ -105,6 +107,7 @@ public struct TodayCodexUsageCollector: Sendable {
         var cumulative: Int?
         var importedTurn: Bool = false
         var audit: [TokenCollectionAudit.Record] = []
+        var alternateKeys: Set<String> = []
     }
 
     /// If an older Codex event omits `model_context_window`, quarantine only
@@ -234,6 +237,9 @@ public struct TodayCodexUsageCollector: Sendable {
             stateChanged = true
         }
 
+        if state.initialized, state.repairedMixedCounters != true {
+            stateChanged = repairMixedCounters(&state, files: files, audit: audit, account: account, now: now) || stateChanged
+        }
         if !state.initialized {
             for file in files {
                 state.fileOffsets[file.stableKey] = file.size
@@ -405,6 +411,70 @@ public struct TodayCodexUsageCollector: Sendable {
         return sessionFileIndex.uniqueFiles(modifiedSince: cutoff)
     }
 
+    // One-time repair of 1.2.145's mixed-counter quarantine, verified against original local rows.
+    private func repairMixedCounters(_ state: inout State, files: [CodexSessionFileIndex.Entry], audit: TokenCollectionAudit, account: String?, now: Date) -> Bool {
+        let days = Set([utcDayString(now), utcDayString(now.addingTimeInterval(-86400))])
+        var records: [TokenCollectionAudit.Record] = []
+        for day in days {
+            let file = audit.root.appendingPathComponent(day + ".jsonl")
+            if FileManager.default.fileExists(atPath: file.path) {
+                guard let data = try? Data(contentsOf: file) else { return false }
+                records += data.split(separator: 10).compactMap { try? JSONDecoder().decode(TokenCollectionAudit.Record.self, from: Data($0)) }
+            }
+        }
+        let wrong = records.filter { $0.account == account && $0.version == "1.2.145" && $0.source.hasPrefix("native_") && $0.kind == "pending" && $0.reason == "invalid_event" }
+        let pending = Dictionary(wrong.compactMap { r in r.eventKey.map { ($0, r) } }, uniquingKeysWith: { first, _ in first })
+        let confirmed = records.filter { $0.account == account && $0.source.hasPrefix("native_") && $0.kind == "increment" }
+        let confirmedKeys = Set(confirmed.compactMap(\.eventKey))
+        var window = confirmed.compactMap { r -> (Date, Int)? in
+            guard let stamp = r.eventAt.flatMap(isoDate), let n = r.values["counted"], n > 0 else { return nil }
+            return (stamp, n)
+        }
+        var corrected = state, recovered: [CandidateEvent] = [], removed = Set<String>()
+        for file in files {
+            guard let offset = state.fileOffsets[file.stableKey], offset > 0 else { continue }
+            let result = appendedUsage(file: file.url, from: 0, previousCumulative: nil, auditAccount: account, auditNow: now, through: offset)
+            guard result.nextOffset == offset else { return false }
+            if !result.alternateKeys.isEmpty, let n = result.cumulative {
+                corrected.sessionCumulativeTokens[sessionID(file)] = n
+            }
+            removed.formUnion(result.alternateKeys.filter { pending[$0] != nil })
+            recovered += result.events.filter { e in
+                guard e.structurallyValid, e.timestamp <= now, let key = e.audit.eventKey, pending[key] != nil else { return false }
+                return e.alternateEventKey.map { !confirmedKeys.contains($0) } ?? true
+            }
+        }
+        var observations: [TokenCollectionAudit.Record] = []
+        for e in recovered.sorted(by: { $0.timestamp < $1.timestamp }) {
+            let key = e.audit.eventKey!
+            guard !removed.contains(key), dayString(e.timestamp) == state.day else { continue }
+            let used = window.filter { $0.0 <= e.timestamp && $0.0 >= e.timestamp.addingTimeInterval(-Self.recentWindow) }.reduce(0) { $0 + $1.1 }
+            guard e.tokens <= max(0, Self.maximumConfirmedThirtyMinuteTokens - used) else { continue }
+            removed.insert(key); window.append((e.timestamp, e.tokens))
+            corrected.tokens += e.tokens
+            if utcDayString(e.timestamp) == state.utcDay { corrected.utcTokens = (corrected.utcTokens ?? 0) + e.tokens }
+            corrected.recentEvents = (corrected.recentEvents ?? []) + [RecentTokenEvent(timestamp: isoString(e.timestamp), tokens: e.tokens, confirmed: true)]
+            var r = e.audit; r.kind = "increment"; r.reason = "confirmed"; r.values["counted"] = e.tokens
+            r.eventKey = TokenCollectionAudit.hash("mixed-counter-repair|" + key); observations.append(r)
+        }
+        let cleared = removed.compactMap { pending[$0] }.filter { $0.eventAt.flatMap(isoDate).map(dayString) == state.day }
+        corrected.pendingTokens = max(0, (corrected.pendingTokens ?? 0) - cleared.reduce(0) { $0 + ($1.values["delta"] ?? 0) })
+        corrected.anomalyCount = max(0, (corrected.anomalyCount ?? 0) - cleared.count)
+        if !removed.isEmpty {
+            let backup = stateURL.appendingPathExtension("before-mixed-counter-repair")
+            if !FileManager.default.fileExists(atPath: backup.path) {
+                do {
+                    try Data(contentsOf: stateURL).write(to: backup, options: .atomic)
+                    try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: backup.path)
+                } catch { return false }
+            }
+        }
+        guard audit.append(observations, now: now) else { return false }
+        corrected.repairedMixedCounters = true
+        state = corrected
+        return true
+    }
+
     private func appendedUsage(
         file: URL,
         from offset: Int64,
@@ -412,7 +482,8 @@ public struct TodayCodexUsageCollector: Sendable {
         importedTurn: Bool = false,
         auditAccount: String? = nil,
         auditNow: Date = Date(),
-        minimumCountedAt: Date? = nil
+        minimumCountedAt: Date? = nil,
+        through: Int64? = nil
     ) -> AppendedUsageResult {
         guard let handle = try? FileHandle(forReadingFrom: file) else {
             return AppendedUsageResult(events: [], nextOffset: offset, cumulative: previousCumulative, importedTurn: importedTurn,
@@ -421,7 +492,9 @@ public struct TodayCodexUsageCollector: Sendable {
         defer { try? handle.close() }
         do {
             try handle.seek(toOffset: UInt64(offset))
-            let data = try handle.readToEnd() ?? Data()
+            let data: Data
+            if let through { data = try handle.read(upToCount: Int(max(0, through - offset))) ?? Data() }
+            else { data = try handle.readToEnd() ?? Data() }
             guard let lastNewline = data.lastIndex(of: 0x0A) else {
                 return AppendedUsageResult(events: [], nextOffset: offset, cumulative: previousCumulative, importedTurn: importedTurn)
             }
@@ -433,6 +506,8 @@ public struct TodayCodexUsageCollector: Sendable {
             let auditKey = TokenCollectionAudit.hash(sessionID(file))
             let source = nativeSource(file)
             var lineOffset = offset
+            var alternateKeys = Set<String>()
+            var alternateEventKey: String?
             for rawLine in complete.split(separator: 0x0A) {
                 lineOffset += Int64(rawLine.count + 1)
                 let line = Data(rawLine)
@@ -450,15 +525,18 @@ public struct TodayCodexUsageCollector: Sendable {
                     importedTurn = false
                     continue
                 }
-                let info: [String: Any]
                 if event["type"] as? String == "token_usage_record" {
-                    // Both formats share the thread cumulative counter, so the legacy echo adds zero.
-                    info = ["total_token_usage": payload["thread_token_usage"] as Any,
-                            "last_token_usage": payload["usage"] as Any]
-                } else if payload["type"] as? String == "token_count", let legacy = payload["info"] as? [String: Any] {
-                    info = legacy
-                } else { continue }
-                guard let totalUsage = usageSample(info["total_token_usage"]) else { continue }
+                    // This cumulative counter differs from token_count on some official clients.
+                    if let total = usageSample(payload["thread_token_usage"])?.totalTokens,
+                       let stamp = date(event["timestamp"]) {
+                        alternateEventKey = TokenCollectionAudit.hash("native|\(auditKey)|\(total)|\(isoString(stamp))")
+                        alternateKeys.insert(alternateEventKey!)
+                    }
+                    continue
+                }
+                guard payload["type"] as? String == "token_count",
+                      let info = payload["info"] as? [String: Any],
+                      let totalUsage = usageSample(info["total_token_usage"]) else { continue }
                 guard let timestamp = date(event["timestamp"]) else { continue }
                 let current = totalUsage.totalTokens
                 guard current > 0 else { continue }
@@ -501,7 +579,8 @@ public struct TodayCodexUsageCollector: Sendable {
                     timestamp: timestamp,
                     tokens: candidateTokens,
                     structurallyValid: valid,
-                    audit: observation
+                    audit: observation,
+                    alternateEventKey: alternateEventKey
                 ))
             }
             return AppendedUsageResult(
@@ -509,7 +588,8 @@ public struct TodayCodexUsageCollector: Sendable {
                 nextOffset: offset + Int64(complete.count),
                 cumulative: cumulative,
                 importedTurn: importedTurn,
-                audit: observations
+                audit: observations,
+                alternateKeys: alternateKeys
             )
         } catch {
             return AppendedUsageResult(events: [], nextOffset: offset, cumulative: previousCumulative, importedTurn: importedTurn,
