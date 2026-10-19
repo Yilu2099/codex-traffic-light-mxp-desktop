@@ -240,6 +240,11 @@ public struct TodayCodexUsageCollector: Sendable {
         if state.initialized, state.repairedMixedCounters != true {
             stateChanged = repairMixedCounters(&state, files: files, audit: audit, account: account, now: now) || stateChanged
         }
+        if state.repairedMixedCounters == true, (state.eventValidationVersion ?? 0) < 5,
+           FileManager.default.fileExists(atPath: stateURL.appendingPathExtension("before-mixed-counter-repair").path) {
+            state.eventValidationVersion = 5
+            stateChanged = true
+        }
         if !state.initialized {
             for file in files {
                 state.fileOffsets[file.stableKey] = file.size

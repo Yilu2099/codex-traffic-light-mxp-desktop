@@ -2008,6 +2008,7 @@ func testTodayLiveCollectorExcludesImportedTurnsAcrossPolls() throws {
     let repaired = collector.collect(codexHome: home, now: now.addingTimeInterval(11))
     try expectEqual(repaired.tokens, 250, "only the verified legacy increment is recovered")
     try expectEqual(repaired.pendingTokens, 0, "mixed-counter phantom quarantine removed")
+    try expectEqual(repaired.validationVersion, 5, "server can resolve a repaired v4 quarantine")
     try expectEqual(collector.collect(codexHome: home, now: now.addingTimeInterval(12)).tokens, 250, "repair is idempotent")
 }
 
