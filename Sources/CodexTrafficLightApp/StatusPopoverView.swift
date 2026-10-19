@@ -435,11 +435,6 @@ struct StatusPopoverView: View {
                 }
             }
 
-            Button(action: openBureau) {
-                footerLabel("企业客户", icon: "sparkles")
-            }
-            .disabled(model.websiteURL == nil)
-
             Link(destination: shareURL("huokebao")) {
                 footerLabel("抖音获客", icon: "person.2")
             }
