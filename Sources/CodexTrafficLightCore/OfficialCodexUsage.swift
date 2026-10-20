@@ -70,11 +70,15 @@ public enum OfficialUsageRefreshPolicy {
     }
 
     public static func cacheAge(for cached: OfficialCodexUsageReport?, now: Date = Date()) -> TimeInterval {
-        guard let cached, (cached.dataThrough ?? "") < expectedSettledDay(now: now) else {
-            return normalCacheAge
-        }
+        guard let cached else { return normalCacheAge }
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        // A bucket returned before its UTC day ended is still preliminary.
+        let observedAfterCutover = SharedDateFormatters.shared.iso8601Date(from: cached.updatedAt)
+            .map { $0 >= calendar.startOfDay(for: now) && $0 <= now } ?? false
+        if (cached.dataThrough ?? "") >= expectedSettledDay(now: now), observedAfterCutover {
+            return normalCacheAge
+        }
         let components = calendar.dateComponents([.hour, .minute], from: now)
         let minutes = (components.hour ?? 0) * 60 + (components.minute ?? 0)
         if minutes < 5 { return normalCacheAge }

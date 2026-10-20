@@ -4648,6 +4648,11 @@ func testOfficialUsageRefreshPolicyTracksUTCSettlement() throws {
     try expectEqual(OfficialUsageRefreshPolicy.expectedSettledDay(now: now), "2026-08-22", "expected official day should be the completed UTC day")
     try expectEqual(OfficialUsageRefreshPolicy.cacheAge(for: delayed, now: now), 5 * 60, "delayed bucket should refresh every five minutes after Beijing 08:05")
     try expectEqual(OfficialUsageRefreshPolicy.cacheAge(for: settled, now: now), 2 * 60 * 60, "settled bucket should return to normal cache age")
+    var preliminary = settled
+    preliminary.updatedAt = "2026-08-22T23:59:00Z"
+    try expectEqual(OfficialUsageRefreshPolicy.cacheAge(for: preliminary, now: now), 5 * 60, "matching date observed before UTC cutover is not settled")
+    preliminary.updatedAt = "invalid"
+    try expectEqual(OfficialUsageRefreshPolicy.cacheAge(for: preliminary, now: now), 5 * 60, "missing observation time cannot certify settlement")
     let later = formatter.date(from: "2026-08-23T02:00:00Z")!
     try expectEqual(OfficialUsageRefreshPolicy.cacheAge(for: delayed, now: later), 30 * 60, "delayed bucket should reduce polling after Beijing 10:00")
 }
