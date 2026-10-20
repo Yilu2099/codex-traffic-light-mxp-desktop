@@ -63,6 +63,7 @@ public struct TodayCodexUsageCollector: Sendable {
     private struct State: Codable {
         var auditVersion: Int?
         var repairedMixedCounters: Bool?
+        var repairedCompactionUsage: Bool?
         var initialized: Bool
         var day: String
         var tokens: Int
@@ -73,6 +74,8 @@ public struct TodayCodexUsageCollector: Sendable {
         var fileOffsets: [String: Int64]
         var sessionCumulativeTokens: [String: Int]
         var importedTurns: [String: Bool]?
+        var pendingCompactionUsage: [String: CandidateEvent]?
+        var observedCompactionRequests: [String: String]?
         var eventValidationVersion: Int?
         /// Separate from the parser version: only a fresh day may claim v4's
         /// authority to replace a lower same-day server counter.
@@ -93,12 +96,13 @@ public struct TodayCodexUsageCollector: Sendable {
         var componentsValid: Bool
     }
 
-    private struct CandidateEvent {
+    private struct CandidateEvent: Codable {
         var timestamp: Date
         var tokens: Int
         var structurallyValid: Bool
         var audit: TokenCollectionAudit.Record
         var alternateEventKey: String? = nil
+        var isCompaction: Bool = false
     }
 
     private struct AppendedUsageResult {
@@ -108,6 +112,7 @@ public struct TodayCodexUsageCollector: Sendable {
         var importedTurn: Bool = false
         var audit: [TokenCollectionAudit.Record] = []
         var alternateKeys: Set<String> = []
+        var pendingCompaction: CandidateEvent? = nil
     }
 
     /// If an older Codex event omits `model_context_window`, quarantine only
@@ -240,6 +245,9 @@ public struct TodayCodexUsageCollector: Sendable {
         if state.initialized, state.repairedMixedCounters != true {
             stateChanged = repairMixedCounters(&state, files: files, audit: audit, account: account, now: now) || stateChanged
         }
+        if state.initialized, state.repairedCompactionUsage != true {
+            stateChanged = repairCompactionUsage(&state, files: sessionFileIndex.uniqueFiles(modifiedSince: now.addingTimeInterval(-2 * 86400)), audit: audit, account: account, now: now) || stateChanged
+        }
         if state.repairedMixedCounters == true, (state.eventValidationVersion ?? 0) < 5,
            FileManager.default.fileExists(atPath: stateURL.appendingPathExtension("before-mixed-counter-repair").path) {
             state.eventValidationVersion = 5
@@ -294,6 +302,8 @@ public struct TodayCodexUsageCollector: Sendable {
                     from: startOffset,
                     previousCumulative: state.sessionCumulativeTokens[sessionID(file)],
                     importedTurn: state.importedTurns?[sessionID(file)] ?? false,
+                    pendingCompaction: state.pendingCompactionUsage?[sessionID(file)],
+                    observedCompactions: Set(state.observedCompactionRequests?.keys.map { $0 } ?? []),
                     auditAccount: account,
                     auditNow: now,
                     minimumCountedAt: knownOffset == nil && startOffset == 0
@@ -302,6 +312,14 @@ public struct TodayCodexUsageCollector: Sendable {
                 )
                 state.importedTurns = state.importedTurns ?? [:]
                 state.importedTurns?[sessionID(file)] = result.importedTurn
+                state.pendingCompactionUsage = state.pendingCompactionUsage ?? [:]
+                state.pendingCompactionUsage?[sessionID(file)] = result.pendingCompaction
+                for e in result.events where e.isCompaction {
+                    if let key = e.audit.eventKey {
+                        state.observedCompactionRequests = state.observedCompactionRequests ?? [:]
+                        state.observedCompactionRequests?[key] = utcDayString(now)
+                    }
+                }
                 candidates.append(contentsOf: result.events)
                 observations.append(contentsOf: result.audit)
                 state.fileOffsets[key] = result.nextOffset
@@ -374,6 +392,8 @@ public struct TodayCodexUsageCollector: Sendable {
         state.fileOffsets = state.fileOffsets.filter { activeKeys.contains($0.key) }
         state.sessionCumulativeTokens = state.sessionCumulativeTokens.filter { activeSessionIDs.contains($0.key) }
         state.importedTurns = state.importedTurns?.filter { activeSessionIDs.contains($0.key) }
+        state.pendingCompactionUsage = state.pendingCompactionUsage?.filter { activeSessionIDs.contains($0.key) }
+        state.observedCompactionRequests = state.observedCompactionRequests?.filter { $0.value >= utcDayString(now.addingTimeInterval(-2 * 86400)) }
         if state.fileOffsets.count != previousOffsetCount || state.sessionCumulativeTokens.count != previousSessionCount {
             stateChanged = true
         }
@@ -414,6 +434,57 @@ public struct TodayCodexUsageCollector: Sendable {
         let utcCutoff = utcCalendar.startOfDay(for: now)
         let cutoff = min(localCutoff, utcCutoff)
         return sessionFileIndex.uniqueFiles(modifiedSince: cutoff)
+    }
+
+    private func repairCompactionUsage(_ state: inout State, files: [CodexSessionFileIndex.Entry], audit: TokenCollectionAudit, account: String?, now: Date) -> Bool {
+        let cutoff = now.addingTimeInterval(-2 * 86400)
+        var duplicates = Set<String>(), counted = Set<String>()
+        let journals = (try? FileManager.default.contentsOfDirectory(at: audit.root, includingPropertiesForKeys: nil)) ?? []
+        for journal in journals where journal.pathExtension == "jsonl" && journal.lastPathComponent.prefix(10) >= utcDayString(cutoff) {
+            guard let data = try? Data(contentsOf: journal) else { return false }
+            for line in data.split(separator: 10) {
+                guard let r = try? JSONDecoder().decode(TokenCollectionAudit.Record.self, from: Data(line)), r.source.hasPrefix("native_"), r.account == account else { continue }
+                if r.kind == "increment", (r.values["counted"] ?? 0) > 0, let key = r.eventKey { counted.insert(key) }
+                if r.reason == "duplicate", r.values["delta"] == 0, let key = r.key, let stamp = r.eventAt { duplicates.insert(key + "|" + stamp) }
+            }
+        }
+        var recovered: [CandidateEvent] = []
+        for file in files where !duplicates.isEmpty {
+            let result = appendedUsage(file: file.url, from: 0, previousCumulative: nil, auditAccount: account, auditNow: now)
+            if result.nextOffset < file.size { return false }
+            for e in result.events where e.isCompaction && e.structurallyValid && e.timestamp >= cutoff && e.timestamp <= now {
+                guard let key = e.audit.eventKey, !counted.contains(key),
+                      !counted.contains(e.alternateEventKey ?? ""),
+                      duplicates.contains((e.audit.key ?? "") + "|" + (e.audit.eventAt ?? "")) else { continue }
+                counted.insert(key); recovered.append(e)
+            }
+        }
+        if !recovered.isEmpty {
+            let backup = stateURL.appendingPathExtension("before-compaction-repair")
+            do {
+                if !FileManager.default.fileExists(atPath: backup.path) {
+                    try Data(contentsOf: stateURL).write(to: backup, options: .atomic)
+                    try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: backup.path)
+                }
+            } catch { return false }
+        }
+        let records = recovered.map { e -> TokenCollectionAudit.Record in
+            var r = e.audit; r.kind = "increment"; r.reason = "confirmed"; r.values["counted"] = e.tokens; return r
+        }
+        guard audit.append(records, now: now) else { return false }
+        for e in recovered {
+            if let key = e.audit.eventKey {
+                state.observedCompactionRequests = state.observedCompactionRequests ?? [:]
+                state.observedCompactionRequests?[key] = utcDayString(now)
+            }
+            if dayString(e.timestamp) == state.day { state.tokens += e.tokens }
+            if utcDayString(e.timestamp) == state.utcDay { state.utcTokens = (state.utcTokens ?? 0) + e.tokens }
+            if e.timestamp >= now.addingTimeInterval(-Self.recentWindow) {
+                state.recentEvents = (state.recentEvents ?? []) + [RecentTokenEvent(timestamp: isoString(e.timestamp), tokens: e.tokens, confirmed: true)]
+            }
+        }
+        state.repairedCompactionUsage = true
+        return true
     }
 
     // One-time repair of 1.2.145's mixed-counter quarantine, verified against original local rows.
@@ -485,6 +556,8 @@ public struct TodayCodexUsageCollector: Sendable {
         from offset: Int64,
         previousCumulative: Int?,
         importedTurn: Bool = false,
+        pendingCompaction: CandidateEvent? = nil,
+        observedCompactions: Set<String> = [],
         auditAccount: String? = nil,
         auditNow: Date = Date(),
         minimumCountedAt: Date? = nil,
@@ -501,11 +574,13 @@ public struct TodayCodexUsageCollector: Sendable {
             if let through { data = try handle.read(upToCount: Int(max(0, through - offset))) ?? Data() }
             else { data = try handle.readToEnd() ?? Data() }
             guard let lastNewline = data.lastIndex(of: 0x0A) else {
-                return AppendedUsageResult(events: [], nextOffset: offset, cumulative: previousCumulative, importedTurn: importedTurn)
+                return AppendedUsageResult(events: [], nextOffset: offset, cumulative: previousCumulative, importedTurn: importedTurn, pendingCompaction: pendingCompaction)
             }
             let complete = data.prefix(through: lastNewline)
             var cumulative = previousCumulative
             var importedTurn = importedTurn
+            var pendingCompaction = pendingCompaction
+            var observedCompactions = observedCompactions
             var candidates: [CandidateEvent] = []
             var observations: [TokenCollectionAudit.Record] = []
             let auditKey = TokenCollectionAudit.hash(sessionID(file))
@@ -519,14 +594,17 @@ public struct TodayCodexUsageCollector: Sendable {
                 guard line.range(of: Data("\"token_count\"".utf8)) != nil
                     || line.range(of: Data("\"token_usage_record\"".utf8)) != nil
                     || line.range(of: Data("\"task_started\"".utf8)) != nil
-                    || line.range(of: Data("\"task_complete\"".utf8)) != nil,
+                    || line.range(of: Data("\"task_complete\"".utf8)) != nil
+                    || line.range(of: Data("\"compacted\"".utf8)) != nil,
                       let event = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
                       let payload = event["payload"] as? [String: Any] else { continue }
                 if payload["type"] as? String == "task_started" {
+                    pendingCompaction = nil
                     importedTurn = (payload["turn_id"] as? String)?.hasPrefix("external-import-") == true
                     continue
                 }
                 if payload["type"] as? String == "task_complete" {
+                    pendingCompaction = nil
                     importedTurn = false
                     continue
                 }
@@ -537,6 +615,23 @@ public struct TodayCodexUsageCollector: Sendable {
                         alternateEventKey = TokenCollectionAudit.hash("native|\(auditKey)|\(total)|\(isoString(stamp))")
                         alternateKeys.insert(alternateEventKey!)
                     }
+                    pendingCompaction = nil
+                    if !importedTurn, let request = payload["response_id"] as? String, !request.isEmpty,
+                       let usage = usageSample(payload["usage"]), usage.componentsPresent, usageIsValid(usage),
+                       let stamp = date(event["timestamp"]), minimumCountedAt.map({ stamp >= $0 }) ?? true {
+                        var r = TokenCollectionAudit.Record(source: source, kind: "excluded", reason: "confirmed", key: auditKey, account: auditAccount, eventAt: isoString(stamp), values: ["delta": usage.totalTokens], now: auditNow)
+                        r.eventKey = TokenCollectionAudit.hash("native-compaction|\(auditKey)|\(request)")
+                        pendingCompaction = CandidateEvent(timestamp: stamp, tokens: usage.totalTokens, structurallyValid: usage.totalTokens <= Self.fallbackMaximumSingleEventTokens, audit: r, alternateEventKey: alternateEventKey)
+                    }
+                    continue
+                }
+                if event["type"] as? String == "compacted" {
+                    if let stamp = date(event["timestamp"]), let request = pendingCompaction,
+                       stamp >= request.timestamp, stamp.timeIntervalSince(request.timestamp) <= 5 {
+                        pendingCompaction?.timestamp = stamp
+                        pendingCompaction?.audit.eventAt = isoString(stamp)
+                        pendingCompaction?.isCompaction = true
+                    } else { pendingCompaction = nil }
                     continue
                 }
                 guard payload["type"] as? String == "token_count",
@@ -558,6 +653,17 @@ public struct TodayCodexUsageCollector: Sendable {
                 } else {
                     candidateTokens = lastUsage?.totalTokens ?? current
                 }
+                // Compression is billed separately on clients whose legacy total stays unchanged.
+                if candidateTokens == 0, !importedTurn, let request = pendingCompaction,
+                   request.isCompaction, timestamp >= request.timestamp,
+                   timestamp.timeIntervalSince(request.timestamp) <= 5,
+                   let key = request.audit.eventKey, observedCompactions.insert(key).inserted {
+                    var compact = request
+                    compact.audit.values["previous"] = current
+                    compact.audit.values["cumulative"] = current
+                    candidates.append(compact)
+                }
+                pendingCompaction = nil
                 var values = ["cumulative": current, "delta": candidateTokens, "offset": Int(lineOffset)]
                 if let cumulative { values["previous"] = cumulative }
                 for (k, v) in [("input", totalUsage.inputTokens), ("cached", totalUsage.cachedInputTokens), ("output", totalUsage.outputTokens), ("reasoning", totalUsage.reasoningOutputTokens), ("cacheWrite", totalUsage.cacheWriteInputTokens)] { if let v { values[k] = v } }
@@ -594,7 +700,8 @@ public struct TodayCodexUsageCollector: Sendable {
                 cumulative: cumulative,
                 importedTurn: importedTurn,
                 audit: observations,
-                alternateKeys: alternateKeys
+                alternateKeys: alternateKeys,
+                pendingCompaction: pendingCompaction
             )
         } catch {
             return AppendedUsageResult(events: [], nextOffset: offset, cumulative: previousCumulative, importedTurn: importedTurn,

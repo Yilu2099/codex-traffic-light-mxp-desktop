@@ -2012,6 +2012,52 @@ func testTodayLiveCollectorExcludesImportedTurnsAcrossPolls() throws {
     try expectEqual(collector.collect(codexHome: home, now: now.addingTimeInterval(12)).tokens, 250, "repair is idempotent")
 }
 
+func testCompactionRequestCountsOnlyWithUnchangedLegacyTotal() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("compact-token-\(UUID().uuidString)")
+    let home = root.appendingPathComponent("codex"), state = root.appendingPathComponent("state.json")
+    let sessions = home.appendingPathComponent("sessions")
+    try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let now = ISO8601DateFormatter().date(from: "2026-10-19T08:00:00Z")!
+    let file = sessions.appendingPathComponent("rollout-2026-10-19T16-00-00-11111111-1111-1111-1111-111111111111.jsonl")
+    let collector = TodayCodexUsageCollector(stateURL: state)
+    _ = collector.collect(codexHome: home, now: now)
+    func append(_ row: String, _ seconds: Double) throws -> TodayLiveUsageReport {
+        if !FileManager.default.fileExists(atPath: file.path) { try Data().write(to: file) }
+        let h = try FileHandle(forWritingTo: file); try h.seekToEnd(); try h.write(contentsOf: Data((row + "\n").utf8)); try h.close()
+        try FileManager.default.setAttributes([.modificationDate: now.addingTimeInterval(seconds)], ofItemAtPath: file.path)
+        return collector.collect(codexHome: home, now: now.addingTimeInterval(seconds))
+    }
+    _ = try append(#"{"type":"event_msg","timestamp":"2026-10-19T08:00:01Z","payload":{"type":"token_count","info":{"last_token_usage":{"total_tokens":100},"total_token_usage":{"total_tokens":100}}}}"#, 1)
+    let request = #"{"type":"token_usage_record","timestamp":"2026-10-19T08:00:02Z","payload":{"response_id":"request-1","usage":{"input_tokens":30,"cached_input_tokens":20,"output_tokens":10,"total_tokens":40},"thread_token_usage":{"total_tokens":9000}}}"#
+    try expectEqual(try append(request, 2).tokens, 100, "normal alternate record alone never changes counters")
+    _ = try append(#"{"type":"compacted","timestamp":"2026-10-19T08:00:03Z","payload":{}}"#, 3)
+    let echo = #"{"type":"event_msg","timestamp":"2026-10-19T08:00:03Z","payload":{"type":"token_count","info":{"last_token_usage":{"total_tokens":100},"total_token_usage":{"total_tokens":100}}}}"#
+    try expectEqual(try append(echo, 4).tokens, 140, "compaction request survives separate polls and counts when legacy total did not move")
+    try expectEqual(collector.collect(codexHome: home, now: now.addingTimeInterval(5)).tokens, 140, "polling never repeats compaction")
+    // Reproduce an old client which observed the duplicate but ignored its compaction request.
+    var old = try JSONSerialization.jsonObject(with: Data(contentsOf: state)) as! [String: Any]
+    old["tokens"] = 100; old["utcTokens"] = 100; old.removeValue(forKey: "repairedCompactionUsage")
+    try JSONSerialization.data(withJSONObject: old).write(to: state)
+    let journal = root.appendingPathComponent("token-audit/2026-10-19.jsonl")
+    let original = try String(contentsOf: journal, encoding: .utf8).split(separator: "\n")
+    // Remove only the new compaction increment from the fixture journal, preserving the duplicate evidence.
+    let legacy = original.filter { line in
+        let r = try? JSONDecoder().decode(TokenCollectionAudit.Record.self, from: Data(line.utf8))
+        return !(r?.kind == "increment" && r?.values["previous"] == r?.values["cumulative"] && (r?.values["delta"] ?? 0) > 0)
+    }
+    try Data((legacy.joined(separator: "\n") + "\n").utf8).write(to: journal)
+    try expectEqual(collector.collect(codexHome: home, now: now.addingTimeInterval(6)).tokens, 140, "repair requires original request, compaction and recorded duplicate")
+    try expect(FileManager.default.fileExists(atPath: state.appendingPathExtension("before-compaction-repair").path), "repair backs up the old state")
+    try expectEqual(collector.collect(codexHome: home, now: now.addingTimeInterval(7)).tokens, 140, "repair is idempotent")
+    try expectEqual(try append(request + "\n" + #"{"type":"compacted","timestamp":"2026-10-19T08:00:03Z","payload":{}}"# + "\n" + echo, 7).tokens, 140, "repeated request IDs cannot count compression twice")
+    let ordinary = request.replacingOccurrences(of: "08:00:02", with: "08:00:08").replacingOccurrences(of: "request-1", with: "request-2")
+    _ = try append(ordinary, 8)
+    _ = try append(#"{"type":"compacted","timestamp":"2026-10-19T08:00:08Z","payload":{}}"#, 8)
+    let advanced = echo.replacingOccurrences(of: "08:00:03", with: "08:00:09").replacingOccurrences(of: "\"total_tokens\":100", with: "\"total_tokens\":140").replacingOccurrences(of: "\"last_token_usage\":{\"total_tokens\":140}", with: "\"last_token_usage\":{\"total_tokens\":40}")
+    try expectEqual(try append(advanced, 9).tokens, 180, "ordinary requests continue using legacy increments exactly once")
+}
+
 func testTodayLiveCollectorFutureTimestampDoesNotPoisonEarlierValidWork() throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent("future-token-tail-\(UUID().uuidString)")
     let sessions = root.appendingPathComponent("codex/sessions")
@@ -5024,6 +5070,7 @@ let tests: [(String, () throws -> Void)] = [
     ("today live collector isolates future timestamps", testTodayLiveCollectorFutureTimestampDoesNotPoisonEarlierValidWork),
     ("today live collector baselines copied fork history", testTodayLiveCollectorBaselinesCopiedHistoryInNewFork),
     ("today live collector excludes imported usage across polls", testTodayLiveCollectorExcludesImportedTurnsAcrossPolls),
+    ("compaction requests with unchanged legacy counters", testCompactionRequestCountsOnlyWithUnchangedLegacyTotal),
     ("today live collector splits local and UTC days", testTodayLiveCollectorSplitsLocalAndUTCDayAtSettlementBoundary),
     ("today live collector protects legacy UTC baseline", testTodayLiveCollectorDoesNotTrustLegacyMidDayStateAsUTCBaseline),
     ("grind history collector safely backfills thirty days", testGrindHistoryIncrementalCollectorBackfillsThirtyDaysOnce),
