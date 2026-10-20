@@ -2032,12 +2032,12 @@ func testCompactionRequestCountsOnlyWithUnchangedLegacyTotal() throws {
     let request = #"{"type":"token_usage_record","timestamp":"2026-10-19T08:00:02Z","payload":{"response_id":"request-1","usage":{"input_tokens":30,"cached_input_tokens":20,"output_tokens":10,"total_tokens":40},"thread_token_usage":{"total_tokens":9000}}}"#
     try expectEqual(try append(request, 2).tokens, 100, "normal alternate record alone never changes counters")
     _ = try append(#"{"type":"compacted","timestamp":"2026-10-19T08:00:03Z","payload":{}}"#, 3)
-    let echo = #"{"type":"event_msg","timestamp":"2026-10-19T08:00:03Z","payload":{"type":"token_count","info":{"last_token_usage":{"total_tokens":100},"total_token_usage":{"total_tokens":100}}}}"#
+    let echo = #"{"type":"event_msg","timestamp":"2026-10-19T08:00:03.010Z","payload":{"type":"token_count","info":{"last_token_usage":{"total_tokens":100},"total_token_usage":{"total_tokens":100}}}}"#
     try expectEqual(try append(echo, 4).tokens, 140, "compaction request survives separate polls and counts when legacy total did not move")
     try expectEqual(collector.collect(codexHome: home, now: now.addingTimeInterval(5)).tokens, 140, "polling never repeats compaction")
     // Reproduce an old client which observed the duplicate but ignored its compaction request.
     var old = try JSONSerialization.jsonObject(with: Data(contentsOf: state)) as! [String: Any]
-    old["tokens"] = 100; old["utcTokens"] = 100; old.removeValue(forKey: "repairedCompactionUsage")
+    old["tokens"] = 100; old["utcTokens"] = 100; old.removeValue(forKey: "repairedCompactionReceipts")
     try JSONSerialization.data(withJSONObject: old).write(to: state)
     let journal = root.appendingPathComponent("token-audit/2026-10-19.jsonl")
     let original = try String(contentsOf: journal, encoding: .utf8).split(separator: "\n")

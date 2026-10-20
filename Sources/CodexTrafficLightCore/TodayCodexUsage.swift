@@ -63,7 +63,7 @@ public struct TodayCodexUsageCollector: Sendable {
     private struct State: Codable {
         var auditVersion: Int?
         var repairedMixedCounters: Bool?
-        var repairedCompactionUsage: Bool?
+        var repairedCompactionReceipts: Bool?
         var initialized: Bool
         var day: String
         var tokens: Int
@@ -245,7 +245,7 @@ public struct TodayCodexUsageCollector: Sendable {
         if state.initialized, state.repairedMixedCounters != true {
             stateChanged = repairMixedCounters(&state, files: files, audit: audit, account: account, now: now) || stateChanged
         }
-        if state.initialized, state.repairedCompactionUsage != true {
+        if state.initialized, state.repairedCompactionReceipts != true {
             stateChanged = repairCompactionUsage(&state, files: sessionFileIndex.uniqueFiles(modifiedSince: now.addingTimeInterval(-2 * 86400)), audit: audit, account: account, now: now) || stateChanged
         }
         if state.repairedMixedCounters == true, (state.eventValidationVersion ?? 0) < 5,
@@ -483,7 +483,7 @@ public struct TodayCodexUsageCollector: Sendable {
                 state.recentEvents = (state.recentEvents ?? []) + [RecentTokenEvent(timestamp: isoString(e.timestamp), tokens: e.tokens, confirmed: true)]
             }
         }
-        state.repairedCompactionUsage = true
+        state.repairedCompactionReceipts = true
         return true
     }
 
@@ -659,6 +659,8 @@ public struct TodayCodexUsageCollector: Sendable {
                    timestamp.timeIntervalSince(request.timestamp) <= 5,
                    let key = request.audit.eventKey, observedCompactions.insert(key).inserted {
                     var compact = request
+                    compact.timestamp = timestamp
+                    compact.audit.eventAt = isoString(timestamp)
                     compact.audit.values["previous"] = current
                     compact.audit.values["cumulative"] = current
                     candidates.append(compact)
