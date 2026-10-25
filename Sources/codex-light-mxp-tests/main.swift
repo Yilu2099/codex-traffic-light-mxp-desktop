@@ -1315,6 +1315,18 @@ func testAdaptiveTeamSyncAndActivityMerge() throws {
     try expectEqual(merged.members.map(\.tokens), [123, 99], "activity cannot change Token totals or ordering")
     try expectEqual(merged.members.map(\.online), [true, true], "partial activity must preserve unreported members")
     try expectEqual(merged.updatedAt, snapshot.updatedAt, "heartbeats cannot disguise stale accounting as fresh")
+    let freshActivity = try JSONDecoder().decode(TeamActivitySnapshot.self, from: Data(#"{"members":[{"id":"a","online":true,"lastActive":"12:01","lastMessageAt":"2026-09-29T04:01:00Z"}]}"#.utf8))
+    let fresh = freshActivity.applying(to: merged)
+    try expectEqual(fresh.members[0].lastActive, "12:01", "presence and latest activity must update together")
+    try expectEqual(fresh.members[0].lastMessageAt, "2026-09-29T04:01:00Z", "activity refresh replaces the stale finish timestamp")
+    let legacy = activity.applying(to: fresh)
+    try expectEqual(legacy.members[0].lastActive, "12:01", "older activity responses preserve known timing")
+    try expectEqual(legacy.members[0].lastMessageAt, "2026-09-29T04:01:00Z", "missing legacy fields do not retract timing")
+    let retraction = try JSONDecoder().decode(TeamActivitySnapshot.self, from: Data(#"{"members":[{"id":"a","online":false,"lastActive":"-","lastMessageAt":null}]}"#.utf8))
+    let cleared = retraction.applying(to: fresh)
+    try expectEqual(cleared.members[0].lastActive, "-", "new responses can explicitly retract activity display")
+    try expectEqual(cleared.members[0].lastMessageAt, nil, "a new response null clears the stale finish timestamp")
+    try expectEqual(cleared.members[0].online, false, "retraction also updates presence")
 }
 
 func testTeamQuotaReportUsesWeeklyPercentAndReset() throws {
@@ -1820,7 +1832,7 @@ func testTodayLiveCollectorRejectsSplitInheritedSpikeInNewShortSession() throws 
     try expectEqual(report.utcTokens, nil, "a mid-day baseline still must not claim a complete UTC continuation")
     try expectEqual(report.counterVersion, 4, "validated reports retain the audited counter protocol")
     let persisted = try String(contentsOf: stateURL, encoding: .utf8)
-    try expect(persisted.contains(#""eventValidationVersion":4"#), "the lightweight validation migration must not rescan again")
+    try expect(persisted.contains(#""eventValidationVersion":6"#), "the lightweight validation migration must not rescan again")
 }
 
 func testTodayLiveCollectorQuarantinesKnownTailAndKeepsLaterWorkMoving() throws {
@@ -1848,15 +1860,15 @@ func testTodayLiveCollectorQuarantinesKnownTailAndKeepsLaterWorkMoving() throws 
     try handle.close()
 
     let report = collector.collect(codexHome: root.appendingPathComponent("codex"), now: formatter.date(from: "2026-08-26T04:03:00Z")!)
-    try expectEqual(report.tokens, 5_000_000, "an invalid known-file tail must not block the next valid turn")
-    try expectEqual(report.pendingTokens, 78_000_000, "context and 30-minute rate anomalies should both be quarantined")
-    try expectEqual(report.anomalyCount, 2, "both anomalous known-file tail events should remain auditable")
-    try expectEqual(report.recent30MinuteTokens, 5_000_000, "pending usage must not freeze the confirmed recent window")
+    try expectEqual(report.tokens, 65_000_000, "valid high-volume usage must count while the invalid tail stays isolated")
+    try expectEqual(report.pendingTokens, 18_000_000, "only the context-invalid event should be quarantined")
+    try expectEqual(report.anomalyCount, 1, "only the structurally invalid tail remains anomalous")
+    try expectEqual(report.recent30MinuteTokens, 65_000_000, "the recent window reports valid volume without a hard ceiling")
 
     let cached = collector.cachedReport(now: formatter.date(from: "2026-08-26T04:04:00Z")!)
-    try expectEqual(cached?.pendingTokens, 78_000_000, "presence heartbeats must preserve pending usage")
-    try expectEqual(cached?.anomalyCount, 2, "presence heartbeats must preserve the anomaly count")
-    try expectEqual(cached?.recent30MinuteTokens, 5_000_000, "presence heartbeats must preserve confirmed recent usage")
+    try expectEqual(cached?.pendingTokens, 18_000_000, "presence heartbeats must preserve pending usage")
+    try expectEqual(cached?.anomalyCount, 1, "presence heartbeats must preserve the anomaly count")
+    try expectEqual(cached?.recent30MinuteTokens, 65_000_000, "presence heartbeats must preserve confirmed recent usage")
     let persisted = try String(contentsOf: stateURL, encoding: .utf8)
     try expect(!persisted.contains("private conversation"), "token anomaly state must never persist conversation text")
 }
@@ -1900,9 +1912,9 @@ func testTodayLiveCollectorMigratesV2WithoutResetAndClearsPendingNextDay() throw
     let migrated = collector.collect(codexHome: root.appendingPathComponent("codex"), now: formatter.date(from: "2026-08-26T06:01:00Z")!)
     try expectEqual(migrated.tokens, 55_000_000, "v2 migration must preserve the manually repaired confirmed counter")
     try expectEqual(migrated.counterVersion, 2, "same-day v2 state must not gain authority to overwrite a manual v3 repair")
-    try expectEqual(migrated.validationVersion, 4, "same-day v2 state must advertise the new anomaly isolation capability separately")
+    try expectEqual(migrated.validationVersion, 6, "same-day v2 state must advertise parser capability separately")
     try expectEqual(migrated.pendingTokens, 0, "migration starts a fresh pending ledger without rescanning history")
-    try expect((try String(contentsOf: stateURL, encoding: .utf8)).contains(#""eventValidationVersion":4"#), "v4 migration should be durable")
+    try expect((try String(contentsOf: stateURL, encoding: .utf8)).contains(#""eventValidationVersion":6"#), "validation migration should be durable")
 
     let sessions = root.appendingPathComponent("codex/sessions")
     try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
@@ -1915,7 +1927,7 @@ func testTodayLiveCollectorMigratesV2WithoutResetAndClearsPendingNextDay() throw
     try FileManager.default.setAttributes([.modificationDate: formatter.date(from: "2026-08-26T06:03:30Z")!], ofItemAtPath: file.path)
     let guarded = collector.collect(codexHome: root.appendingPathComponent("codex"), now: formatter.date(from: "2026-08-26T06:04:00Z")!)
     try expectEqual(guarded.counterVersion, 2, "validated tails must not upgrade a legacy same-day counter's replacement authority")
-    try expectEqual(guarded.validationVersion, 4, "validated tails must keep advertising v4 isolation")
+    try expectEqual(guarded.validationVersion, 6, "validated tails keep advertising current isolation")
     try expectEqual(guarded.tokens, 60_000_000, "valid work after migration should continue from the preserved counter")
     try expectEqual(guarded.pendingTokens, 18_000_000, "same-day migrated state should quarantine an inherited anomaly")
     try expectEqual(guarded.recent30MinuteTokens, 5_000_000, "same-day migrated state should report only confirmed recent usage")
@@ -1923,7 +1935,7 @@ func testTodayLiveCollectorMigratesV2WithoutResetAndClearsPendingNextDay() throw
     let nextDay = collector.collect(codexHome: root.appendingPathComponent("codex"), now: formatter.date(from: "2026-08-27T06:01:00Z")!)
     try expectEqual(nextDay.tokens, 0, "confirmed local usage resets on the next calendar day")
     try expectEqual(nextDay.counterVersion, 4, "a fresh day may begin the validated v4 protocol")
-    try expectEqual(nextDay.validationVersion, 4, "a fresh day retains the v4 isolation capability")
+    try expectEqual(nextDay.validationVersion, 6, "a fresh day retains the current isolation capability")
     try expectEqual(nextDay.pendingTokens, 0, "pending usage resets on the next calendar day")
     try expectEqual(nextDay.anomalyCount, 0, "anomaly count resets on the next calendar day")
 }
@@ -2008,7 +2020,7 @@ func testTodayLiveCollectorExcludesImportedTurnsAcrossPolls() throws {
     let repaired = collector.collect(codexHome: home, now: now.addingTimeInterval(11))
     try expectEqual(repaired.tokens, 250, "only the verified legacy increment is recovered")
     try expectEqual(repaired.pendingTokens, 0, "mixed-counter phantom quarantine removed")
-    try expectEqual(repaired.validationVersion, 5, "server can resolve a repaired v4 quarantine")
+    try expectEqual(repaired.validationVersion, 6, "server can resolve a repaired quarantine")
     try expectEqual(collector.collect(codexHome: home, now: now.addingTimeInterval(12)).tokens, 250, "repair is idempotent")
 }
 
@@ -4999,6 +5011,8 @@ let tests: [(String, () throws -> Void)] = [
     ("quota snapshot stores reset dates", testQuotaSnapshotStoresResetDates),
     ("quota extractor reads top-level snake case", testQuotaExtractorReadsTopLevelSnakeCase),
     ("quota extractor reads nested camel case and clamps", testQuotaExtractorReadsNestedCamelCaseAndClamps),
+    ("high volume across native threads has no arbitrary rate ceiling", testTokenAccuracyHighVolumeAcrossThreadsHasNoRateCeiling),
+    ("rate pending repair revalidates raw rows and survives retry", testTokenAccuracyRepairsOnlyVerifiedRatePendingAndSurvivesRetry),
     ("quota extractor reads quota and rate limits nesting", testQuotaExtractorReadsQuotaAndRateLimitsNesting),
     ("quota extractor rejects Spark limit", testQuotaExtractorRejectsSparkLimit),
     ("quota extractor requires weekly data", testQuotaExtractorRequiresBothWindows),

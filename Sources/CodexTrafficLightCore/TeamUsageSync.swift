@@ -610,14 +610,24 @@ public struct TeamActivitySnapshot: Codable, Sendable {
     public struct Member: Codable, Sendable {
         public var id: String
         public var online: Bool
+        public var lastActive: String?
+        public var lastMessageAt: String?
     }
     public var members: [Member]
 
     public func applying(to snapshot: TeamRankingSnapshot) -> TeamRankingSnapshot {
-        let activity = Dictionary(members.map { ($0.id, $0.online) }, uniquingKeysWith: { _, last in last })
+        let activity = Dictionary(members.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
         var result = snapshot
         for index in result.members.indices {
-            if let online = activity[result.members[index].id] { result.members[index].online = online }
+            if let current = activity[result.members[index].id] {
+                result.members[index].online = current.online
+                // New activity responses carry the same human timestamp as rankings.
+                // Older servers omit lastActive, so retain their cached time fields.
+                if let lastActive = current.lastActive {
+                    result.members[index].lastActive = lastActive
+                    result.members[index].lastMessageAt = current.lastMessageAt
+                }
+            }
         }
         return result
     }

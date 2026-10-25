@@ -65,6 +65,7 @@ public struct TodayCodexUsageCollector: Sendable {
         var auditVersion: Int?
         var repairedMixedCounters: Bool?
         var repairedCompactionReceipts: Bool?
+        var repairedRateLimits: Bool?
         var initialized: Bool
         var day: String
         var tokens: Int
@@ -124,7 +125,6 @@ public struct TodayCodexUsageCollector: Sendable {
     /// If an older Codex event omits `model_context_window`, quarantine only
     /// very large turns. Current events use their actual context limit.
     private static let fallbackMaximumSingleEventTokens = 2_000_000
-    private static let maximumConfirmedThirtyMinuteTokens = 50_000_000
     private static let recentWindow: TimeInterval = 30 * 60
 
     private let stateURL: URL
@@ -205,7 +205,7 @@ public struct TodayCodexUsageCollector: Sendable {
             updatedAt: isoString(now),
             fileOffsets: [:],
             sessionCumulativeTokens: [:],
-            eventValidationVersion: 4,
+            eventValidationVersion: 6,
             reportCounterVersion: 4,
             pendingTokens: 0,
             anomalyCount: 0,
@@ -254,6 +254,9 @@ public struct TodayCodexUsageCollector: Sendable {
         if state.initialized, state.repairedCompactionReceipts != true {
             stateChanged = repairCompactionUsage(&state, files: sessionFileIndex.uniqueFiles(modifiedSince: now.addingTimeInterval(-2 * 86400)), audit: audit, account: account, now: now) || stateChanged
         }
+        if state.initialized, state.repairedRateLimits != true {
+            stateChanged = repairRateLimitedUsage(&state, files: sessionFileIndex.uniqueFiles(modifiedSince: now.addingTimeInterval(-2 * 86400)), audit: audit, account: account, now: now) || stateChanged
+        }
         if state.repairedMixedCounters == true, (state.eventValidationVersion ?? 0) < 5,
            FileManager.default.fileExists(atPath: stateURL.appendingPathExtension("before-mixed-counter-repair").path) {
             state.eventValidationVersion = 5
@@ -265,7 +268,7 @@ public struct TodayCodexUsageCollector: Sendable {
                 observations.append(.init(source: nativeSource(file.url), kind: "baseline", reason: "first_existing", key: TokenCollectionAudit.hash(sessionID(file)), account: account, values: ["offset": Int(file.size)], now: now))
             }
             state.initialized = true
-            state.eventValidationVersion = 4
+            state.eventValidationVersion = 6
             state.reportCounterVersion = 4
             stateChanged = true
         } else {
@@ -351,11 +354,7 @@ public struct TodayCodexUsageCollector: Sendable {
                     if timestampIsPlausible {
                         let cutoff = candidate.timestamp.addingTimeInterval(-Self.recentWindow)
                         recent.removeAll { $0.0 < cutoff }
-                        let confirmedInWindow = recent.reduce(0) { partial, item in
-                            item.2 && item.0 <= candidate.timestamp ? partial + item.1 : partial
-                        }
-                        let withinRate = candidate.tokens <= max(0, Self.maximumConfirmedThirtyMinuteTokens - confirmedInWindow)
-                        confirmed = candidate.structurallyValid && withinRate
+                        confirmed = candidate.structurallyValid
                         recent.append((candidate.timestamp, candidate.tokens, confirmed))
                     } else {
                         // A far-future row is auditable pending usage, but it
@@ -364,7 +363,7 @@ public struct TodayCodexUsageCollector: Sendable {
                     }
                     var observation = candidate.audit
                     observation.kind = confirmed ? "increment" : "pending"
-                    observation.reason = !timestampIsPlausible ? "future_timestamp" : !candidate.structurallyValid ? "invalid_event" : !confirmed ? "rate_limit" : "confirmed"
+                    observation.reason = !timestampIsPlausible ? "future_timestamp" : !candidate.structurallyValid ? "invalid_event" : "confirmed"
                     observation.values["counted"] = confirmed && (dayString(candidate.timestamp) == day || utcDayString(candidate.timestamp) == utcDay) ? candidate.tokens : 0
                     observations.append(observation)
                     if dayString(candidate.timestamp) == day {
@@ -515,10 +514,6 @@ public struct TodayCodexUsageCollector: Sendable {
         let pending = Dictionary(wrong.compactMap { r in r.eventKey.map { ($0, r) } }, uniquingKeysWith: { first, _ in first })
         let confirmed = records.filter { $0.account == account && $0.source.hasPrefix("native_") && $0.kind == "increment" }
         let confirmedKeys = Set(confirmed.compactMap(\.eventKey))
-        var window = confirmed.compactMap { r -> (Date, Int)? in
-            guard let stamp = r.eventAt.flatMap(isoDate), let n = r.values["counted"], n > 0 else { return nil }
-            return (stamp, n)
-        }
         var corrected = state, recovered: [CandidateEvent] = [], removed = Set<String>()
         for file in files {
             guard let offset = state.fileOffsets[file.stableKey], offset > 0 else { continue }
@@ -537,9 +532,7 @@ public struct TodayCodexUsageCollector: Sendable {
         for e in recovered.sorted(by: { $0.timestamp < $1.timestamp }) {
             let key = e.audit.eventKey!
             guard !removed.contains(key), dayString(e.timestamp) == state.day else { continue }
-            let used = window.filter { $0.0 <= e.timestamp && $0.0 >= e.timestamp.addingTimeInterval(-Self.recentWindow) }.reduce(0) { $0 + $1.1 }
-            guard e.tokens <= max(0, Self.maximumConfirmedThirtyMinuteTokens - used) else { continue }
-            removed.insert(key); window.append((e.timestamp, e.tokens))
+            removed.insert(key)
             corrected.tokens += e.tokens
             if utcDayString(e.timestamp) == state.utcDay { corrected.utcTokens = (corrected.utcTokens ?? 0) + e.tokens }
             corrected.recentEvents = (corrected.recentEvents ?? []) + [RecentTokenEvent(timestamp: isoString(e.timestamp), tokens: e.tokens, confirmed: true)]
@@ -560,6 +553,67 @@ public struct TodayCodexUsageCollector: Sendable {
         }
         guard audit.append(observations, now: now) else { return false }
         corrected.repairedMixedCounters = true
+        state = corrected
+        return true
+    }
+
+    // Revalidate only previously rate-limited rows, never trust an audit delta as
+    // spending by itself. The state marker and counters are saved atomically;
+    // deterministic repair audit keys make an audit-before-state retry harmless.
+    private func repairRateLimitedUsage(_ state: inout State, files: [CodexSessionFileIndex.Entry], audit: TokenCollectionAudit, account: String?, now: Date) -> Bool {
+        var records: [TokenCollectionAudit.Record] = []
+        for day in Set([utcDayString(now), utcDayString(now.addingTimeInterval(-86400))]) {
+            let file = audit.root.appendingPathComponent(day + ".jsonl")
+            guard FileManager.default.fileExists(atPath: file.path) else { continue }
+            guard let data = try? Data(contentsOf: file) else { return false }
+            records += data.split(separator: 10).compactMap { try? JSONDecoder().decode(TokenCollectionAudit.Record.self, from: Data($0)) }
+        }
+        let pending = Dictionary(records.filter { r in
+            guard r.account == account, r.source.hasPrefix("native_"), r.kind == "pending", r.reason == "rate_limit",
+                  let stamp = r.eventAt.flatMap(isoDate) else { return false }
+            return dayString(stamp) == state.day || utcDayString(stamp) == state.utcDay
+        }.compactMap { r in r.eventKey.map { ($0, r) } }, uniquingKeysWith: { first, _ in first })
+        let confirmed = Set(records.filter { $0.account == account && $0.source.hasPrefix("native_") && $0.kind == "increment" }.compactMap(\.eventKey))
+        let threadKeys = Set(pending.values.compactMap(\.key))
+        var corrected = state, recovered = Set<String>(), observations: [TokenCollectionAudit.Record] = []
+        for file in files where threadKeys.contains(TokenCollectionAudit.hash(sessionID(file))) {
+            guard let offset = state.fileOffsets[file.stableKey] ?? state.fileOffsets[file.path], offset > 0 else { continue }
+            let result = appendedUsage(file: file.url, from: 0, previousCumulative: nil, auditAccount: account, auditNow: now, through: offset)
+            guard result.nextOffset == offset else { return false }
+            for event in result.events {
+                guard event.structurallyValid, event.timestamp <= now,
+                      let key = event.audit.eventKey, let old = pending[key], !confirmed.contains(key),
+                      !confirmed.contains(TokenCollectionAudit.hash("mixed-counter-repair|" + key)),
+                      event.alternateEventKey.map({ !confirmed.contains($0) }) ?? true,
+                      recovered.insert(key).inserted else { continue }
+                if dayString(event.timestamp) == state.day {
+                    corrected.tokens += event.tokens
+                    corrected.pendingTokens = max(0, (corrected.pendingTokens ?? 0) - (old.values["delta"] ?? 0))
+                    corrected.anomalyCount = max(0, (corrected.anomalyCount ?? 0) - 1)
+                }
+                if utcDayString(event.timestamp) == state.utcDay { corrected.utcTokens = (corrected.utcTokens ?? 0) + event.tokens }
+                if event.timestamp >= now.addingTimeInterval(-Self.recentWindow) {
+                    corrected.recentEvents = (corrected.recentEvents ?? []) + [.init(timestamp: isoString(event.timestamp), tokens: event.tokens, confirmed: true)]
+                }
+                var r = event.audit
+                r.kind = "increment"; r.reason = "confirmed"; r.values["counted"] = event.tokens
+                r.eventKey = TokenCollectionAudit.hash("rate-limit-repair|" + key)
+                observations.append(r)
+            }
+        }
+        if !recovered.isEmpty {
+            let backup = stateURL.appendingPathExtension("before-rate-limit-repair")
+            if !FileManager.default.fileExists(atPath: backup.path) {
+                do {
+                    try Data(contentsOf: stateURL).write(to: backup, options: .atomic)
+                    try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: backup.path)
+                }
+                catch { return false }
+            }
+        }
+        guard audit.append(observations, now: now) else { return false }
+        corrected.repairedRateLimits = true
+        corrected.eventValidationVersion = 6
         state = corrected
         return true
     }

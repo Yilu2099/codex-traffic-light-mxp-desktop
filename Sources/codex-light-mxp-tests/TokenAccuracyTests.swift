@@ -40,6 +40,63 @@ private final class TokenAccuracyFixture {
     func collect(_ seconds: Double) -> TodayLiveUsageReport { collector.collect(codexHome: home, now: start.addingTimeInterval(seconds)) }
 }
 
+func testTokenAccuracyHighVolumeAcrossThreadsHasNoRateCeiling() throws {
+    let f = try TokenAccuracyFixture()
+    for index in 1...4 {
+        let id = String(format: "%08d-1111-4111-8111-111111111111", index)
+        let rows = [f.meta(id, created: 0)] + (1...65).map { n in f.usage(n * 200_000, last: 200_000, at: Double(n)) }
+        try f.write(rows, to: f.file(id), at: 65)
+    }
+    let report = f.collect(70)
+    try expectEqual(report.tokens, 52_000_000, "independent valid requests across four threads exceed the old global cap")
+    try expectEqual(report.recent30MinuteTokens, 52_000_000, "the window measures volume, not permission to count")
+    try expectEqual(report.pendingTokens, 0, "high volume alone creates no quarantine")
+    try expectEqual(report.validationVersion, 6, "the server can distinguish the repaired parser")
+    try expectEqual(report.counterVersion, 4, "parser upgrade grants no new replacement authority")
+}
+
+func testTokenAccuracyRepairsOnlyVerifiedRatePendingAndSurvivesRetry() throws {
+    let f = try TokenAccuracyFixture()
+    let id = "11111111-1111-4111-8111-111111111111"
+    try f.write([f.meta(id, created: 0), f.usage(100, last: 100, at: 1), f.usage(150, last: 50, at: 2),
+        f.usage(18_000_150, last: 18_000_000, at: 3)], to: f.file(id), at: 3)
+    _ = f.collect(4)
+    let stateURL = f.root.appendingPathComponent("state.json")
+    var state = try JSONSerialization.jsonObject(with: Data(contentsOf: stateURL)) as! [String: Any]
+    state["tokens"] = 100; state["utcTokens"] = 100
+    state["pendingTokens"] = 18_000_050; state["anomalyCount"] = 2
+    state.removeValue(forKey: "repairedRateLimits")
+    state["eventValidationVersion"] = 5
+    state["recentEvents"] = []
+    let oldState = try JSONSerialization.data(withJSONObject: state)
+    try oldState.write(to: stateURL)
+    let auditURL = f.root.appendingPathComponent("token-audit/2026-10-26.jsonl")
+    let lines = try String(contentsOf: auditURL, encoding: .utf8).split(separator: "\n")
+    var rewritten = Data()
+    for line in lines {
+        var row = try JSONSerialization.jsonObject(with: Data(line.utf8)) as! [String: Any]
+        if (row["values"] as? [String: Int])?["delta"] == 50 {
+            row["kind"] = "pending"; row["reason"] = "rate_limit"
+            var values = row["values"] as! [String: Int]; values["counted"] = 0; row["values"] = values
+        }
+        rewritten.append(try JSONSerialization.data(withJSONObject: row)); rewritten.append(10)
+    }
+    try rewritten.write(to: auditURL)
+    let repaired = f.collect(5)
+    try expectEqual(repaired.tokens, 150, "only the raw-log verified rate-limited delta is restored")
+    try expectEqual(repaired.pendingTokens, 18_000_000, "a structurally invalid event remains quarantined")
+    try expectEqual(repaired.anomalyCount, 1, "repair clears only the rate-limit anomaly")
+    try expectEqual(f.collect(6).tokens, 150, "the migration is idempotent")
+    // Simulate process loss after audit append and before atomic state save.
+    try oldState.write(to: stateURL)
+    try expectEqual(f.collect(7).tokens, 150, "an audit-before-state crash does not lose or double the recovery")
+    try oldState.write(to: stateURL)
+    try FileManager.default.removeItem(at: f.file(id))
+    let missing = f.collect(8)
+    try expectEqual(missing.tokens, 100, "an audit delta without the original file cannot manufacture spending")
+    try expectEqual(missing.pendingTokens, 18_000_050, "unverifiable pending usage remains visible")
+}
+
 func testTokenAccuracyForkUsesExactCreationBoundary() throws {
     let f = try TokenAccuracyFixture()
     let parent = "11111111-1111-4111-8111-111111111111", child = "22222222-2222-4222-8222-222222222222"
