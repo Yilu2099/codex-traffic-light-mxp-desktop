@@ -1,4 +1,5 @@
 import Foundation
+import CoreFoundation
 
 public struct TodayLiveUsageReport: Codable, Equatable, Sendable {
     public var day: String
@@ -76,6 +77,7 @@ public struct TodayCodexUsageCollector: Sendable {
         var importedTurns: [String: Bool]?
         var pendingCompactionUsage: [String: CandidateEvent]?
         var observedCompactionRequests: [String: String]?
+        var nativeReceipts: [String: NativeUsageReceipt]?
         var eventValidationVersion: Int?
         /// Separate from the parser version: only a fresh day may claim v4's
         /// authority to replace a lower same-day server counter.
@@ -103,6 +105,7 @@ public struct TodayCodexUsageCollector: Sendable {
         var audit: TokenCollectionAudit.Record
         var alternateEventKey: String? = nil
         var isCompaction: Bool = false
+        var responseID: String? = nil
     }
 
     private struct AppendedUsageResult {
@@ -113,6 +116,7 @@ public struct TodayCodexUsageCollector: Sendable {
         var audit: [TokenCollectionAudit.Record] = []
         var alternateKeys: Set<String> = []
         var pendingCompaction: CandidateEvent? = nil
+        var receipt = NativeUsageReceipt()
     }
 
     /// If an older Codex event omits `model_context_window`, quarantine only
@@ -304,6 +308,7 @@ public struct TodayCodexUsageCollector: Sendable {
                     importedTurn: state.importedTurns?[sessionID(file)] ?? false,
                     pendingCompaction: state.pendingCompactionUsage?[sessionID(file)],
                     observedCompactions: Set(state.observedCompactionRequests?.keys.map { $0 } ?? []),
+                    receipt: state.nativeReceipts?[sessionID(file)] ?? NativeUsageReceipt(),
                     auditAccount: account,
                     auditNow: now,
                     minimumCountedAt: knownOffset == nil && startOffset == 0
@@ -314,6 +319,8 @@ public struct TodayCodexUsageCollector: Sendable {
                 state.importedTurns?[sessionID(file)] = result.importedTurn
                 state.pendingCompactionUsage = state.pendingCompactionUsage ?? [:]
                 state.pendingCompactionUsage?[sessionID(file)] = result.pendingCompaction
+                state.nativeReceipts = state.nativeReceipts ?? [:]
+                state.nativeReceipts?[sessionID(file)] = result.receipt
                 for e in result.events where e.isCompaction {
                     if let key = e.audit.eventKey {
                         state.observedCompactionRequests = state.observedCompactionRequests ?? [:]
@@ -393,6 +400,7 @@ public struct TodayCodexUsageCollector: Sendable {
         state.sessionCumulativeTokens = state.sessionCumulativeTokens.filter { activeSessionIDs.contains($0.key) }
         state.importedTurns = state.importedTurns?.filter { activeSessionIDs.contains($0.key) }
         state.pendingCompactionUsage = state.pendingCompactionUsage?.filter { activeSessionIDs.contains($0.key) }
+        state.nativeReceipts = state.nativeReceipts?.filter { activeSessionIDs.contains($0.key) }
         state.observedCompactionRequests = state.observedCompactionRequests?.filter { $0.value >= utcDayString(now.addingTimeInterval(-2 * 86400)) }
         if state.fileOffsets.count != previousOffsetCount || state.sessionCumulativeTokens.count != previousSessionCount {
             stateChanged = true
@@ -558,14 +566,16 @@ public struct TodayCodexUsageCollector: Sendable {
         importedTurn: Bool = false,
         pendingCompaction: CandidateEvent? = nil,
         observedCompactions: Set<String> = [],
+        receipt: NativeUsageReceipt = NativeUsageReceipt(),
         auditAccount: String? = nil,
         auditNow: Date = Date(),
         minimumCountedAt: Date? = nil,
         through: Int64? = nil
     ) -> AppendedUsageResult {
+        var receipt = receipt
         guard let handle = try? FileHandle(forReadingFrom: file) else {
             return AppendedUsageResult(events: [], nextOffset: offset, cumulative: previousCumulative, importedTurn: importedTurn,
-                audit: [.init(source: "native_unknown", kind: "failure", reason: "read_failed", key: TokenCollectionAudit.hash(sessionID(file)), now: auditNow)])
+                audit: [.init(source: "native_unknown", kind: "failure", reason: "read_failed", key: TokenCollectionAudit.hash(sessionID(file)), now: auditNow)], receipt: receipt)
         }
         defer { try? handle.close() }
         do {
@@ -574,7 +584,7 @@ public struct TodayCodexUsageCollector: Sendable {
             if let through { data = try handle.read(upToCount: Int(max(0, through - offset))) ?? Data() }
             else { data = try handle.readToEnd() ?? Data() }
             guard let lastNewline = data.lastIndex(of: 0x0A) else {
-                return AppendedUsageResult(events: [], nextOffset: offset, cumulative: previousCumulative, importedTurn: importedTurn, pendingCompaction: pendingCompaction)
+                return AppendedUsageResult(events: [], nextOffset: offset, cumulative: previousCumulative, importedTurn: importedTurn, pendingCompaction: pendingCompaction, receipt: receipt)
             }
             let complete = data.prefix(through: lastNewline)
             var cumulative = previousCumulative
@@ -585,6 +595,7 @@ public struct TodayCodexUsageCollector: Sendable {
             var observations: [TokenCollectionAudit.Record] = []
             let auditKey = TokenCollectionAudit.hash(sessionID(file))
             let source = nativeSource(file)
+            let inheritedBoundary = inheritedUsageBoundary(file: file)
             var lineOffset = offset
             var alternateKeys = Set<String>()
             var alternateEventKey: String?
@@ -595,20 +606,44 @@ public struct TodayCodexUsageCollector: Sendable {
                     || line.range(of: Data("\"token_usage_record\"".utf8)) != nil
                     || line.range(of: Data("\"task_started\"".utf8)) != nil
                     || line.range(of: Data("\"task_complete\"".utf8)) != nil
+                    || line.range(of: Data("\"turn_aborted\"".utf8)) != nil
                     || line.range(of: Data("\"compacted\"".utf8)) != nil,
                       let event = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
                       let payload = event["payload"] as? [String: Any] else { continue }
+                let isInheritedUsage: Bool
+                if let firstOwnedOrdinal = inheritedBoundary?.firstOwnedOrdinal,
+                   let ordinal = nonnegativeInteger(event["ordinal"]) {
+                    isInheritedUsage = ordinal < firstOwnedOrdinal
+                } else if let createdAt = inheritedBoundary?.createdAt, let stamp = date(event["timestamp"]) {
+                    isInheritedUsage = stamp < createdAt
+                } else {
+                    isInheritedUsage = false
+                }
                 if payload["type"] as? String == "task_started" {
                     pendingCompaction = nil
                     importedTurn = (payload["turn_id"] as? String)?.hasPrefix("external-import-") == true
+                    receipt.startTurn(!isInheritedUsage && !importedTurn ? payload["turn_id"] as? String : nil)
                     continue
                 }
-                if payload["type"] as? String == "task_complete" {
+                if ["task_complete", "turn_aborted"].contains(payload["type"] as? String ?? "") {
                     pendingCompaction = nil
                     importedTurn = false
+                    receipt.invalidate()
                     continue
                 }
                 if event["type"] as? String == "token_usage_record" {
+                    if !isInheritedUsage, !importedTurn, let owner = inheritedBoundary?.leafID {
+                        receipt.observe(payload, canonicalThreadID: owner)
+                    } else { receipt.invalidate() }
+                    // Copied request receipts retain the parent's identity.
+                    // Never use them to authenticate spending in this rollout.
+                    let owner = inheritedBoundary?.leafID ?? sessionID(file)
+                    guard !isInheritedUsage,
+                          (payload["thread_id"] as? String).map({ $0.lowercased() == owner.lowercased() }) ?? true else {
+                        pendingCompaction = nil
+                        alternateEventKey = nil
+                        continue
+                    }
                     // This cumulative counter differs from token_count on some official clients.
                     if let total = usageSample(payload["thread_token_usage"])?.totalTokens,
                        let stamp = date(event["timestamp"]) {
@@ -621,12 +656,14 @@ public struct TodayCodexUsageCollector: Sendable {
                        let stamp = date(event["timestamp"]), minimumCountedAt.map({ stamp >= $0 }) ?? true {
                         var r = TokenCollectionAudit.Record(source: source, kind: "excluded", reason: "confirmed", key: auditKey, account: auditAccount, eventAt: isoString(stamp), values: ["delta": usage.totalTokens], now: auditNow)
                         r.eventKey = TokenCollectionAudit.hash("native-compaction|\(auditKey)|\(request)")
-                        pendingCompaction = CandidateEvent(timestamp: stamp, tokens: usage.totalTokens, structurallyValid: usage.totalTokens <= Self.fallbackMaximumSingleEventTokens, audit: r, alternateEventKey: alternateEventKey)
+                        pendingCompaction = CandidateEvent(timestamp: stamp, tokens: usage.totalTokens, structurallyValid: usage.totalTokens <= Self.fallbackMaximumSingleEventTokens, audit: r, alternateEventKey: alternateEventKey, responseID: request)
                     }
                     continue
                 }
                 if event["type"] as? String == "compacted" {
+                    receipt.invalidate()
                     if let stamp = date(event["timestamp"]), let request = pendingCompaction,
+                       (payload["compaction_response_id"] as? String).map({ $0 == request.responseID }) ?? true,
                        stamp >= request.timestamp, stamp.timeIntervalSince(request.timestamp) <= 5 {
                         pendingCompaction?.timestamp = stamp
                         pendingCompaction?.audit.eventAt = isoString(stamp)
@@ -634,12 +671,14 @@ public struct TodayCodexUsageCollector: Sendable {
                     } else { pendingCompaction = nil }
                     continue
                 }
-                guard payload["type"] as? String == "token_count",
-                      let info = payload["info"] as? [String: Any],
-                      let totalUsage = usageSample(info["total_token_usage"]) else { continue }
-                guard let timestamp = date(event["timestamp"]) else { continue }
+                guard payload["type"] as? String == "token_count" else { continue }
+                guard let info = payload["info"] as? [String: Any],
+                      let totalUsage = usageSample(info["total_token_usage"]),
+                      let timestamp = date(event["timestamp"]) else {
+                    _ = receipt.consume(current: nil)
+                    continue
+                }
                 let current = totalUsage.totalTokens
-                guard current > 0 else { continue }
                 let lastUsage = usageSample(info["last_token_usage"])
                 let candidateTokens: Int
                 var cumulativeConsistent = true
@@ -653,8 +692,9 @@ public struct TodayCodexUsageCollector: Sendable {
                 } else {
                     candidateTokens = lastUsage?.totalTokens ?? current
                 }
+                let receiptVerified = receipt.consume(current: info["total_token_usage"] as? [String: Any], expectedDelta: candidateTokens)
                 // Compression is billed separately on clients whose legacy total stays unchanged.
-                if candidateTokens == 0, !importedTurn, let request = pendingCompaction,
+                if candidateTokens == 0, !importedTurn, !isInheritedUsage, let request = pendingCompaction,
                    request.isCompaction, timestamp >= request.timestamp,
                    timestamp.timeIntervalSince(request.timestamp) <= 5,
                    let key = request.audit.eventKey, observedCompactions.insert(key).inserted {
@@ -675,6 +715,7 @@ public struct TodayCodexUsageCollector: Sendable {
                 cumulative = current
                 // Imported history is a cumulative baseline, never fresh inference.
                 guard !importedTurn else { observation.reason = "external_import"; observations.append(observation); continue }
+                guard !isInheritedUsage else { observation.reason = "copied_history"; observations.append(observation); continue }
                 guard candidateTokens > 0 else { observations.append(observation); continue }
                 // A newly discovered fork can contain a byte-for-byte copy of
                 // earlier token rows. They establish the cumulative baseline
@@ -687,7 +728,7 @@ public struct TodayCodexUsageCollector: Sendable {
                     && candidateTokens <= maximum
                     && usageIsValid(totalUsage)
                     && (lastUsage.map(usageIsValid) ?? true)
-                    && lastMatchesDelta
+                    && (lastMatchesDelta || receiptVerified)
                 candidates.append(CandidateEvent(
                     timestamp: timestamp,
                     tokens: candidateTokens,
@@ -703,11 +744,12 @@ public struct TodayCodexUsageCollector: Sendable {
                 importedTurn: importedTurn,
                 audit: observations,
                 alternateKeys: alternateKeys,
-                pendingCompaction: pendingCompaction
+                pendingCompaction: pendingCompaction,
+                receipt: receipt
             )
         } catch {
             return AppendedUsageResult(events: [], nextOffset: offset, cumulative: previousCumulative, importedTurn: importedTurn,
-                audit: [.init(source: "native_unknown", kind: "failure", reason: "read_failed", key: TokenCollectionAudit.hash(sessionID(file)), account: auditAccount, now: auditNow)])
+                audit: [.init(source: "native_unknown", kind: "failure", reason: "read_failed", key: TokenCollectionAudit.hash(sessionID(file)), account: auditAccount, now: auditNow)], receipt: receipt)
         }
     }
 
@@ -767,17 +809,55 @@ public struct TodayCodexUsageCollector: Sendable {
     }
 
     private func newSessionWatermark(file: CodexSessionFileIndex.Entry, previousUpdate: Date) -> Date {
+        if let createdAt = inheritedUsageBoundary(file: file.url)?.createdAt {
+            return max(previousUpdate.addingTimeInterval(-5), createdAt)
+        }
         let filenameStartedAt = CodexSessionFileCounter().timestampFromFilename(file.url.lastPathComponent)
         let lowerBound = max(previousUpdate, filenameStartedAt ?? previousUpdate)
         return lowerBound.addingTimeInterval(-5)
     }
 
+    private struct InheritedUsageBoundary {
+        var leafID: String
+        var firstOwnedOrdinal: Int?
+        var createdAt: Date?
+    }
+
+    /// Read only the canonical first metadata row. Embedded ancestor metadata
+    /// must never replace the leaf identity, and parent files need not exist.
+    private func inheritedUsageBoundary(file: URL) -> InheritedUsageBoundary? {
+        guard let handle = try? FileHandle(forReadingFrom: file) else { return nil }
+        defer { try? handle.close() }
+        var data = Data()
+        while data.count < 4 * 1024 * 1024 {
+            guard let chunk = try? handle.read(upToCount: 64 * 1024), !chunk.isEmpty else { break }
+            data.append(chunk)
+            if chunk.contains(10) { break }
+        }
+        guard let newline = data.firstIndex(of: 10),
+              let row = try? JSONSerialization.jsonObject(with: data.prefix(upTo: newline)) as? [String: Any],
+              row["type"] as? String == "session_meta", let payload = row["payload"] as? [String: Any],
+              let id = payload["id"] as? String, id.lowercased() == sessionID(file).lowercased() else { return nil }
+        let isFork = (payload["forked_from_id"] as? String).map { !$0.isEmpty && $0.lowercased() != id.lowercased() } ?? false
+        return InheritedUsageBoundary(
+            leafID: id,
+            // This ordinal is explicitly defined as the first child-owned row.
+            // forked_from_ordinal_exclusive refers to the logical parent instead.
+            firstOwnedOrdinal: nonnegativeInteger(payload["subagent_history_start_ordinal"]),
+            createdAt: isFork ? date(payload["timestamp"]) : nil
+        )
+    }
+
     private func nonnegativeInteger(_ value: Any?) -> Int? {
         if let number = value as? NSNumber {
-            let result = number.intValue
-            return result >= 0 ? result : nil
+            guard CFGetTypeID(number) != CFBooleanGetTypeID(),
+                  number.doubleValue.isFinite, number.doubleValue >= 0,
+                  number.doubleValue <= 9_007_199_254_740_991,
+                  number.doubleValue.rounded(.towardZero) == number.doubleValue else { return nil }
+            return number.intValue
         }
-        if let text = value as? String, let result = Int(text), result >= 0 { return result }
+        if let text = value as? String, let result = Int(text), result >= 0,
+           result <= 9_007_199_254_740_991 { return result }
         return nil
     }
 
