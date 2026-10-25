@@ -4983,6 +4983,8 @@ let tests: [(String, () throws -> Void)] = [
     ("token accuracy canonical metadata", testTokenAccuracyIgnoresAncestorMetadata),
     ("token accuracy strict integer counters", testTokenAccuracyRejectsNonIntegerCounters),
     ("token accuracy compaction request identity", testTokenAccuracyCompactionMatchesOwnerAndResponse),
+    ("token accuracy compaction normal echo replay", testTokenAccuracyCompactionNormalEchoCannotReplay),
+    ("token accuracy compaction supplement cumulative echo", testTokenAccuracyCompactionSupplementThenCumulativeEcho),
     ("token accuracy receipt certification", testNativeUsageReceiptCertification),
     ("token accuracy receipt collector integration", testNativeUsageReceiptCollectorIntegration),
     ("computer history summaries stay bounded and private", testComputerHistorySummariesAreBoundedAndPrivate),

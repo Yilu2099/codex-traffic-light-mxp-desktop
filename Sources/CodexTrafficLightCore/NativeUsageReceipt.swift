@@ -38,6 +38,14 @@ public struct NativeUsageReceipt: Codable, Sendable {
 
     public init() {}
 
+    public func matchesDelta(current raw: [String: Any]?, usage: [String: Int]?) -> Bool {
+        guard let usage, let expected = Vector(usage.mapValues { $0 as Any }),
+              let previous, previous.isValid, let current = Vector(raw) else { return false }
+        return zip(zip(current.values, previous.values), expected.values).allSatisfy {
+            $0.0.0 >= $0.0.1 && $0.0.0 - $0.0.1 == $0.1
+        }
+    }
+
     /// Call only for task_started. A repeated start is also a boundary, never a receipt replay.
     public mutating func startTurn(_ id: String?) {
         let next = id.flatMap { $0.isEmpty ? nil : $0 }

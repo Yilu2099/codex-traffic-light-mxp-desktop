@@ -125,3 +125,50 @@ func testTokenAccuracyCompactionMatchesOwnerAndResponse() throws {
         try expectEqual(f.collect(4).tokens, expected, "only the same thread and exact compaction response may supply a missing receipt")
     }
 }
+
+func testTokenAccuracyCompactionNormalEchoCannotReplay() throws {
+    for firstTotal in [100, 140] {
+        let f = try TokenAccuracyFixture()
+        let leaf = "11111111-1111-4111-8111-111111111111"
+        let file = f.file(leaf)
+        try f.write([f.meta(leaf), f.usage(100, last: 100, at: 1)], to: file, at: 1)
+        _ = f.collect(1.5)
+        func chain(_ second: Double) -> [[String: Any]] {
+            let receipt: [String: Any] = ["type": "token_usage_record", "timestamp": f.stamp(second), "payload": [
+                "thread_id": leaf, "response_id": "same-request", "usage": ["input_tokens": 30, "output_tokens": 10, "total_tokens": 40],
+            ]]
+            let marker: [String: Any] = ["type": "compacted", "timestamp": f.stamp(second + 0.1), "payload": ["compaction_response_id": "same-request"]]
+            return [receipt, marker, f.usage(firstTotal, last: firstTotal == 100 ? 100 : 40, at: second + 0.2)]
+        }
+        try f.write(chain(2), to: file, at: 2.2, append: true)
+        try expectEqual(f.collect(3).tokens, 140, "normal cumulative and zero-delta compaction both count the request once")
+        try f.write(chain(4), to: file, at: 4.2, append: true)
+        try expectEqual(f.collect(5).tokens, 140, "replayed response cannot become a second supplemental charge after restart")
+    }
+}
+
+func testTokenAccuracyCompactionSupplementThenCumulativeEcho() throws {
+    let f = try TokenAccuracyFixture()
+    let leaf = "11111111-1111-4111-8111-111111111111", file = f.file("11111111-1111-4111-8111-111111111111")
+    func vector(_ input: Int, _ output: Int) -> [String: Int] {
+        ["input_tokens": input, "cached_input_tokens": 0, "output_tokens": output,
+         "reasoning_output_tokens": 0, "cache_write_input_tokens": 0, "total_tokens": input + output]
+    }
+    func echo(_ input: Int, _ output: Int, _ last: [String: Int], _ at: Double) -> [String: Any] {
+        ["type": "event_msg", "timestamp": f.stamp(at), "payload": ["type": "token_count", "info": [
+            "total_token_usage": vector(input, output), "last_token_usage": last]]]
+    }
+    func chain(_ at: Double, _ total: [String: Any]) -> [[String: Any]] {
+        [["type": "token_usage_record", "timestamp": f.stamp(at), "payload": ["thread_id": leaf,
+           "response_id": "r", "usage": vector(30, 10)]],
+         ["type": "compacted", "timestamp": f.stamp(at + 0.1), "payload": ["compaction_response_id": "r"]], total]
+    }
+    try f.write([f.meta(leaf), echo(100, 0, vector(100, 0), 1)], to: file, at: 1)
+    _ = f.collect(1.5)
+    try f.write(chain(2, echo(100, 0, vector(100, 0), 2.2)), to: file, at: 2.2, append: true)
+    try expectEqual(f.collect(3).tokens, 140, "supplement is counted once")
+    try f.write(chain(4, echo(130, 10, vector(30, 10), 4.2)), to: file, at: 4.2, append: true)
+    try expectEqual(f.collect(5).tokens, 140, "same identified response catching up in cumulative usage is not added again")
+    try f.write([echo(150, 10, vector(20, 0), 6)], to: file, at: 6, append: true)
+    try expectEqual(f.collect(7).tokens, 160, "independent new work remains countable after the replay baseline")
+}

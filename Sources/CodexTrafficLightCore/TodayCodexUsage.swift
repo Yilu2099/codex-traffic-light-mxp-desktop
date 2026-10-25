@@ -106,6 +106,7 @@ public struct TodayCodexUsageCollector: Sendable {
         var alternateEventKey: String? = nil
         var isCompaction: Bool = false
         var responseID: String? = nil
+        var compactionUsage: [String: Int]? = nil
     }
 
     private struct AppendedUsageResult {
@@ -117,6 +118,7 @@ public struct TodayCodexUsageCollector: Sendable {
         var alternateKeys: Set<String> = []
         var pendingCompaction: CandidateEvent? = nil
         var receipt = NativeUsageReceipt()
+        var consumedCompactions: [String: String] = [:]
     }
 
     /// If an older Codex event omits `model_context_window`, quarantine only
@@ -321,6 +323,9 @@ public struct TodayCodexUsageCollector: Sendable {
                 state.pendingCompactionUsage?[sessionID(file)] = result.pendingCompaction
                 state.nativeReceipts = state.nativeReceipts ?? [:]
                 state.nativeReceipts?[sessionID(file)] = result.receipt
+                if !result.consumedCompactions.isEmpty {
+                    state.observedCompactionRequests = (state.observedCompactionRequests ?? [:]).merging(result.consumedCompactions) { old, _ in old }
+                }
                 for e in result.events where e.isCompaction {
                     if let key = e.audit.eventKey {
                         state.observedCompactionRequests = state.observedCompactionRequests ?? [:]
@@ -591,6 +596,7 @@ public struct TodayCodexUsageCollector: Sendable {
             var importedTurn = importedTurn
             var pendingCompaction = pendingCompaction
             var observedCompactions = observedCompactions
+            var consumedCompactions: [String: String] = [:]
             var candidates: [CandidateEvent] = []
             var observations: [TokenCollectionAudit.Record] = []
             let auditKey = TokenCollectionAudit.hash(sessionID(file))
@@ -657,6 +663,11 @@ public struct TodayCodexUsageCollector: Sendable {
                         var r = TokenCollectionAudit.Record(source: source, kind: "excluded", reason: "confirmed", key: auditKey, account: auditAccount, eventAt: isoString(stamp), values: ["delta": usage.totalTokens], now: auditNow)
                         r.eventKey = TokenCollectionAudit.hash("native-compaction|\(auditKey)|\(request)")
                         pendingCompaction = CandidateEvent(timestamp: stamp, tokens: usage.totalTokens, structurallyValid: usage.totalTokens <= Self.fallbackMaximumSingleEventTokens, audit: r, alternateEventKey: alternateEventKey, responseID: request)
+                        if let input = usage.inputTokens, let output = usage.outputTokens {
+                            pendingCompaction?.compactionUsage = ["input_tokens": input, "output_tokens": output,
+                                "cached_input_tokens": usage.cachedInputTokens ?? 0, "reasoning_output_tokens": usage.reasoningOutputTokens ?? 0,
+                                "cache_write_input_tokens": usage.cacheWriteInputTokens ?? 0, "total_tokens": usage.totalTokens]
+                        }
                     }
                     continue
                 }
@@ -692,12 +703,23 @@ public struct TodayCodexUsageCollector: Sendable {
                 } else {
                     candidateTokens = lastUsage?.totalTokens ?? current
                 }
+                let exactCompactionDelta = receipt.matchesDelta(current: info["total_token_usage"] as? [String: Any], usage: pendingCompaction?.compactionUsage)
                 let receiptVerified = receipt.consume(current: info["total_token_usage"] as? [String: Any], expectedDelta: candidateTokens)
+                var firstCompactionEcho = false
+                var repeatedCompactionEcho = false
+                if !importedTurn, !isInheritedUsage, let request = pendingCompaction,
+                   request.isCompaction, timestamp >= request.timestamp,
+                   timestamp.timeIntervalSince(request.timestamp) <= 5,
+                   let key = request.audit.eventKey {
+                    firstCompactionEcho = observedCompactions.insert(key).inserted
+                    repeatedCompactionEcho = !firstCompactionEcho && exactCompactionDelta
+                    consumedCompactions[key] = utcDayString(timestamp)
+                }
                 // Compression is billed separately on clients whose legacy total stays unchanged.
                 if candidateTokens == 0, !importedTurn, !isInheritedUsage, let request = pendingCompaction,
                    request.isCompaction, timestamp >= request.timestamp,
                    timestamp.timeIntervalSince(request.timestamp) <= 5,
-                   let key = request.audit.eventKey, observedCompactions.insert(key).inserted {
+                   firstCompactionEcho {
                     var compact = request
                     compact.timestamp = timestamp
                     compact.audit.eventAt = isoString(timestamp)
@@ -716,6 +738,7 @@ public struct TodayCodexUsageCollector: Sendable {
                 // Imported history is a cumulative baseline, never fresh inference.
                 guard !importedTurn else { observation.reason = "external_import"; observations.append(observation); continue }
                 guard !isInheritedUsage else { observation.reason = "copied_history"; observations.append(observation); continue }
+                guard !repeatedCompactionEcho else { observations.append(observation); continue }
                 guard candidateTokens > 0 else { observations.append(observation); continue }
                 // A newly discovered fork can contain a byte-for-byte copy of
                 // earlier token rows. They establish the cumulative baseline
@@ -745,7 +768,8 @@ public struct TodayCodexUsageCollector: Sendable {
                 audit: observations,
                 alternateKeys: alternateKeys,
                 pendingCompaction: pendingCompaction,
-                receipt: receipt
+                receipt: receipt,
+                consumedCompactions: consumedCompactions
             )
         } catch {
             return AppendedUsageResult(events: [], nextOffset: offset, cumulative: previousCumulative, importedTurn: importedTurn,
