@@ -13,6 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
     private var presenceTimer: Timer?
     private var teamSyncWatchdogTimer: Timer?
     private var externalAlertTimer: Timer?
+    private var updaterRepairTimer: DispatchSourceTimer?
     private var teamSyncConfiguration: TeamSyncConfiguration?
     private var isTeamSyncing = false
     private var isDiagnosticSyncing = false
@@ -76,9 +77,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
         )
 
         configureTeamIntegration()
-        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 12) {
-            AppDelegate.ensureUpdaterSchedule()
-        }
+        let repairTimer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+        repairTimer.schedule(deadline: .now() + 12, repeating: 600, leeway: .seconds(30))
+        repairTimer.setEventHandler { AppDelegate.ensureUpdaterSchedule() }
+        repairTimer.resume()
+        updaterRepairTimer = repairTimer
     }
 
     private func configureExternalAlerts() {
@@ -507,45 +510,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
     }
 
     private nonisolated static func ensureUpdaterSchedule() {
-        let fileManager = FileManager.default
-        let home = fileManager.homeDirectoryForCurrentUser
-        let plistURL = home
-            .appendingPathComponent("Library/LaunchAgents", isDirectory: true)
-            .appendingPathComponent("com.codex.traffic-light-mxp-updater.plist")
-        guard let data = try? Data(contentsOf: plistURL),
-              var plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
-              (plist["StartInterval"] as? NSNumber)?.intValue != 300 else { return }
-        plist["StartInterval"] = 300
-        do {
-            let updated = try PropertyListSerialization.data(
-                fromPropertyList: plist,
-                format: .xml,
-                options: 0
-            )
-            try updated.write(to: plistURL, options: .atomic)
-            let domain = "gui/\(getuid())"
-            _ = runLaunchctl(["bootout", domain, plistURL.path])
-            let result = runLaunchctl(["bootstrap", domain, plistURL.path])
-            if result != 0 {
-                appendTeamSyncLog("updater schedule reload failed: exit=\(result)")
-            }
-        } catch {
-            appendTeamSyncLog("updater schedule update failed: \(error)")
-        }
-    }
-
-    private nonisolated static func runLaunchctl(_ arguments: [String]) -> Int32 {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-        process.arguments = arguments
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        do {
-            try process.run()
-            process.waitUntilExit()
-            return process.terminationStatus
-        } catch {
-            return -1
+        guard let executable = Bundle.main.executableURL else { return }
+        let result = UpdaterScheduleRepair.check(runningExecutable: executable)
+        if result != .healthy && result != .notInstalled && result != .deferred {
+            appendTeamSyncLog("updater schedule: \(result.rawValue)")
         }
     }
 
@@ -555,6 +523,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
     }
 
     func statusBarDidRequestQuit() {
+        updaterRepairTimer?.cancel()
         quotaTimer?.invalidate()
         teamSyncTimer?.invalidate()
         teamRankingTimer?.invalidate()

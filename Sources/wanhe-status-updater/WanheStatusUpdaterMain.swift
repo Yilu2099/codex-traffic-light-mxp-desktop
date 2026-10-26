@@ -173,6 +173,8 @@ struct WanheStatusUpdater {
 
         await report(configuration, version: ClientVersion.current, status: "downloading", error: nil)
         var request = URLRequest(url: downloadURL)
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
         request.timeoutInterval = 180
         let (archiveData, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { throw UpdateFailure.invalidDownload }

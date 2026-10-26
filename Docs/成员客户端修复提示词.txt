@@ -1,0 +1,16 @@
+请直接帮我检查并修复这台电脑的“万合创新局 Codex 采集／状态栏客户端”，让它恢复签名自动更新。网站是 https://c.wanhe.cn 。这是修复已有安装，不是重新注册。
+
+先确认操作系统、现有安装位置、当前进程和服务状态。只在本机读取配置，不把设备令牌、邀请码、账号凭证或完整 config.env/config.json 输出到对话。必须保留原成员身份、设备 ID、服务地址、历史数据、采集缓存和失败审计；不要删除 ~/.codex，不要把别人的身份写进来。
+
+Mac：
+1. 核对 ~/.wanhe-codex-token/config.env、app/current 指向及其中 VERSION、wanhe-status-updater 是否存在可执行；检查 ~/Library/LaunchAgents 下 com.codex.traffic-light-mxp、com.codex.traffic-light-mxp-updater、com.codex.traffic-light-codex-monitor 三个任务，以及更新日志。不要把服务器曾记录的旧版本当成当前本机版本。
+2. 如果现有更新器完整，只恢复它自己的启动配置与 launchd 注册，再执行一次正常签名更新；任务已经正常时不要重复安装。不要终止正在安装的更新器，不要清除失败退避来强行重试坏包。
+3. 如果更新器或安装文件确实缺失，先备份配置和启动配置，再从官方项目 https://github.com/Yilu2099/codex-traffic-light-mxp-desktop 检查当前安装/修复流程。只有确认安装损坏时才在独立临时目录取得源码并使用 install-autostart.command 修复；不要修改该项目源码，不要运行会重新登记身份的 install-team.command，也不要使用旧 /collector/install.sh 覆盖配置。
+4. 自动更新包必须通过既有 SHA-256 与 Ed25519 校验。下载损坏时保留原安装，修复下载后重试，禁止跳过校验。
+
+Windows：
+1. 核对 %USERPROFILE%\.wanhe-codex-token\windows-client 下 config.json、客户端文件、运行日志和 “Wanhe Codex Windows Client” 计划任务。
+2. 保留原配置、身份和缓存。需要修复时，下载并先查看 https://c.wanhe.cn/collector/windows/install.ps1 ，对已有新版配置使用 -Repair -Server https://c.wanhe.cn；不需要新邀请码。该流程会验证签名客户端并备份旧安装。
+3. 如果只有旧采集器配置，或原身份凭证不存在，先报告具体缺失项，不要新建一个成员或设备来掩盖问题。
+
+验收：读取本机实际安装版本、服务/计划任务运行状态、一次成功的采集上传响应，并再检查一次自动更新。区分“程序运行”“服务器接收”“安装完成”；不能仅凭命令退出 0 就报告成功。最后给我可转发的简短结果：设备类型、实际版本、自动更新状态、最后成功上报时间、未解决项。遇到权限或缺依赖，只说明这台机实际需要补的步骤。

@@ -1633,6 +1633,19 @@ func testTeamPayloadPreservesLocalDataWithoutOfficialUsage() throws {
     }
     try expectEqual((encoded["profile"] as? [String: Any])?.count, 1, "profile must contain only the user ID")
     try expectEqual((encoded["device"] as? [String: Any])?.count, 1, "device must contain only the device ID")
+    payload.client = .current
+    payload.updaterHealth = try JSONDecoder().decode(TeamUpdaterHealth.self, from: Data(#"{"status":"healthy","checkedAt":"2026-09-05T04:00:00Z","path":"private-home","token":"private-token"}"#.utf8))
+    let diagnosticsData = try JSONEncoder().encode(payload)
+    let diagnostics = try JSONSerialization.jsonObject(with: diagnosticsData) as! [String: Any]
+    let client = diagnostics["client"] as! [String: Any]
+    try expectEqual(client["version"] as? String, ClientVersion.current, "normal usage reports the running app build")
+    try expectEqual(client["platform"] as? String, "mac", "platform is explicit")
+    try expectEqual(Set(client.keys), Set(["version", "platform", "capabilities"]), "client metadata stays bounded")
+    try expectEqual(Set((diagnostics["updaterHealth"] as! [String: Any]).keys), Set(["status", "checkedAt"]), "updater diagnostics never include paths or secrets")
+    try expect(!String(decoding: diagnosticsData, as: UTF8.self).contains("private-"), "usage-only diagnostic projection discards private source fields")
+    for key in ["sessions", "projects", "inputEvents", "quotaDiagnostic"] {
+        try expect(diagnostics[key] == nil, "client metadata must not expand private usage-only payload")
+    }
     payload.chatUsage = try JSONDecoder().decode(ChatUsageReport.self, from: JSONSerialization.data(withJSONObject: ["collectedAt": "2026-09-05T04:00:00Z", "rows": [["id": String(repeating: "a", count: 64), "title": "真实聊天标题", "weeklyPercent": 120.5, "subagents": 2]]]))
     let chatEncoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(payload)) as! [String: Any]
     let chatReport = chatEncoded["chatUsage"] as! [String: Any]
@@ -5059,6 +5072,9 @@ let tests: [(String, () throws -> Void)] = [
     ("quota refresh countdown uses hours below one day", testQuotaRefreshCountdownUsesHoursBelowOneDay),
     ("quota display formatter uses natural date", testQuotaDisplayFormatterUsesNaturalChineseDate),
     ("updater process lock excludes concurrent checks", testUpdaterProcessLockExcludesConcurrentChecks),
+    ("updater self repair handles missing unloaded and healthy jobs", testUpdaterRepairMissingAndUnloadedAndHealthy),
+    ("updater self repair preserves running transactions", testUpdaterRepairWrongPathAndDisabledAndBusy),
+    ("updater self repair fails closed without local proof", testUpdaterRepairFailsClosedWithoutPackageOrLaunchdProof),
     ("adaptive sync and activity merge", testAdaptiveTeamSyncAndActivityMerge),
     ("team sync parses environment", testTeamSyncParsesEnvironmentFile),
     ("team device uses hardware names", testTeamDeviceUsesHardwareFamilyNames),
@@ -5080,6 +5096,7 @@ let tests: [(String, () throws -> Void)] = [
     ("official usage accepts nullable summaries", testOfficialCodexUsageAcceptsNullableSummary),
     ("official usage derives a stable account fingerprint", testOfficialUsageDerivesStableAccountFingerprint),
     ("team payload preserves local data without official usage", testTeamPayloadPreservesLocalDataWithoutOfficialUsage),
+    ("updater health cache is bounded and fresh", testUpdaterHealthCacheIsBoundedAndFresh),
     ("official usage refresh tracks UTC settlement", testOfficialUsageRefreshPolicyTracksUTCSettlement),
     ("session counter uses local filename and metadata only", testSessionCounterUsesLocalFilenameAndMetadataWithoutReadingContents),
     ("collectors reuse one session file index", testCollectorsCanReuseOneSessionFileIndexSnapshot),

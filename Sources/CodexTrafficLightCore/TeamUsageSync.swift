@@ -376,6 +376,8 @@ public struct TeamUsagePayload: Codable, Equatable, Sendable {
     public var collectedAt: String
     public var profile: TeamUsageProfile
     public var device: TeamDeviceIdentity
+    public var client: TeamClientMetadata? = nil
+    public var updaterHealth: TeamUpdaterHealth? = nil
     public var quota: TeamQuotaReport?
     public var quotaDiagnostic: TeamQuotaDiagnostic?
     public var officialUsage: OfficialCodexUsageReport?
@@ -396,7 +398,7 @@ public struct TeamUsagePayload: Codable, Equatable, Sendable {
     public var usageOnly: Bool? = true
 
     private enum CodingKeys: String, CodingKey {
-        case collector, collectedAt, profile, device, quota, quotaDiagnostic, officialUsage, todayLiveUsage, claudeDailyUsage
+        case collector, collectedAt, profile, device, client, updaterHealth, quota, quotaDiagnostic, officialUsage, todayLiveUsage, claudeDailyUsage
         case sessionActivity, sessionActivityMode, sessionActivityCutoffDay, interactionSummary, grindHistory, grindHistoryMode
         case projects, inputEvents, sessions, usageOnly, chatUsage, computerHistory, humanInputMetadata
     }
@@ -408,6 +410,8 @@ public struct TeamUsagePayload: Codable, Equatable, Sendable {
         try container.encode(collectedAt, forKey: .collectedAt)
         try container.encode(["userId": profile.userId], forKey: .profile)
         try container.encode(["id": device.id], forKey: .device)
+        try container.encodeIfPresent(client, forKey: .client)
+        try container.encodeIfPresent(updaterHealth, forKey: .updaterHealth)
         try container.encodeIfPresent(quota, forKey: .quota)
         try container.encodeIfPresent(officialUsage, forKey: .officialUsage)
         try container.encodeIfPresent(chatUsage, forKey: .chatUsage)
@@ -1107,6 +1111,8 @@ public struct TeamUsageSyncService: Sendable {
                 avatar: String(configuration.userName.prefix(2))
             ),
             device: device,
+            client: .current,
+            updaterHealth: TeamUpdaterHealth.cached(now: now),
             quota: quota,
             quotaDiagnostic: quotaDiagnostic,
             officialUsage: officialUsage,
