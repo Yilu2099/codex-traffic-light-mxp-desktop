@@ -5073,6 +5073,7 @@ let tests: [(String, () throws -> Void)] = [
     ("quota display formatter uses natural date", testQuotaDisplayFormatterUsesNaturalChineseDate),
     ("updater process lock excludes concurrent checks", testUpdaterProcessLockExcludesConcurrentChecks),
     ("updater self repair handles missing unloaded and healthy jobs", testUpdaterRepairMissingAndUnloadedAndHealthy),
+    ("updater self repair timer crosses MainActor safely", testUpdaterRepairTimerCreatedOnMainActorRunsInBackground),
     ("updater self repair preserves running transactions", testUpdaterRepairWrongPathAndDisabledAndBusy),
     ("updater self repair fails closed without local proof", testUpdaterRepairFailsClosedWithoutPackageOrLaunchdProof),
     ("adaptive sync and activity merge", testAdaptiveTeamSyncAndActivityMerge),

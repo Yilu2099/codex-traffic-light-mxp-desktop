@@ -4,6 +4,17 @@ import Foundation
 /// Repairs only this installed app's local launchd registration. Download,
 /// signatures, rollout policy and failure backoff remain the updater's job.
 public enum UpdaterScheduleRepair {
+    /// Construct the dispatch source outside MainActor isolation. The callback
+    /// is explicitly Sendable because launchd checks run on a utility queue.
+    public static func makeTimer(initialDelay: TimeInterval = 12, repeating: TimeInterval = 600,
+                                 handler: @escaping @Sendable () -> Void) -> DispatchSourceTimer {
+        let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+        timer.schedule(deadline: .now() + initialDelay, repeating: repeating, leeway: .seconds(1))
+        timer.setEventHandler(handler: handler)
+        timer.resume()
+        return timer
+    }
+
     public enum Result: String, Sendable {
         case healthy, repaired, deferred, notInstalled, missingBinary, invalidPackage
         case inspectionFailed, writeFailed, enableFailed, bootoutFailed, bootstrapFailed

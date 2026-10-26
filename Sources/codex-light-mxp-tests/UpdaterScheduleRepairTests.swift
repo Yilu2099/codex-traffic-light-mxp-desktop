@@ -2,6 +2,18 @@ import Darwin
 import Foundation
 import CodexTrafficLightCore
 
+func testUpdaterRepairTimerCreatedOnMainActorRunsInBackground() throws {
+    let fired = DispatchSemaphore(value: 0)
+    let timer = MainActor.assumeIsolated {
+        UpdaterScheduleRepair.makeTimer(initialDelay: 0.01) { @Sendable in
+            dispatchPrecondition(condition: .notOnQueue(.main))
+            fired.signal()
+        }
+    }
+    defer { timer.cancel() }
+    try expectEqual(fired.wait(timeout: .now() + 3), .success, "a MainActor-created timer must execute its Sendable background callback without an actor assertion")
+}
+
 private final class UpdaterRepairFixture {
     let home = FileManager.default.temporaryDirectory.appendingPathComponent("updater-repair-\(UUID().uuidString)")
     var app: URL { home.appendingPathComponent(".wanhe-codex-token/app") }

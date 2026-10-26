@@ -77,11 +77,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
         )
 
         configureTeamIntegration()
-        let repairTimer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
-        repairTimer.schedule(deadline: .now() + 12, repeating: 600, leeway: .seconds(30))
-        repairTimer.setEventHandler { AppDelegate.ensureUpdaterSchedule() }
-        repairTimer.resume()
-        updaterRepairTimer = repairTimer
+        updaterRepairTimer = UpdaterScheduleRepair.makeTimer { @Sendable in
+            AppDelegate.ensureUpdaterSchedule()
+        }
     }
 
     private func configureExternalAlerts() {
