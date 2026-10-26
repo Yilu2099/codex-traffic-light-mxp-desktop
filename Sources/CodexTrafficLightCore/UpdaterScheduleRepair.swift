@@ -80,7 +80,11 @@ public enum UpdaterScheduleRepair {
         let changed = installed.map { !NSDictionary(dictionary: $0).isEqual(to: expected) } ?? true
         let loadedProgram = registration.output.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
             .first { $0.hasPrefix("program = ") }.map { String($0.dropFirst("program = ".count)) }
-        let needsReload = changed || (loadedProgram.map { URL(fileURLWithPath: $0).resolvingSymlinksInPath().standardizedFileURL != binary } ?? false)
+        let logs = home.appendingPathComponent(".wanhe-codex-token/logs")
+        var logsIsDirectory: ObjCBool = false
+        let logsMissing = !fm.fileExists(atPath: logs.path, isDirectory: &logsIsDirectory) || !logsIsDirectory.boolValue
+        let needsReload = changed || logsMissing || registeredInterval(registration.output) != 300
+            || (loadedProgram.map { URL(fileURLWithPath: $0).resolvingSymlinksInPath().standardizedFileURL != binary } ?? false)
         if !needsReload && !disabled && registration.status == 0 { return .healthy }
         // Do not interrupt a running updater, including its short pre-lock phase.
         if registration.output.contains("state = running") || registration.output.split(separator: "\n").contains(where: { $0.trimmingCharacters(in: .whitespaces).hasPrefix("pid = ") }) { return .deferred }
@@ -95,9 +99,9 @@ public enum UpdaterScheduleRepair {
             guard removed.status == 0 || launchctlSaysServiceIsAbsent(removed.output) else { return .bootoutFailed }
         }
         do {
+            try fm.createDirectory(at: logs, withIntermediateDirectories: true)
             if changed {
                 try fm.createDirectory(at: plist.deletingLastPathComponent(), withIntermediateDirectories: true)
-                try fm.createDirectory(at: home.appendingPathComponent(".wanhe-codex-token/logs"), withIntermediateDirectories: true)
                 try data.write(to: plist, options: .atomic)
             }
         } catch { return .writeFailed }
@@ -108,6 +112,14 @@ public enum UpdaterScheduleRepair {
         if registration.status != 0 || needsReload {
             guard runner(["bootstrap", domain, plist.path]).status == 0 else { return .bootstrapFailed }
         }
-        return runner(["print", service]).status == 0 ? .repaired : .bootstrapFailed
+        let verified = runner(["print", service])
+        return verified.status == 0 && registeredInterval(verified.output) == 300 ? .repaired : .bootstrapFailed
+    }
+
+    private static func registeredInterval(_ output: String) -> Int? {
+        guard let line = output.split(separator: "\n").map({ $0.trimmingCharacters(in: .whitespaces) })
+            .first(where: { $0.hasPrefix("run interval = ") }),
+              let seconds = line.dropFirst("run interval = ".count).split(separator: " ").first else { return nil }
+        return Int(seconds)
     }
 }

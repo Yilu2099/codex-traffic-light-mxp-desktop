@@ -21,6 +21,8 @@ private final class UpdaterRepairFixture {
     var plist: URL { home.appendingPathComponent("Library/LaunchAgents/\(UpdaterLaunchAgentInstaller.label).plist") }
     var registered = false, disabled = false, running = false, failBootstrap = false, failInspection = false, failBootout = false
     var bootstrapSawUnlocked = false
+    var runInterval: Int? = 300
+    var bootstrapKeepsWrongInterval = false
     var calls: [[String]] = []
     init() throws {
         let fm = FileManager.default
@@ -43,7 +45,8 @@ private final class UpdaterRepairFixture {
         switch args[0] {
         case "print":
             if failInspection { return .init(status: 5, output: "permission denied") }
-            return registered ? .init(status: 0, output: running ? "state = running\n pid = 123" : "state = not running") : .init(status: 113, output: "Could not find service")
+            let interval = runInterval.map { "\nrun interval = \($0) seconds" } ?? ""
+            return registered ? .init(status: 0, output: (running ? "state = running\n pid = 123" : "state = not running") + interval) : .init(status: 113, output: "Could not find service")
         case "print-disabled": return .init(status: 0, output: "\"\(UpdaterLaunchAgentInstaller.label)\" => \(disabled)")
         case "enable": disabled = false; return .init(status: 0)
         case "bootout":
@@ -53,6 +56,7 @@ private final class UpdaterRepairFixture {
             let lock = try? UpdaterProcessLock(url: app.appendingPathComponent("update-process.lock"))
             bootstrapSawUnlocked = lock != nil
             withExtendedLifetime(lock) {}
+            if !bootstrapKeepsWrongInterval { runInterval = 300 }
             registered = !failBootstrap; return .init(status: failBootstrap ? 5 : 0)
         default: return .init(status: 99)
         }
@@ -116,4 +120,28 @@ func testUpdaterRepairFailsClosedWithoutPackageOrLaunchdProof() throws {
     try expectEqual(f.check(), .missingBinary, "missing updater requires explicit repair, never a clone")
     try expect(f.calls.isEmpty, "missing binary performs no launchctl calls")
     try expectEqual(UpdaterScheduleRepair.check(runningExecutable: URL(fileURLWithPath: "/tmp/development-app"), home: f.home, runLaunchctl: f.runner), .notInstalled, "development builds cannot repair production services")
+}
+
+func testUpdaterRepairChecksLoadedIntervalAndRestoresLogs() throws {
+    let f = try UpdaterRepairFixture()
+    _ = f.check()
+    for interval: Int? in [60, nil] {
+        f.runInterval = interval; f.calls = []
+        try expectEqual(f.check(), .repaired, "correct disk plist cannot hide stale or absent launchd scheduling")
+        try expectEqual(f.mutations, ["bootout", "bootstrap"], "stale idle registration is reloaded once")
+    }
+    let logs = f.home.appendingPathComponent(".wanhe-codex-token/logs")
+    try FileManager.default.removeItem(at: logs)
+    f.running = true; f.calls = []
+    try expectEqual(f.check(), .deferred, "missing log directory does not interrupt a running updater")
+    try expect(f.mutations.isEmpty, "running jobs remain untouched")
+    f.running = false; f.calls = []
+    try expectEqual(f.check(), .repaired, "missing log directory is restored even when the plist is unchanged")
+    try expect(FileManager.default.fileExists(atPath: logs.path), "the restored job has its log parent")
+    try expectEqual(f.mutations, ["bootout", "bootstrap"], "idle job retries after its log paths become usable")
+    f.calls = []
+    try expectEqual(f.check(), .healthy, "subsequent healthy checks remain idempotent")
+    try expect(f.mutations.isEmpty, "no repeated restart after directory repair")
+    f.runInterval = nil; f.bootstrapKeepsWrongInterval = true
+    try expectEqual(f.check(), .bootstrapFailed, "bootstrap exit zero without the expected loaded interval is not success")
 }
