@@ -393,9 +393,10 @@ struct StatusPopoverView: View {
 
     private var versionNote: some View {
         HStack(spacing: 9) {
-            Text("v\(ClientVersion.current)")
+            Text("已更新 \(ClientVersion.current.split(separator: ".").last ?? "0") 次")
                 .font(.system(size: 12, weight: .semibold, design: .monospaced))
                 .foregroundStyle(muted.opacity(0.78))
+                .fixedSize()
             Circle()
                 .fill(line)
                 .frame(width: 3, height: 3)
