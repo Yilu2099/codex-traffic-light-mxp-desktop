@@ -24,6 +24,8 @@ public struct TodayLiveUsageReport: Codable, Equatable, Sendable {
     /// included in `tokens` or `utcTokens`.
     public var pendingTokens: Int?
     public var anomalyCount: Int?
+    /// Bounded UTC event-time diagnostics, independent of ranking replacement authority.
+    public var utcDailyUsage: [UTCDailyUsageReport]?
 
     public init(
         day: String,
@@ -36,7 +38,8 @@ public struct TodayLiveUsageReport: Codable, Equatable, Sendable {
         validationVersion: Int? = 4,
         recent30MinuteTokens: Int? = 0,
         pendingTokens: Int? = 0,
-        anomalyCount: Int? = 0
+        anomalyCount: Int? = 0,
+        utcDailyUsage: [UTCDailyUsageReport]? = nil
     ) {
         self.day = day
         self.tokens = max(0, tokens)
@@ -49,6 +52,7 @@ public struct TodayLiveUsageReport: Codable, Equatable, Sendable {
         self.recent30MinuteTokens = recent30MinuteTokens.map { max(0, $0) }
         self.pendingTokens = pendingTokens.map { max(0, $0) }
         self.anomalyCount = anomalyCount.map { max(0, $0) }
+        self.utcDailyUsage = utcDailyUsage
     }
 }
 
@@ -86,6 +90,7 @@ public struct TodayCodexUsageCollector: Sendable {
         var pendingTokens: Int?
         var anomalyCount: Int?
         var recentEvents: [RecentTokenEvent]?
+        var utcDailyLedger: UTCDailyUsageLedger?
     }
 
     private struct UsageSample {
@@ -120,6 +125,7 @@ public struct TodayCodexUsageCollector: Sendable {
         var pendingCompaction: CandidateEvent? = nil
         var receipt = NativeUsageReceipt()
         var consumedCompactions: [String: String] = [:]
+        var coverageComplete = true
     }
 
     /// If an older Codex event omits `model_context_window`, quarantine only
@@ -169,7 +175,8 @@ public struct TodayCodexUsageCollector: Sendable {
             validationVersion: state.eventValidationVersion ?? 4,
             recent30MinuteTokens: recent.reduce(0) { $1.confirmed ? $0 + $1.tokens : $0 },
             pendingTokens: state.pendingTokens ?? 0,
-            anomalyCount: state.anomalyCount ?? 0
+            anomalyCount: state.anomalyCount ?? 0,
+            utcDailyUsage: state.utcDailyLedger?.reports(now: isoDate(state.updatedAt) ?? now)
         )
     }
 
@@ -182,11 +189,12 @@ public struct TodayCodexUsageCollector: Sendable {
     ) -> TodayLiveUsageReport {
         let day = dayString(now)
         let utcDay = utcDayString(now)
-        let files = recentJSONLFiles(sessionFileIndex: sessionFileIndex, now: now)
+        let loadedState = loadState()
+        let files = recentJSONLFiles(sessionFileIndex: sessionFileIndex,
+            unreadSince: loadedState?.utcDailyLedger?.throughAt, now: now)
         let audit = TokenCollectionAudit(root: stateURL.deletingLastPathComponent().appendingPathComponent("token-audit"))
         let account = TokenCollectionAudit.account(codexHome)
         var observations: [TokenCollectionAudit.Record] = []
-        let loadedState = loadState()
         let needsAuditBaseline = loadedState?.auditVersion != 1
         if needsAuditBaseline, let loadedState {
             for file in files {
@@ -212,6 +220,12 @@ public struct TodayCodexUsageCollector: Sendable {
             recentEvents: []
         )
         var stateChanged = loadedState == nil
+        if state.utcDailyLedger == nil {
+            state.utcDailyLedger = UTCDailyUsageLedger(now: now, seedDay: state.utcDay, seedTokens: state.utcTokens)
+            stateChanged = true
+        }
+        let presentKeys = Set(sessionFileIndex.files.flatMap { [$0.stableKey, $0.path] })
+        var fullyRead = sessionFileIndex.enumerationComplete && state.fileOffsets.keys.allSatisfy { presentKeys.contains($0) }
         if (state.eventValidationVersion ?? 0) < 4 {
             // Preserve the already reported counter. Rebuilding every active
             // file can exceed the sync watchdog; v4 validates all new tails.
@@ -287,6 +301,7 @@ public struct TodayCodexUsageCollector: Sendable {
                 let startOffset: Int64
                 if let knownOffset {
                     startOffset = min(max(0, knownOffset), size)
+                    if knownOffset > size { fullyRead = false }
                 } else if file.isArchived,
                           state.sessionCumulativeTokens[sessionID(file)] == nil {
                     // A short session can be created and archived entirely
@@ -338,6 +353,7 @@ public struct TodayCodexUsageCollector: Sendable {
                 candidates.append(contentsOf: result.events)
                 observations.append(contentsOf: result.audit)
                 state.fileOffsets[key] = result.nextOffset
+                if result.nextOffset < size || !result.coverageComplete { fullyRead = false }
                 stateChanged = true
                 if let cumulative = result.cumulative {
                     state.sessionCumulativeTokens[sessionID(file)] = cumulative
@@ -361,11 +377,13 @@ public struct TodayCodexUsageCollector: Sendable {
                         // must not advance or prune the real rolling window.
                         confirmed = false
                     }
+                    if !confirmed || (candidate.timestamp > now && utcDayString(candidate.timestamp) != utcDay) { fullyRead = false }
                     var observation = candidate.audit
                     observation.kind = confirmed ? "increment" : "pending"
                     observation.reason = !timestampIsPlausible ? "future_timestamp" : !candidate.structurallyValid ? "invalid_event" : "confirmed"
                     observation.values["counted"] = confirmed && (dayString(candidate.timestamp) == day || utcDayString(candidate.timestamp) == utcDay) ? candidate.tokens : 0
                     observations.append(observation)
+                    if confirmed { state.utcDailyLedger?.record(candidate.tokens, at: candidate.timestamp, now: now) }
                     if dayString(candidate.timestamp) == day {
                         if confirmed {
                             state.tokens += candidate.tokens
@@ -400,15 +418,21 @@ public struct TodayCodexUsageCollector: Sendable {
         let activeSessionIDs = Set(files.map(sessionID))
         let previousOffsetCount = state.fileOffsets.count
         let previousSessionCount = state.sessionCumulativeTokens.count
-        state.fileOffsets = state.fileOffsets.filter { activeKeys.contains($0.key) }
-        state.sessionCumulativeTokens = state.sessionCumulativeTokens.filter { activeSessionIDs.contains($0.key) }
-        state.importedTurns = state.importedTurns?.filter { activeSessionIDs.contains($0.key) }
-        state.pendingCompactionUsage = state.pendingCompactionUsage?.filter { activeSessionIDs.contains($0.key) }
-        state.nativeReceipts = state.nativeReceipts?.filter { activeSessionIDs.contains($0.key) }
+        if sessionFileIndex.enumerationComplete {
+            state.fileOffsets = state.fileOffsets.filter { activeKeys.contains($0.key) }
+            state.sessionCumulativeTokens = state.sessionCumulativeTokens.filter { activeSessionIDs.contains($0.key) }
+            state.importedTurns = state.importedTurns?.filter { activeSessionIDs.contains($0.key) }
+            state.pendingCompactionUsage = state.pendingCompactionUsage?.filter { activeSessionIDs.contains($0.key) }
+            state.nativeReceipts = state.nativeReceipts?.filter { activeSessionIDs.contains($0.key) }
+        }
         state.observedCompactionRequests = state.observedCompactionRequests?.filter { $0.value >= utcDayString(now.addingTimeInterval(-2 * 86400)) }
         if state.fileOffsets.count != previousOffsetCount || state.sessionCumulativeTokens.count != previousSessionCount {
             stateChanged = true
         }
+        if !fullyRead && state.utcDailyLedger?.interrupted != true { stateChanged = true }
+        if fullyRead && state.utcDailyLedger?.interrupted == true { stateChanged = true }
+        if fullyRead && state.utcDailyLedger?.throughAt != now { stateChanged = true }
+        state.utcDailyLedger?.finish(now: now, fullyRead: fullyRead)
         let collectedAt = isoString(now)
         if audit.append(observations, now: now), needsAuditBaseline { state.auditVersion = 1; stateChanged = true }
         if stateChanged {
@@ -425,12 +449,14 @@ public struct TodayCodexUsageCollector: Sendable {
             validationVersion: state.eventValidationVersion ?? 4,
             recent30MinuteTokens: prunedRecent.reduce(0) { $1.confirmed ? $0 + $1.tokens : $0 },
             pendingTokens: state.pendingTokens ?? 0,
-            anomalyCount: state.anomalyCount ?? 0
+            anomalyCount: state.anomalyCount ?? 0,
+            utcDailyUsage: state.utcDailyLedger?.reports(now: now)
         )
     }
 
     private func recentJSONLFiles(
         sessionFileIndex: CodexSessionFileIndex,
+        unreadSince: Date? = nil,
         now: Date
     ) -> [CodexSessionFileIndex.Entry] {
         let startOfDay = Calendar(identifier: .gregorian).dateComponents(in: timeZone, from: now)
@@ -444,7 +470,8 @@ public struct TodayCodexUsageCollector: Sendable {
         var utcCalendar = Calendar(identifier: .gregorian)
         utcCalendar.timeZone = TimeZone(secondsFromGMT: 0)!
         let utcCutoff = utcCalendar.startOfDay(for: now)
-        let cutoff = min(localCutoff, utcCutoff)
+        let currentCutoff = min(localCutoff, utcCutoff)
+        let cutoff = max(UTCDailyUsageLedger.cutoff(now), min(currentCutoff, unreadSince ?? currentCutoff))
         return sessionFileIndex.uniqueFiles(modifiedSince: cutoff)
     }
 
@@ -491,6 +518,7 @@ public struct TodayCodexUsageCollector: Sendable {
             }
             if dayString(e.timestamp) == state.day { state.tokens += e.tokens }
             if utcDayString(e.timestamp) == state.utcDay { state.utcTokens = (state.utcTokens ?? 0) + e.tokens }
+            state.utcDailyLedger?.record(e.tokens, at: e.timestamp, now: now)
             if e.timestamp >= now.addingTimeInterval(-Self.recentWindow) {
                 state.recentEvents = (state.recentEvents ?? []) + [RecentTokenEvent(timestamp: isoString(e.timestamp), tokens: e.tokens, confirmed: true)]
             }
@@ -535,6 +563,7 @@ public struct TodayCodexUsageCollector: Sendable {
             removed.insert(key)
             corrected.tokens += e.tokens
             if utcDayString(e.timestamp) == state.utcDay { corrected.utcTokens = (corrected.utcTokens ?? 0) + e.tokens }
+            corrected.utcDailyLedger?.record(e.tokens, at: e.timestamp, now: now)
             corrected.recentEvents = (corrected.recentEvents ?? []) + [RecentTokenEvent(timestamp: isoString(e.timestamp), tokens: e.tokens, confirmed: true)]
             var r = e.audit; r.kind = "increment"; r.reason = "confirmed"; r.values["counted"] = e.tokens
             r.eventKey = TokenCollectionAudit.hash("mixed-counter-repair|" + key); observations.append(r)
@@ -592,6 +621,7 @@ public struct TodayCodexUsageCollector: Sendable {
                     corrected.anomalyCount = max(0, (corrected.anomalyCount ?? 0) - 1)
                 }
                 if utcDayString(event.timestamp) == state.utcDay { corrected.utcTokens = (corrected.utcTokens ?? 0) + event.tokens }
+                corrected.utcDailyLedger?.record(event.tokens, at: event.timestamp, now: now)
                 if event.timestamp >= now.addingTimeInterval(-Self.recentWindow) {
                     corrected.recentEvents = (corrected.recentEvents ?? []) + [.init(timestamp: isoString(event.timestamp), tokens: event.tokens, confirmed: true)]
                 }
@@ -659,17 +689,22 @@ public struct TodayCodexUsageCollector: Sendable {
             var lineOffset = offset
             var alternateKeys = Set<String>()
             var alternateEventKey: String?
+            var coverageComplete = true
             for rawLine in complete.split(separator: 0x0A) {
                 lineOffset += Int64(rawLine.count + 1)
                 let line = Data(rawLine)
-                guard line.range(of: Data("\"token_count\"".utf8)) != nil
+                let usageLine = line.range(of: Data("\"token_count\"".utf8)) != nil
                     || line.range(of: Data("\"token_usage_record\"".utf8)) != nil
+                guard usageLine
                     || line.range(of: Data("\"task_started\"".utf8)) != nil
                     || line.range(of: Data("\"task_complete\"".utf8)) != nil
                     || line.range(of: Data("\"turn_aborted\"".utf8)) != nil
-                    || line.range(of: Data("\"compacted\"".utf8)) != nil,
-                      let event = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
-                      let payload = event["payload"] as? [String: Any] else { continue }
+                    || line.range(of: Data("\"compacted\"".utf8)) != nil else { continue }
+                guard let event = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
+                      let payload = event["payload"] as? [String: Any] else {
+                    if usageLine { coverageComplete = false }
+                    continue
+                }
                 let isInheritedUsage: Bool
                 if let firstOwnedOrdinal = inheritedBoundary?.firstOwnedOrdinal,
                    let ordinal = nonnegativeInteger(event["ordinal"]) {
@@ -823,7 +858,8 @@ public struct TodayCodexUsageCollector: Sendable {
                 alternateKeys: alternateKeys,
                 pendingCompaction: pendingCompaction,
                 receipt: receipt,
-                consumedCompactions: consumedCompactions
+                consumedCompactions: consumedCompactions,
+                coverageComplete: coverageComplete
             )
         } catch {
             return AppendedUsageResult(events: [], nextOffset: offset, cumulative: previousCumulative, importedTurn: importedTurn,

@@ -1789,11 +1789,9 @@ func testTodayLiveCollectorStartsAtEOFAndCountsOnlyAppendedUsage() throws {
     try expectEqual(updated.tokens, 50, "collector should count the newly appended turn only")
     try expectEqual(updated.utcDay, nil, "a mid-day baseline must not pretend it observed the whole settlement day")
     try expectEqual(updated.utcTokens, nil, "UTC continuation stays unavailable until the first observed rollover")
-    let stateInode = try FileManager.default.attributesOfItem(atPath: stateURL.path)[.systemFileNumber] as? NSNumber
     let unchanged = collector.collect(codexHome: root.appendingPathComponent("codex"), now: now.addingTimeInterval(120))
-    let unchangedStateInode = try FileManager.default.attributesOfItem(atPath: stateURL.path)[.systemFileNumber] as? NSNumber
     try expectEqual(unchanged.tokens, 50, "collector should not count an appended event twice")
-    try expectEqual(unchangedStateInode, stateInode, "unchanged token tails should not rewrite collector state")
+    try expectEqual(collector.cachedReport(now: now.addingTimeInterval(120))?.updatedAt, unchanged.updatedAt, "quiet scans persist their coverage checkpoint without changing the counter")
     let persisted = try String(contentsOf: stateURL, encoding: .utf8)
     try expect(!persisted.contains("private text"), "collector state must never persist conversation text")
     try expect(persisted.contains("11111111-1111-1111-1111-111111111111"), "active cumulative session state must survive pruning")
@@ -2146,6 +2144,7 @@ func testTodayLiveCollectorDoesNotTrustLegacyMidDayStateAsUTCBaseline() throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     let stateURL = root.appendingPathComponent("state/today-live.json")
     try FileManager.default.createDirectory(at: stateURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: root.appendingPathComponent("codex/sessions"), withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: root) }
     let legacyState = """
     {"initialized":true,"day":"2026-08-25","tokens":75,"updatedAt":"2026-08-25T02:59:00.000Z","fileOffsets":{},"sessionCumulativeTokens":{"stale-session":123}}
@@ -4988,6 +4987,13 @@ func testTokenCollectionAuditDurableQueue() throws {
 }
 
 let tests: [(String, () throws -> Void)] = [
+    ("UTC daily late tail and restart", testUTCDailyRetainsLateTailAcrossMidnightAndRestart),
+    ("UTC daily malformed usage coverage", testUTCDailyMalformedUsageLineBreaksCoverageWithoutChangingCounts),
+    ("UTC daily incomplete source inventory", testUTCDailyIncompleteInventoryPreservesOffsetsAndCoverage),
+    ("UTC daily near future day retention", testUTCDailyNearFutureDayIsRetainedWithoutCertification),
+    ("UTC daily local midnight and sleep", testUTCDailyLocalMidnightAndSleepCatchup),
+    ("UTC daily migration and incomplete coverage", testUTCDailyMigrationAndIncompleteTailCoverage),
+    ("UTC daily retention and Dot merge", testUTCDailyRetentionAndDotObservedMerge),
     ("desktop auxiliary audit preserves unknown billing and privacy", testDesktopAuxiliaryAuditPrivacyAndRetry),
     ("token audit retains observations across retry and crash", testTokenCollectionAuditDurableQueue),
     ("native input handles large headers and excludes subagents", testNativeInputLargeHeaderAndSubagentBoundary),

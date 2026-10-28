@@ -80,14 +80,15 @@ public struct DotTokenLedger: Codable, Sendable {
         entry.utc[utcDay, default: 0] += delta
         let cutoff = SharedDateFormatters.shared.shanghaiDay.string(from: now.addingTimeInterval(-3 * 86400))
         entry.local = entry.local.filter { $0.key >= cutoff }
-        entry.utc = entry.utc.filter { $0.key >= cutoff }
-        entry.pending = entry.pending.filter { $0.key >= cutoff }
+        let utcCutoff = UTCDailyUsageLedger.day(UTCDailyUsageLedger.cutoff(now))
+        entry.utc = entry.utc.filter { $0.key >= utcCutoff }
+        entry.pending = entry.pending.filter { $0.key >= utcCutoff }
         entry.anomalies = entry.anomalies.filter { $0.key >= cutoff }
         updatedAt = SharedDateFormatters.shared.iso8601Fractional.string(from: now)
         entry.recent = entry.recent.filter { (SharedDateFormatters.shared.iso8601Date(from: $0.key) ?? .distantPast) >= now.addingTimeInterval(-1800) }
         if delta > 0 { entry.recent[updatedAt, default: 0] += delta }
         entries[key] = entry
-        entries = entries.filter { $0.value.local.keys.contains { $0 >= cutoff } }
+        entries = entries.filter { $0.value.utc.keys.contains { $0 >= utcCutoff } || $0.value.local.keys.contains { $0 >= cutoff } }
     }
 
     public static func key(account: String, thread: String) -> String {
@@ -112,6 +113,27 @@ public struct DotTokenLedger: Codable, Sendable {
             sum + entry.recent.filter {
                 (SharedDateFormatters.shared.iso8601Date(from: $0.key) ?? .distantPast) >= now.addingTimeInterval(-1800)
             }.values.reduce(0, +)
+        }
+        if let nativeDays = report.utcDailyUsage {
+            var days = Dictionary(nativeDays.map { ($0.day, $0) }, uniquingKeysWith: { _, new in new })
+            let cutoff = UTCDailyUsageLedger.day(UTCDailyUsageLedger.cutoff(now))
+            for entry in included {
+                var uncertain = Set(entry.utc.filter { $0.value > 0 }.keys)
+                // Pending is keyed by local day. Either adjacent UTC date can
+                // contain that gap; neither receives invented numeric usage.
+                for (day, amount) in entry.pending where amount > 0 {
+                    uncertain.insert(day)
+                    if let start = UTCDailyUsageLedger.start(day) { uncertain.insert(UTCDailyUsageLedger.day(start.addingTimeInterval(-86400))) }
+                }
+                for day in uncertain where day >= cutoff && day <= UTCDailyUsageLedger.day(now) {
+                    var row = days[day] ?? UTCDailyUsageReport(day: day, tokens: 0, updatedAt: report.updatedAt, coverageFrom: nil, throughAt: nil)
+                    row.tokens += entry.utc[day] ?? 0
+                    // Dot provides observation time, not per-request time.
+                    row.coverageFrom = nil; row.throughAt = nil
+                    days[day] = row
+                }
+            }
+            result.utcDailyUsage = days.values.sorted { $0.day < $1.day }
         }
         return result
     }

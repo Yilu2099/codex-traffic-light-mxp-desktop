@@ -36,25 +36,38 @@ public struct CodexSessionFileIndex: Sendable {
 
     public var codexHome: URL
     public var files: [Entry]
+    /// False when directory traversal or metadata reads fail. An empty result
+    /// alone cannot prove that the device had no usage.
+    public var enumerationComplete: Bool
 
     public init(codexHome: URL) {
         self.codexHome = codexHome
         var entries: [Entry] = []
+        var complete = (try? codexHome.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
         for folder in ["sessions", "archived_sessions"] {
             let root = codexHome.appendingPathComponent(folder)
+            do {
+                guard try root.resourceValues(forKeys: [.isDirectoryKey]).isDirectory == true else { complete = false; continue }
+            } catch {
+                let code = (error as NSError).code
+                if code != NSFileNoSuchFileError && code != NSFileReadNoSuchFileError { complete = false }
+                continue
+            }
             guard let enumerator = FileManager.default.enumerator(
                 at: root,
                 includingPropertiesForKeys: [
                     .isRegularFileKey, .contentModificationDateKey, .fileSizeKey, .fileResourceIdentifierKey,
                 ],
-                options: [.skipsHiddenFiles]
-            ) else { continue }
+                options: [.skipsHiddenFiles],
+                errorHandler: { _, _ in complete = false; return true }
+            ) else { complete = false; continue }
             for case let url as URL in enumerator where url.pathExtension == "jsonl" {
                 guard let values = try? url.resourceValues(
                     forKeys: [
                         .isRegularFileKey, .contentModificationDateKey, .fileSizeKey, .fileResourceIdentifierKey,
                     ]
-                ), values.isRegularFile == true else { continue }
+                ) else { complete = false; continue }
+                guard values.isRegularFile == true else { continue }
                 entries.append(Entry(
                     url: url,
                     modifiedAt: values.contentModificationDate ?? .distantPast,
@@ -65,12 +78,14 @@ public struct CodexSessionFileIndex: Sendable {
             }
         }
         files = entries.sorted { $0.path < $1.path }
+        enumerationComplete = complete
     }
 
     /// Test/support initializer for callers that already own a metadata list.
-    public init(codexHome: URL, files: [Entry]) {
+    public init(codexHome: URL, files: [Entry], enumerationComplete: Bool = true) {
         self.codexHome = codexHome
         self.files = files.sorted { $0.path < $1.path }
+        self.enumerationComplete = enumerationComplete
     }
 
     public func uniqueFiles(modifiedSince cutoff: Date = .distantPast) -> [Entry] {
