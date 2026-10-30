@@ -435,11 +435,6 @@ struct StatusPopoverView: View {
                         .allowsHitTesting(false)
                 }
             }
-
-            Link(destination: shareURL("huokebao")) {
-                footerLabel("抖音获客", icon: "person.2")
-            }
-            .disabled(model.websiteURL == nil)
         }
         .buttonStyle(.plain)
         .padding(.horizontal, 16)
