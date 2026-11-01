@@ -3,7 +3,17 @@ import Darwin
 
 /// A fixed, read-only reconciliation window. These observations never mutate usage.
 public struct NativeReceiptAudit {
-    public static let scope = "native-receipts-20261029-31-v1"
+    public static let scope = "native-receipts-20261029-31-v2"
+    public struct Request: Codable, Equatable {
+        public var key: String
+        public var at: String
+        public var input: Int
+        public var cached: Int
+        public var output: Int
+        public var reasoning: Int
+        public var cacheWrite: Int
+        public var total: Int { input + output }
+    }
     public struct Day: Codable, Equatable {
         public var receiptTokens = 0
         public var receiptCount = 0
@@ -17,6 +27,9 @@ public struct NativeReceiptAudit {
         public var failureReasons: [String: Int] = [:]
         public var conflicts = 0
         public var complete = true
+        public var compressedFiles = 0
+        public var recentCompressedFiles = 0
+        public var requests: [Request] = []
     }
 
     /// The helper is separate from the sync watchdog and guarded by its own lock.
@@ -49,7 +62,7 @@ public struct NativeReceiptAudit {
         let root = marker.deletingLastPathComponent(), index = CodexSessionFileIndex(codexHome: codexHome)
         let report = scan(index: index, nativeState: root.appendingPathComponent("today-live.json"))
         let account = TokenCollectionAudit.account(codexHome)
-        let records = report.days.sorted { $0.key < $1.key }.map { day, row -> TokenCollectionAudit.Record in
+        var records = report.days.sorted { $0.key < $1.key }.map { day, row -> TokenCollectionAudit.Record in
             var e = TokenCollectionAudit.Record(source: "native_receipt_audit", kind: "baseline", reason: "snapshot",
                 key: TokenCollectionAudit.hash(scope + "|" + day), account: account, eventAt: day + "T00:00:00Z",
                 values: ["receiptTokens": row.receiptTokens, "receiptCount": row.receiptCount,
@@ -57,6 +70,14 @@ public struct NativeReceiptAudit {
                     "auditFiles": report.files, "auditReadFailures": report.failures,
                     "auditConflicts": report.conflicts, "auditComplete": report.complete ? 1 : 0])
             e.eventKey = TokenCollectionAudit.hash(scope + "|" + (account ?? "unknown") + "|" + day)
+            return e
+        }
+        records += report.requests.map { request in
+            var e = TokenCollectionAudit.Record(source: "native_receipt_audit", kind: "baseline", reason: "confirmed",
+                key: request.key, account: account, eventAt: request.at,
+                values: ["receiptTokens": request.total, "receiptCount": 1, "input": request.input,
+                    "cached": request.cached, "output": request.output, "reasoning": request.reasoning, "cacheWrite": request.cacheWrite])
+            e.eventKey = TokenCollectionAudit.hash(scope + "|" + (account ?? "unknown") + "|" + request.key)
             return e
         }
         guard TokenCollectionAudit().append(records) else { throw CocoaError(.fileWriteUnknown) }
@@ -73,8 +94,15 @@ public struct NativeReceiptAudit {
         func relevant(_ line: Data) -> Bool { markers.contains { line.prefix(1024).range(of: $0) != nil } }
         report.complete = index.enumerationComplete
         let cutoff = SharedDateFormatters.shared.iso8601Date(from: from + "T00:00:00Z")!
-        var seen: [String: [Int]] = [:], compacted = Set<String>(), receipts: [String: (String, Int)] = [:]
-        for file in index.uniqueFiles(modifiedSince: cutoff) {
+        report.compressedFiles = index.compressedFiles.count
+        report.recentCompressedFiles = index.compressedFiles.filter { $0.modifiedAt >= cutoff }.count
+        if report.recentCompressedFiles > 0 {
+            report.complete = false; report.failures += report.recentCompressedFiles
+            report.failureReasons["compressed_not_read"] = report.recentCompressedFiles
+        }
+        var compacted = Set<String>(), receipts: [String: Request] = [:], conflicts = Set<String>()
+        // Read every physical segment; request identity removes actual copies.
+        for file in index.files where file.modifiedAt >= cutoff {
             guard Date() < deadline else { report.complete = false; break }
             report.files += 1
             guard let handle = try? FileHandle(forReadingFrom: file.url) else { report.failures += 1; report.failureReasons["open", default: 0] += 1; report.complete = false; continue }
@@ -114,14 +142,24 @@ public struct NativeReceiptAudit {
                         if event["type"] as? String == "compacted", let id = p["compaction_response_id"] as? String { compacted.insert(TokenCollectionAudit.hash(owner + "|" + id)) }
                         let day = String(stamp.prefix(10))
                         guard !imported, day >= from, day < through, event["type"] as? String == "token_usage_record",
-                              (p["thread_id"] as? String)?.lowercased() == owner.lowercased(),
+                              (p["thread_id"] as? String)?.lowercased() == owner.lowercased() else { continue }
+                        guard
                               let id = p["response_id"] as? String, !id.isEmpty,
-                              let usage = p["usage"] as? [String: Any], let total = validTotal(usage) else { continue }
+                              let usage = p["usage"] as? [String: Any], validTotal(usage) != nil else {
+                            report.complete = false; report.failures += 1; report.failureReasons["invalid_receipt", default: 0] += 1; continue
+                        }
                         let key = TokenCollectionAudit.hash(owner + "|" + id)
-                        let vector = ["input_tokens", "cached_input_tokens", "output_tokens", "reasoning_output_tokens", "total_tokens", "cache_write_input_tokens"].map { (usage[$0] as? NSNumber)?.intValue ?? 0 }
-                        if let previous = seen[key] { if previous != vector { report.conflicts += 1; report.complete = false }; continue }
-                        seen[key] = vector; receipts[key] = (day, total)
-                        report.days[day]!.receiptTokens += total; report.days[day]!.receiptCount += 1
+                        let at = SharedDateFormatters.shared.iso8601Fractional.string(from: SharedDateFormatters.shared.iso8601Date(from: stamp)!)
+                        let request = Request(key: key, at: at, input: (usage["input_tokens"] as! NSNumber).intValue,
+                            cached: (usage["cached_input_tokens"] as! NSNumber).intValue,
+                            output: (usage["output_tokens"] as! NSNumber).intValue,
+                            reasoning: (usage["reasoning_output_tokens"] as! NSNumber).intValue,
+                            cacheWrite: (usage["cache_write_input_tokens"] as? NSNumber)?.intValue ?? 0)
+                        guard !conflicts.contains(key) else { continue }
+                        if let previous = receipts[key], previous != request {
+                            conflicts.insert(key); receipts.removeValue(forKey: key); report.complete = false
+                        } else if receipts.count < 50_000 || receipts[key] != nil { receipts[key] = request }
+                        else { report.complete = false; report.failureReasons["request_limit", default: 0] += 1 }
                     }
                     // Images and tool output can occupy tens of MB on one line.
                     // Once its header proves it is not an accounting event, stream past it.
@@ -132,9 +170,19 @@ public struct NativeReceiptAudit {
                     if buffer.count > 32 * 1024 * 1024 { report.failureReasons["line_limit", default: 0] += 1; report.failures += 1; report.complete = false; break }
                 }
                 if !buffer.isEmpty { report.complete = false }
+                let after = try FileManager.default.attributesOfItem(atPath: file.url.path)
+                if (after[.size] as? NSNumber)?.int64Value != file.size || after[.modificationDate] as? Date != file.modifiedAt {
+                    report.complete = false; report.failures += 1; report.failureReasons["file_changed", default: 0] += 1
+                }
             } catch { report.failureReasons["read", default: 0] += 1; report.failures += 1; report.complete = false }
         }
-        for key in compacted { if let (day, total) = receipts[key] { report.days[day]!.compactionTokens += total } }
+        report.conflicts = conflicts.count
+        report.requests = receipts.values.sorted { $0.key < $1.key }
+        for request in report.requests {
+            let day = String(request.at.prefix(10))
+            report.days[day]!.receiptTokens += request.total; report.days[day]!.receiptCount += 1
+            if compacted.contains(request.key) { report.days[day]!.compactionTokens += request.total }
+        }
         if let data = try? Data(contentsOf: nativeState), let state = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let ledger = state["utcDailyLedger"] as? [String: Any], let days = ledger["tokens"] as? [String: Int] {
             for day in report.days.keys { report.days[day]!.nativeLedgerTokens = days[day] ?? 0 }
@@ -144,7 +192,8 @@ public struct NativeReceiptAudit {
 
     private static func validTotal(_ raw: [String: Any]) -> Int? {
         var values: [String: Int] = [:]
-        for field in ["input_tokens", "cached_input_tokens", "output_tokens", "reasoning_output_tokens", "total_tokens"] {
+        for field in ["input_tokens", "cached_input_tokens", "output_tokens", "reasoning_output_tokens", "total_tokens", "cache_write_input_tokens"] {
+            if field == "cache_write_input_tokens", raw[field] == nil { continue }
             guard let n = raw[field] as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID(), n.doubleValue.isFinite,
                   n.doubleValue >= 0, n.doubleValue <= 9_007_199_254_740_991, n.doubleValue.rounded(.towardZero) == n.doubleValue else { return nil }
             values[field] = n.intValue

@@ -5179,6 +5179,7 @@ let tests: [(String, () throws -> Void)] = [
 
 let allTests = tests + [
     ("native receipt audit canonical requests", testNativeReceiptAuditUsesCanonicalRequestsWithoutChangingCounters),
+    ("native receipt audit physical copies and conflicts", testNativeReceiptAuditMergesCopiesAndRejectsConflicts),
     ("dot reconnect independent dates", testDotReconnectDatesAreIndependent),
     ("dot reconnect evidence recovery", testDotReconnectRecoveryRequiresOriginalEvidenceAndIsIdempotent)
 ]

@@ -36,6 +36,7 @@ public struct CodexSessionFileIndex: Sendable {
 
     public var codexHome: URL
     public var files: [Entry]
+    public var compressedFiles: [Entry] = []
     /// False when directory traversal or metadata reads fail. An empty result
     /// alone cannot prove that the device had no usage.
     public var enumerationComplete: Bool
@@ -43,6 +44,7 @@ public struct CodexSessionFileIndex: Sendable {
     public init(codexHome: URL) {
         self.codexHome = codexHome
         var entries: [Entry] = []
+        var compressed: [Entry] = []
         var complete = (try? codexHome.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
         for folder in ["sessions", "archived_sessions"] {
             let root = codexHome.appendingPathComponent(folder)
@@ -61,23 +63,25 @@ public struct CodexSessionFileIndex: Sendable {
                 options: [.skipsHiddenFiles],
                 errorHandler: { _, _ in complete = false; return true }
             ) else { complete = false; continue }
-            for case let url as URL in enumerator where url.pathExtension == "jsonl" {
+            for case let url as URL in enumerator where url.pathExtension == "jsonl" || url.lastPathComponent.hasSuffix(".jsonl.zst") {
                 guard let values = try? url.resourceValues(
                     forKeys: [
                         .isRegularFileKey, .contentModificationDateKey, .fileSizeKey, .fileResourceIdentifierKey,
                     ]
                 ) else { complete = false; continue }
                 guard values.isRegularFile == true else { continue }
-                entries.append(Entry(
+                let entry = Entry(
                     url: url,
                     modifiedAt: values.contentModificationDate ?? .distantPast,
                     size: Int64(max(0, values.fileSize ?? 0)),
                     isArchived: folder == "archived_sessions",
                     fileIdentifier: values.fileResourceIdentifier.map { String(describing: $0) }
-                ))
+                )
+                if url.pathExtension == "jsonl" { entries.append(entry) } else { compressed.append(entry) }
             }
         }
         files = entries.sorted { $0.path < $1.path }
+        compressedFiles = compressed.sorted { $0.path < $1.path }
         enumerationComplete = complete
     }
 
