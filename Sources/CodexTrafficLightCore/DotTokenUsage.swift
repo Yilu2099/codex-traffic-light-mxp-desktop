@@ -10,6 +10,7 @@ public struct DotTokenLedger: Codable, Sendable {
         public var utc: [String: Int] = [:]
         public var recent: [String: Int] = [:]
         public var pending: [String: Int] = [:]
+        public var pendingUTC: [String: Int]?
         public var anomalies: [String: Int] = [:]
     }
     public var entries: [String: Entry] = [:]
@@ -17,6 +18,7 @@ public struct DotTokenLedger: Codable, Sendable {
     public var status = "waiting"
     public var accountHash = ""
     public var lastError: String?
+    public var reconnectBoundaryRepairVersion: Int?
 
     public init() {}
 
@@ -60,33 +62,39 @@ public struct DotTokenLedger: Codable, Sendable {
         let localDay = SharedDateFormatters.shared.shanghaiDay.string(from: now)
         let utcDay = String(SharedDateFormatters.shared.iso8601Fractional.string(from: now).prefix(10))
         // A reconnect is not a new lifetime baseline for a known thread.
-        // Only attribute its gap when both accounting days are unambiguous.
+        // Each calendar has its own boundary; uncertainty in one must not
+        // discard spending whose date is known in the other calendar.
         let previous = entry.observedAt.flatMap { SharedDateFormatters.shared.iso8601Date(from: $0) }
-        let sameDays = previous.map {
-            $0 <= now && SharedDateFormatters.shared.shanghaiDay.string(from: $0) == localDay
-                && String(SharedDateFormatters.shared.iso8601Fractional.string(from: $0).prefix(10)) == utcDay
-        } ?? false
+        let sameLocalDay = previous.map { $0 <= now && SharedDateFormatters.shared.shanghaiDay.string(from: $0) == localDay } ?? false
+        let sameUTCDay = previous.map { $0 <= now && UTCDailyUsageLedger.day($0) == utcDay } ?? false
         let known = entries[key] != nil
         let observed = baseline && !known ? 0 : max(0, total - entry.total)
-        let ambiguous = baseline && known && !sameDays
-        let delta = observed <= 20_000_000 && !ambiguous ? observed : 0
+        let delta = observed <= 20_000_000 && !(baseline && known && !sameLocalDay) ? observed : 0
+        let utcDelta = observed <= 20_000_000 && !(baseline && known && !sameUTCDay) ? observed : 0
         entry.total = total
         entry.observedAt = SharedDateFormatters.shared.iso8601Fractional.string(from: now)
-        if observed > 0 && (observed > 20_000_000 || ambiguous) {
+        if observed > 0 && delta == 0 {
             entry.pending[localDay, default: 0] += observed
             entry.anomalies[localDay, default: 0] += 1
         }
         entry.local[localDay, default: 0] += delta
-        entry.utc[utcDay, default: 0] += delta
+        entry.utc[utcDay, default: 0] += utcDelta
+        if observed > 0 && utcDelta == 0 {
+            entry.pendingUTC = entry.pendingUTC ?? [:]
+            entry.pendingUTC?[utcDay, default: 0] += observed
+        }
         let cutoff = SharedDateFormatters.shared.shanghaiDay.string(from: now.addingTimeInterval(-3 * 86400))
         entry.local = entry.local.filter { $0.key >= cutoff }
         let utcCutoff = UTCDailyUsageLedger.day(UTCDailyUsageLedger.cutoff(now))
         entry.utc = entry.utc.filter { $0.key >= utcCutoff }
         entry.pending = entry.pending.filter { $0.key >= utcCutoff }
+        entry.pendingUTC = entry.pendingUTC?.filter { $0.key >= utcCutoff }
         entry.anomalies = entry.anomalies.filter { $0.key >= cutoff }
         updatedAt = SharedDateFormatters.shared.iso8601Fractional.string(from: now)
         entry.recent = entry.recent.filter { (SharedDateFormatters.shared.iso8601Date(from: $0.key) ?? .distantPast) >= now.addingTimeInterval(-1800) }
-        if delta > 0 { entry.recent[updatedAt, default: 0] += delta }
+        if delta > 0, !baseline || (previous.map { $0 >= now.addingTimeInterval(-1800) } ?? false) {
+            entry.recent[updatedAt, default: 0] += delta
+        }
         entries[key] = entry
         entries = entries.filter { $0.value.utc.keys.contains { $0 >= utcCutoff } || $0.value.local.keys.contains { $0 >= cutoff } }
     }
@@ -122,6 +130,10 @@ public struct DotTokenLedger: Codable, Sendable {
                 // Pending is keyed by local day. Either adjacent UTC date can
                 // contain that gap; neither receives invented numeric usage.
                 for (day, amount) in entry.pending where amount > 0 {
+                    uncertain.insert(day)
+                    if let start = UTCDailyUsageLedger.start(day) { uncertain.insert(UTCDailyUsageLedger.day(start.addingTimeInterval(-86400))) }
+                }
+                for (day, amount) in entry.pendingUTC ?? [:] where amount > 0 {
                     uncertain.insert(day)
                     if let start = UTCDailyUsageLedger.start(day) { uncertain.insert(UTCDailyUsageLedger.day(start.addingTimeInterval(-86400))) }
                 }
@@ -244,10 +256,14 @@ public actor DotTokenUsageObserver {
         return (token, account)
     }
 
-    private func save() {
-        try? FileManager.default.createDirectory(at: stateURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        if let data = try? JSONEncoder().encode(ledger) { try? data.write(to: stateURL, options: .atomic) }
-        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: stateURL.path)
+    @discardableResult
+    private func save() -> Bool {
+        do {
+            try FileManager.default.createDirectory(at: stateURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try JSONEncoder().encode(ledger).write(to: stateURL, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: stateURL.path)
+            return true
+        } catch { return false }
     }
 
     private func setStatus(_ status: String) {
@@ -255,6 +271,35 @@ public actor DotTokenUsageObserver {
             ledger.status = status; save()
             if status != "connected" { audit.append([.init(source: "dot_local", kind: "connection", reason: "unavailable", account: ledger.accountHash)]) }
         }
+    }
+
+    private func repairReconnectBoundaries() {
+        // An older rollback binary drops unknown Codable fields. Keep a small
+        // committed marker outside its ledger so an upgrade cannot recover twice.
+        let marker = stateURL.deletingLastPathComponent().appendingPathComponent("dot-boundary-v1-\(ledger.accountHash).done")
+        if FileManager.default.fileExists(atPath: marker.path) {
+            if ledger.reconnectBoundaryRepairVersion != 1 { ledger.reconnectBoundaryRepairVersion = 1; save() }
+            return
+        }
+        do {
+            if ledger.reconnectBoundaryRepairVersion == 1 {
+                if save() { try Data("1".utf8).write(to: marker, options: .atomic) }
+                return
+            }
+            let records = try DotReconnectRecovery.records(root: audit.root, now: Date())
+            var next = ledger
+            let recovered = next.recoverReconnectBoundaries(records: records, now: Date())
+            let backup = stateURL.appendingPathExtension("before-reconnect-boundary-repair")
+            if !recovered.isEmpty, !FileManager.default.fileExists(atPath: backup.path) {
+                try JSONEncoder().encode(ledger).write(to: backup, options: .atomic)
+                try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: backup.path)
+            }
+            guard audit.append(recovered) else { return }
+            let previous = ledger
+            ledger = next
+            guard save() else { ledger = previous; return }
+            try Data("1".utf8).write(to: marker, options: .atomic)
+        } catch { audit.append([.init(source: "collector", kind: "failure", reason: "read_failed", account: ledger.accountHash)]) }
     }
 
     public func run() async {
@@ -269,6 +314,7 @@ public actor DotTokenUsageObserver {
                 stage = "connect"
                 let hash = DotTokenLedger.key(account: account, thread: "account")
                 if ledger.accountHash != hash { ledger = DotTokenLedger(); ledger.accountHash = hash; save() }
+                repairReconnectBoundaries()
                 var request = URLRequest(url: URL(string: "wss://codex-cloud-backend.chatgpt.com/")!)
                 request.setValue("codex-app-server, codex-client.desktop, openai-bearer.\(token)", forHTTPHeaderField: "Sec-WebSocket-Protocol")
                 request.setValue(account, forHTTPHeaderField: "ChatGPT-Account-Id")
@@ -434,13 +480,16 @@ public actor DotTokenUsageObserver {
                 let entry = ledger.entries[key]!
                 let counted = (entry.local[day] ?? 0) - (previous?.local[day] ?? 0)
                 let pending = (entry.pending[day] ?? 0) - (previous?.pending[day] ?? 0)
-                var values = ["cumulative": total, "counted": counted, "pending": pending]
+                let utcDay = UTCDailyUsageLedger.day(now)
+                let utcCounted = (entry.utc[utcDay] ?? 0) - (previous?.utc[utcDay] ?? 0)
+                let utcPending = (entry.pendingUTC?[utcDay] ?? 0) - (previous?.pendingUTC?[utcDay] ?? 0)
+                var values = ["cumulative": total, "counted": counted, "pending": pending, "utcCounted": utcCounted, "utcPending": utcPending]
                 if let previous { values["previous"] = previous.total; values["delta"] = max(0, total - previous.total) }
                 for (field, name) in [("inputTokens", "input"), ("cachedInputTokens", "cached"), ("outputTokens", "output"), ("reasoningOutputTokens", "reasoning"), ("cacheWriteInputTokens", "cacheWrite")] {
                     if let value = raw[field] as? Int { values[name] = value }
                 }
-                let reason = previous == nil && baseline ? "first_existing" : total < (previous?.total ?? 0) ? "cumulative_reset" : pending > 0 ? "unattributed_or_large" : counted > 0 ? "confirmed" : "duplicate"
-                audit.append([.init(source: "dot_local", kind: counted > 0 ? "increment" : pending > 0 ? "pending" : previous == nil ? "baseline" : "excluded", reason: reason, key: key, account: ledger.accountHash, values: values, now: now)])
+                let reason = previous == nil && baseline ? "first_existing" : total < (previous?.total ?? 0) ? "cumulative_reset" : pending > 0 || utcPending > 0 ? "unattributed_or_large" : counted > 0 || utcCounted > 0 ? "confirmed" : "duplicate"
+                audit.append([.init(source: "dot_local", kind: counted > 0 || utcCounted > 0 ? "increment" : pending > 0 || utcPending > 0 ? "pending" : previous == nil ? "baseline" : "excluded", reason: reason, key: key, account: ledger.accountHash, values: values, now: now)])
                 save()
             }
         } catch { if socket === task { for id in Array(pending.keys) { fail(id) } } }

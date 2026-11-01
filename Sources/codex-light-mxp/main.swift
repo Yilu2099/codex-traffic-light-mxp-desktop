@@ -96,6 +96,8 @@ do {
     let store = StateStore()
 
     switch command {
+    case "dot-boundary-preview":
+        FileHandle.standardOutput.write(try JSONEncoder().encode(DotReconnectRecovery.preview(stateURL: DotTokenUsageObserver.stateURL))); print("")
     case "token-receipt-audit", "token-receipt-audit-preview":
         let home = ProcessInfo.processInfo.environment["CODEX_HOME"].map { URL(fileURLWithPath: $0) }
             ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex")

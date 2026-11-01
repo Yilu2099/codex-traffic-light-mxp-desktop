@@ -5177,7 +5177,11 @@ let tests: [(String, () throws -> Void)] = [
     ("innovation bureau snapshot decodes and scopes members", testInnovationBureauSnapshotDecodesAndScopesMembers)
 ]
 
-let allTests = tests + [("native receipt audit canonical requests", testNativeReceiptAuditUsesCanonicalRequestsWithoutChangingCounters)]
+let allTests = tests + [
+    ("native receipt audit canonical requests", testNativeReceiptAuditUsesCanonicalRequestsWithoutChangingCounters),
+    ("dot reconnect independent dates", testDotReconnectDatesAreIndependent),
+    ("dot reconnect evidence recovery", testDotReconnectRecoveryRequiresOriginalEvidenceAndIsIdempotent)
+]
 let selectedTests = ProcessInfo.processInfo.environment["WANHE_TEST_FILTER"].map { filter in allTests.filter { $0.0.contains(filter) } } ?? allTests
 var failures = 0
 for (name, test) in selectedTests {
