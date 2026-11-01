@@ -49,7 +49,8 @@ func testDotReconnectRecoveryRequiresOriginalEvidenceAndIsIdempotent() throws {
         try expect(ledger.recoverReconnectBoundaries(records: [baseline, pending], now: after.addingTimeInterval(2)).isEmpty, "restarting cannot recover twice")
         var crashReplay = old
         let replay = crashReplay.recoverReconnectBoundaries(records: [baseline, pending], now: after.addingTimeInterval(3))
-        try expectEqual(replay[0].id, recovered[0].id, "audit-before-state crash produces the same receipt identity")
+        try expectEqual(replay[0].eventKey, recovered[0].eventKey, "audit-before-state crash retains the same spending identity")
+        try expect(SharedDateFormatters.shared.iso8601Date(from: recovered[0].at)! > after, "recovery observation time is separate from its source event time")
         for mutation in 0..<4 {
             var bad = pending, badLedger = old
             if mutation == 0 { bad.account = String(repeating: "c", count: 64) }

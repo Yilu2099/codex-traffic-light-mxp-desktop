@@ -78,7 +78,7 @@ extension DotTokenLedger {
                 key: key, account: accountHash, eventAt: r.at,
                 values: ["delta": delta, "counted": localKnown ? delta : 0, "utcCounted": utcKnown ? delta : 0,
                     "pendingCleared": utcKnown ? delta : 0],
-                id: TokenCollectionAudit.hash(identity + "|" + ClientVersion.current), now: stamp)
+                now: now)
             e.eventKey = TokenCollectionAudit.hash(identity)
             result.append(e)
         }
