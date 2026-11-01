@@ -96,6 +96,15 @@ do {
     let store = StateStore()
 
     switch command {
+    case "token-receipt-audit", "token-receipt-audit-preview":
+        let home = ProcessInfo.processInfo.environment["CODEX_HOME"].map { URL(fileURLWithPath: $0) }
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex")
+        let report = command.hasSuffix("-preview")
+            ? NativeReceiptAudit.scan(index: CodexSessionFileIndex(codexHome: home), nativeState: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".wanhe-codex-token/today-live.json"))
+            : try NativeReceiptAudit.run(codexHome: home)
+        if let report {
+            FileHandle.standardOutput.write(try JSONEncoder().encode(report)); print("")
+        }
     case "dot-input-audit", "human-input-shadow", "dot-input-sample":
         let home = ProcessInfo.processInfo.environment["CODEX_HOME"].map { URL(fileURLWithPath: $0) }
             ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex")
