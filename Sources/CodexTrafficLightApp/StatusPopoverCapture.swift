@@ -15,7 +15,7 @@ enum StatusPopoverCapture {
                 weeklyResetsAt: now.addingTimeInterval(4 * 86_400),
                 fiveHourRemainingPercent: creditPreview ? nil : 82,
                 fiveHourResetsAt: now.addingTimeInterval(3 * 3_600),
-                creditBalance: creditPreview ? 61_066 : nil,
+                creditBalance: nil,
                 primaryWindow: creditPreview ? .weekly : .fiveHour,
                 source: "preview",
                 limitID: "codex",
@@ -27,8 +27,10 @@ enum StatusPopoverCapture {
             weeklyResetsAt: now.addingTimeInterval(4 * 86_400 + 12 * 3_600),
             fiveHourRemainingPercent: creditPreview ? nil : 82,
             fiveHourResetsAt: now.addingTimeInterval(3 * 3_600),
+            creditBalance: creditPreview ? 60_564 : nil,
+            creditUpdatedAt: creditPreview ? now : nil,
             primaryWindow: creditPreview ? .weekly : .fiveHour,
-            updatedAt: now
+            updatedAt: now, source: "codex-app-server", limitID: "codex"
         )
         let previewState = ProcessInfo.processInfo.environment["CODEX_LIGHT_CAPTURE_STATUS_STATE"]
         let previewRange = StatusRankingRange(
@@ -73,6 +75,9 @@ enum StatusPopoverCapture {
         } else {
             model.ranking = try? JSONDecoder().decode(TeamRankingSnapshot.self, from: Data(rankingJSON.utf8))
             if previewState != "unjoined", var today = model.ranking {
+                if creditPreview, let index = today.members.firstIndex(where: { $0.id == "zlu" }) {
+                    today.members[index].weeklyQuota = model.syncedQuota
+                }
                 if let index = today.members.firstIndex(where: { $0.id == "huangning" }) {
                     today.members[index].sessions = previewState == "streak" ? 5 : 15
                 }

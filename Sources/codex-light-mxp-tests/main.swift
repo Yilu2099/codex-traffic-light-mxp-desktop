@@ -522,6 +522,31 @@ func testRemainingCreditDisplay() throws {
     try expectEqual(quota.remainingCreditText(now: now), nil, "reset weekly quota must stop credit display")
 }
 
+func testUnifiedLocalAndSyncedCreditPresentation() throws {
+    let now = Date(timeIntervalSince1970: 1_793_722_000)
+    let reset = now.addingTimeInterval(3600)
+    var synced = TeamQuotaReport(weeklyRemainingPercent: 0, weeklyResetsAt: reset,
+        creditBalance: 60_564.9, creditUpdatedAt: now.addingTimeInterval(-100),
+        updatedAt: now, source: "codex-app-server", limitID: "codex")
+    try expectEqual(QuotaCreditPresentation.text(local: nil, synced: synced, now: now), "60,564", "popover and status title must use fresh synced credits when a Mac lacks local credits")
+    let encoded = try JSONEncoder().encode(synced)
+    synced = try JSONDecoder().decode(TeamQuotaReport.self, from: encoded)
+    try expectEqual(QuotaCreditPresentation.text(local: nil, synced: synced, now: now), "60,564", "API credit observation time must survive decoding")
+    try expectEqual(QuotaCreditPresentation.text(local: nil, synced: synced, now: now.addingTimeInterval(801)), nil, "a recent parent quota cannot extend an old credit observation")
+    let local = QuotaSnapshot(weeklyRemainingPercent: 0, weeklyResetsAt: reset, creditBalance: 60_000,
+        source: "codex-app-server", limitID: "codex", updatedAt: now)
+    try expectEqual(QuotaCreditPresentation.text(local: local, synced: synced, now: now), "60,000", "newer valid local credit wins")
+    synced.creditBalance = 0
+    synced.creditUpdatedAt = synced.updatedAt
+    try expectEqual(QuotaCreditPresentation.text(local: nil, synced: synced, now: now), nil, "confirmed empty credits must never show a positive balance")
+    try expectEqual(QuotaCreditPresentation.text(local: local, synced: synced, now: now), nil, "an equally recent confirmed zero must override a positive balance")
+    synced.weeklyRemainingPercent = 1
+    try expectEqual(QuotaCreditPresentation.text(local: local, synced: synced, now: now), nil, "available weekly quota keeps percentage mode")
+    synced.weeklyRemainingPercent = 0
+    synced.weeklyResetsAt = "2026-11-05T00:00:00.000Z"
+    try expectEqual(QuotaCreditPresentation.text(local: local, synced: synced, now: now), nil, "a different weekly reset must not reuse local credits")
+}
+
 func testSessionCreditCollection() throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     let sessions = root.appendingPathComponent("sessions")
@@ -5118,6 +5143,7 @@ let tests: [(String, () throws -> Void)] = [
     ("hook log line includes quota summary", testHookLogLineIncludesQuotaSummary),
     ("hook bridge updates quota and project audit", testHookBridgeUpdatesQuotaAndProjectAudit),
     ("hook bridge quota-only event skips project", testHookBridgeQuotaOnlyEventDoesNotRecordProject),
+    ("unified local and synced credit presentation", testUnifiedLocalAndSyncedCreditPresentation),
     ("session quota collector uses newest Codex event", testSessionQuotaCollectorUsesNewestCodexRateLimitEvent),
     ("session quota collector ignores Spark limit", testSessionQuotaCollectorIgnoresSparkRateLimitEvent),
     ("session quota collector repairs Spark contamination", testSessionQuotaCollectorRepairsNewerSparkContamination),

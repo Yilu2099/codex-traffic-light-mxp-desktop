@@ -152,8 +152,7 @@ struct StatusPopoverView: View {
     private var quotaCard: some View {
         let quota = quotaWindow
         let remaining = quota?.remainingPercent
-        let credits = quotaWindows.contains(where: { $0.kind == .weekly && $0.remainingPercent > 0 })
-            ? nil : model.snapshot?.quota?.remainingCreditText()
+        let credits = QuotaCreditPresentation.text(local: model.snapshot?.quota, synced: model.syncedQuota)
         let balance = Double(remaining ?? 0) / 100
         return HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
@@ -511,15 +510,18 @@ struct StatusPopoverView: View {
     private func memberQuotaProgress(_ member: TeamRankingMember) -> some View {
         HStack(spacing: 7) {
             if let quota = member.weeklyQuota?.preferredWindow {
-                Text("\(quota.kind.label)余额 \(quota.remainingPercent)%")
+                let credits = QuotaCreditPresentation.text(local: nil, synced: member.weeklyQuota)
+                Text(credits.map { "剩余额度 \($0)" } ?? "\(quota.kind.label)余额 \(quota.remainingPercent)%")
                     .font(.system(size: 9.5, weight: .bold))
                     .foregroundStyle(green)
                     .fixedSize(horizontal: true, vertical: false)
-                ProgressView(value: Double(quota.remainingPercent) / 100)
-                    .progressViewStyle(.linear)
-                    .tint(green)
-                    .frame(width: 54)
-                Text(memberQuotaResetText(quota.resetsAt))
+                if credits == nil {
+                    ProgressView(value: Double(quota.remainingPercent) / 100)
+                        .progressViewStyle(.linear)
+                        .tint(green)
+                        .frame(width: 54)
+                }
+                Text(memberQuotaResetText(credits != nil ? member.weeklyQuota?.weeklyResetsAtDate : quota.resetsAt))
                     .font(.system(size: 9, weight: .medium))
                     .foregroundStyle(muted)
                     .lineLimit(1)
@@ -630,13 +632,20 @@ struct StatusPopoverView: View {
         quotaWindows.dropFirst().first
     }
 
+    private var displayedResetAt: Date? {
+        if QuotaCreditPresentation.text(local: model.snapshot?.quota, synced: model.syncedQuota) != nil {
+            return model.syncedQuota?.weeklyResetsAtDate ?? model.snapshot?.quota?.weeklyResetsAt
+        }
+        return quotaWindow?.resetsAt
+    }
+
     private var resetRelativeText: String {
-        guard let date = quotaWindow?.resetsAt else { return "暂无数据" }
+        guard let date = displayedResetAt else { return "暂无数据" }
         return QuotaDisplayFormatter.refreshCountdownText(until: date)
     }
 
     private var resetAbsoluteText: String {
-        guard let date = quotaWindow?.resetsAt else { return "—" }
+        guard let date = displayedResetAt else { return "—" }
         return QuotaDisplayFormatter.absoluteDateTimeText(date)
     }
 

@@ -73,14 +73,19 @@ public struct QuotaSnapshot: Codable, Equatable {
         self.updatedAt = updatedAt
     }
 
-    /// Credits are local official metadata; never infer them from a percentage.
-    public func remainingCreditText(now: Date = Date()) -> String? {
+    /// Never infer credits from a percentage or refresh their observation time.
+    public func freshCreditBalance(now: Date = Date()) -> Double? {
         guard limitID == CodexSessionQuotaCollector.primaryLimitID,
               weeklyRemainingPercent == 0,
               let weeklyResetsAt, weeklyResetsAt > now,
               now.timeIntervalSince(updatedAt) >= -60,
               now.timeIntervalSince(updatedAt) <= 15 * 60,
-              let creditBalance, creditBalance.isFinite, creditBalance > 0 else { return nil }
+              let creditBalance, creditBalance.isFinite, creditBalance >= 0 else { return nil }
+        return creditBalance
+    }
+
+    public func remainingCreditText(now: Date = Date()) -> String? {
+        guard let creditBalance = freshCreditBalance(now: now), creditBalance > 0 else { return nil }
         let formatter = NumberFormatter()
         formatter.locale = Locale(identifier: "en_US")
         formatter.numberStyle = .decimal

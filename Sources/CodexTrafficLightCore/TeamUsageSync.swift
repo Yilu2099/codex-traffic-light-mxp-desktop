@@ -225,6 +225,7 @@ public struct TeamQuotaReport: Codable, Equatable, Sendable {
     public var weeklyUsedPercent: Int?
     public var fiveHourResetsAt: String?
     public var weeklyResetsAt: String?
+    public var creditUpdatedAt: String?
     public var creditBalance: Double?
     public var primaryWindow: CodexQuotaWindowKind?
     public var updatedAt: String
@@ -239,6 +240,7 @@ public struct TeamQuotaReport: Codable, Equatable, Sendable {
         case weeklyUsedPercent = "weeklyUsedPercent"
         case fiveHourResetsAt
         case weeklyResetsAt = "weeklyResetsAt"
+        case creditUpdatedAt
         case creditBalance
         case primaryWindow
         case updatedAt
@@ -253,6 +255,7 @@ public struct TeamQuotaReport: Codable, Equatable, Sendable {
         fiveHourRemainingPercent: Int? = nil,
         fiveHourResetsAt: Date? = nil,
         creditBalance: Double? = nil,
+        creditUpdatedAt: Date? = nil,
         primaryWindow: CodexQuotaWindowKind? = nil,
         updatedAt: Date,
         source: String? = nil,
@@ -265,7 +268,8 @@ public struct TeamQuotaReport: Codable, Equatable, Sendable {
         self.weeklyUsedPercent = self.weeklyRemainingPercent.map { 100 - $0 }
         self.fiveHourResetsAt = fiveHourResetsAt.map(Self.isoString)
         self.weeklyResetsAt = weeklyResetsAt.map(Self.isoString)
-        self.creditBalance = creditBalance.flatMap { $0.isFinite && $0 > 0 ? $0 : nil }
+        self.creditBalance = creditBalance.flatMap { $0.isFinite && $0 >= 0 ? $0 : nil }
+        self.creditUpdatedAt = creditUpdatedAt.map(Self.isoString)
         self.primaryWindow = primaryWindow ?? (fiveHourRemainingPercent != nil ? .fiveHour : .weekly)
         self.updatedAt = Self.isoString(updatedAt)
         self.source = source
@@ -282,7 +286,8 @@ public struct TeamQuotaReport: Codable, Equatable, Sendable {
             weeklyResetsAt: quota.weeklyResetsAt,
             fiveHourRemainingPercent: quota.fiveHourRemainingPercent,
             fiveHourResetsAt: quota.fiveHourResetsAt,
-            creditBalance: quota.remainingCreditText() != nil ? quota.creditBalance : nil,
+            creditBalance: quota.freshCreditBalance(),
+            creditUpdatedAt: quota.freshCreditBalance() != nil ? quota.updatedAt : nil,
             primaryWindow: quota.primaryWindow,
             updatedAt: quota.updatedAt,
             source: quota.source,

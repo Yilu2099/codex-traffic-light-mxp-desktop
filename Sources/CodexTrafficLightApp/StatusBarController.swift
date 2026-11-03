@@ -158,8 +158,7 @@ final class StatusBarController {
     }
 
     private var remainingCreditText: String? {
-        guard !effectiveQuotaWindows().contains(where: { $0.kind == .weekly && $0.remainingPercent > 0 }) else { return nil }
-        return snapshot?.quota?.remainingCreditText()
+        QuotaCreditPresentation.text(local: snapshot?.quota, synced: syncedQuota)
     }
 
     private func detailLines() -> [String] {
@@ -278,12 +277,26 @@ final class StatusBarController {
         let image = NSImage(size: NSSize(width: 18, height: 18))
         image.lockFocus()
         defer { image.unlockFocus() }
-        let symbol = NSImage(systemSymbolName: "star.fill", accessibilityDescription: "剩余额度")?
-            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 13, weight: .semibold))?
-            .withSymbolConfiguration(NSImage.SymbolConfiguration(paletteColors: [
-                NSColor(srgbRed: 0.91, green: 0.64, blue: 0.15, alpha: 1)
-            ]))
-        symbol?.draw(in: NSRect(x: 2, y: 2, width: 14, height: 14))
+        let points = (0..<10).map { index -> NSPoint in
+            let angle = CGFloat.pi / 2 + CGFloat(index) * CGFloat.pi / 5
+            let radius: CGFloat = index.isMultiple(of: 2) ? 1 : 0.60
+            return NSPoint(x: cos(angle) * radius, y: sin(angle) * radius)
+        }
+        let minX = points.map(\.x).min()!, maxX = points.map(\.x).max()!
+        let minY = points.map(\.y).min()!, maxY = points.map(\.y).max()!
+        let star = NSBezierPath()
+        for (index, point) in points.enumerated() {
+            let point = NSPoint(x: 0.6 + (point.x - minX) / (maxX - minX) * 16.8,
+                                y: 0.6 + (point.y - minY) / (maxY - minY) * 16.8)
+            if index == 0 { star.move(to: point) } else { star.line(to: point) }
+        }
+        star.close()
+        NSGradient(starting: NSColor(srgbRed: 0.96, green: 0.67, blue: 0.06, alpha: 1),
+                   ending: NSColor(srgbRed: 1, green: 0.88, blue: 0.34, alpha: 1))?.draw(in: star, angle: 90)
+        NSColor(srgbRed: 0.88, green: 0.58, blue: 0.04, alpha: 1).setStroke()
+        star.lineWidth = 0.8
+        star.lineJoinStyle = .round
+        star.stroke()
         image.isTemplate = false
         return image
     }
