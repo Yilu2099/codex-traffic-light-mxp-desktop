@@ -29,6 +29,10 @@ if let capturePath = ProcessInfo.processInfo.environment["CODEX_LIGHT_CAPTURE_ST
     let succeeded = StatusPopoverCapture.writePreview(to: URL(fileURLWithPath: capturePath))
     exit(succeeded ? 0 : 1)
 }
+if let capturePath = ProcessInfo.processInfo.environment["CODEX_LIGHT_CAPTURE_CREDIT_STATUS"] {
+    app.setActivationPolicy(.accessory)
+    exit(StatusBarController.writeCreditPreview(to: URL(fileURLWithPath: capturePath)) ? 0 : 1)
+}
 let delegate = AppDelegate()
 app.delegate = delegate
 app.setActivationPolicy(.accessory)

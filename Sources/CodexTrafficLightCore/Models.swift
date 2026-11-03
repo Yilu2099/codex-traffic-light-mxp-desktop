@@ -29,6 +29,7 @@ public struct QuotaSnapshot: Codable, Equatable {
     public var weeklyRemainingPercent: Int?
     public var fiveHourResetsAt: Date?
     public var weeklyResetsAt: Date?
+    public var creditBalance: Double?
     public var primaryWindow: CodexQuotaWindowKind?
     public var source: String
     public var limitID: String?
@@ -40,6 +41,7 @@ public struct QuotaSnapshot: Codable, Equatable {
         case weeklyRemainingPercent = "weekly_remaining_percent"
         case fiveHourResetsAt = "five_hour_resets_at"
         case weeklyResetsAt = "weekly_resets_at"
+        case creditBalance = "credit_balance"
         case primaryWindow = "primary_window"
         case source
         case limitID = "limit_id"
@@ -52,6 +54,7 @@ public struct QuotaSnapshot: Codable, Equatable {
         weeklyResetsAt: Date? = nil,
         fiveHourRemainingPercent: Int? = nil,
         fiveHourResetsAt: Date? = nil,
+        creditBalance: Double? = nil,
         primaryWindow: CodexQuotaWindowKind? = nil,
         source: String,
         limitID: String? = nil,
@@ -62,11 +65,28 @@ public struct QuotaSnapshot: Codable, Equatable {
         self.weeklyRemainingPercent = weeklyRemainingPercent.map { min(100, max(0, $0)) }
         self.fiveHourResetsAt = fiveHourResetsAt
         self.weeklyResetsAt = weeklyResetsAt
+        self.creditBalance = creditBalance
         self.primaryWindow = primaryWindow
         self.source = source
         self.limitID = limitID
         self.planType = MembershipPlanType.normalized(planType)
         self.updatedAt = updatedAt
+    }
+
+    /// Credits are local official metadata; never infer them from a percentage.
+    public func remainingCreditText(now: Date = Date()) -> String? {
+        guard limitID == CodexSessionQuotaCollector.primaryLimitID,
+              weeklyRemainingPercent == 0,
+              let weeklyResetsAt, weeklyResetsAt > now,
+              now.timeIntervalSince(updatedAt) >= -60,
+              now.timeIntervalSince(updatedAt) <= 15 * 60,
+              let creditBalance, creditBalance.isFinite, creditBalance > 0 else { return nil }
+        let formatter = NumberFormatter()
+        formatter.locale = Locale(identifier: "en_US")
+        formatter.numberStyle = .decimal
+        formatter.maximumFractionDigits = 0
+        formatter.roundingMode = .down
+        return formatter.string(from: NSNumber(value: creditBalance))
     }
 
     public var availableWindows: [CodexQuotaWindow] {

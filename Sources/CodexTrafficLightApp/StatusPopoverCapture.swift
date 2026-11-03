@@ -6,23 +6,28 @@ import CodexTrafficLightCore
 enum StatusPopoverCapture {
     static func writePreview(to url: URL) -> Bool {
         let now = Date()
+        let creditPreview = ProcessInfo.processInfo.environment["CODEX_LIGHT_CAPTURE_STATUS_STATE"] == "credits"
         let model = StatusPopoverModel()
         model.snapshot = StateSnapshot(
             updatedAt: now,
             quota: QuotaSnapshot(
-                fiveHourRemainingPercent: 82,
+                weeklyRemainingPercent: creditPreview ? 0 : nil,
+                weeklyResetsAt: now.addingTimeInterval(4 * 86_400),
+                fiveHourRemainingPercent: creditPreview ? nil : 82,
                 fiveHourResetsAt: now.addingTimeInterval(3 * 3_600),
-                primaryWindow: .fiveHour,
+                creditBalance: creditPreview ? 61_066 : nil,
+                primaryWindow: creditPreview ? .weekly : .fiveHour,
                 source: "preview",
+                limitID: "codex",
                 updatedAt: now
             )
         )
         model.syncedQuota = TeamQuotaReport(
-            weeklyRemainingPercent: 48,
+            weeklyRemainingPercent: creditPreview ? 0 : 48,
             weeklyResetsAt: now.addingTimeInterval(4 * 86_400 + 12 * 3_600),
-            fiveHourRemainingPercent: 82,
+            fiveHourRemainingPercent: creditPreview ? nil : 82,
             fiveHourResetsAt: now.addingTimeInterval(3 * 3_600),
-            primaryWindow: .fiveHour,
+            primaryWindow: creditPreview ? .weekly : .fiveHour,
             updatedAt: now
         )
         let previewState = ProcessInfo.processInfo.environment["CODEX_LIGHT_CAPTURE_STATUS_STATE"]

@@ -152,36 +152,40 @@ struct StatusPopoverView: View {
     private var quotaCard: some View {
         let quota = quotaWindow
         let remaining = quota?.remainingPercent
+        let credits = quotaWindows.contains(where: { $0.kind == .weekly && $0.remainingPercent > 0 })
+            ? nil : model.snapshot?.quota?.remainingCreditText()
         let balance = Double(remaining ?? 0) / 100
         return HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
-                Text("个人\(quota?.kind.label ?? "")余额")
+                Text(credits != nil ? "剩余额度" : "个人\(quota?.kind.label ?? "")余额")
                     .font(.system(size: 11, weight: .bold))
                     .foregroundStyle(muted)
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
-                    Text(remaining.map(String.init) ?? "--")
+                    Text(credits ?? remaining.map(String.init) ?? "--")
                         .font(.system(size: 30, weight: .bold, design: .rounded))
                         .foregroundStyle(ink)
-                    Text("% 剩余")
+                    Text(credits != nil ? "" : "% 剩余")
                         .font(.system(size: 11, weight: .bold))
                         .foregroundStyle(muted)
                 }
             }
-            .frame(width: 102, alignment: .leading)
+            .frame(width: credits != nil ? 150 : 102, alignment: .leading)
 
             VStack(alignment: .leading, spacing: 7) {
-                Text("已用 \(remaining.map { 100 - $0 } ?? 0)%")
+                Text(credits != nil ? "周额度已用完" : "已用 \(remaining.map { 100 - $0 } ?? 0)%")
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(muted)
-                if let secondaryQuotaWindow {
+                if credits == nil, let secondaryQuotaWindow {
                     Text("同时有 \(secondaryQuotaWindow.kind.label)余额 \(secondaryQuotaWindow.remainingPercent)%")
                         .font(.system(size: 9, weight: .semibold))
                         .foregroundStyle(muted)
                         .lineLimit(1)
                 }
-                ProgressView(value: max(0, min(1, balance)))
-                    .tint(green)
-                    .scaleEffect(x: 1, y: 1.25, anchor: .center)
+                if credits == nil {
+                    ProgressView(value: max(0, min(1, balance)))
+                        .tint(green)
+                        .scaleEffect(x: 1, y: 1.25, anchor: .center)
+                }
             }
             .frame(maxWidth: .infinity)
 

@@ -118,14 +118,54 @@ final class StatusBarController {
         if let websiteURL { popoverModel.websiteURL = websiteURL }
     }
 
+    static func writeCreditPreview(to url: URL) -> Bool {
+        let controller = StatusBarController()
+        defer { NSStatusBar.system.removeStatusItem(controller.item) }
+        let now = Date()
+        controller.apply(snapshot: StateSnapshot(updatedAt: now, quota: QuotaSnapshot(
+            weeklyRemainingPercent: 0, weeklyResetsAt: now.addingTimeInterval(86400),
+            creditBalance: 61_066, source: "preview", limitID: "codex", updatedAt: now)))
+        guard let button = controller.item.button else { return false }
+        let preview = NSButton(title: button.title, target: nil, action: nil)
+        preview.image = button.image
+        preview.imagePosition = .imageLeft
+        preview.imageScaling = .scaleProportionallyDown
+        preview.isBordered = false
+        preview.font = button.font
+        preview.appearance = NSAppearance(named: .aqua)
+        preview.frame = NSRect(x: 0, y: 0, width: preview.fittingSize.width + 12, height: 24)
+        guard let bitmap = preview.bitmapImageRepForCachingDisplay(in: preview.bounds) else { return false }
+        preview.cacheDisplay(in: preview.bounds, to: bitmap)
+        let image = NSImage(size: preview.bounds.size)
+        image.lockFocus()
+        NSColor(white: 0.94, alpha: 1).setFill()
+        preview.bounds.fill()
+        let foreground = NSImage(size: preview.bounds.size)
+        foreground.addRepresentation(bitmap)
+        foreground.draw(in: preview.bounds, from: .zero, operation: .sourceOver, fraction: 1)
+        image.unlockFocus()
+        guard let tiff = image.tiffRepresentation, let output = NSBitmapImageRep(data: tiff),
+              let png = output.representation(using: .png, properties: [:]) else { return false }
+        do { try png.write(to: url); return true } catch { return false }
+    }
+
     private func statusBarText() -> String {
+        if let credits = remainingCreditText { return "剩余额度 \(credits)" }
         guard let quota = effectiveQuota() else {
             return "额度 --"
         }
         return "\(quota.kind.label)余额 \(quota.remainingPercent)%"
     }
 
+    private var remainingCreditText: String? {
+        guard !effectiveQuotaWindows().contains(where: { $0.kind == .weekly && $0.remainingPercent > 0 }) else { return nil }
+        return snapshot?.quota?.remainingCreditText()
+    }
+
     private func detailLines() -> [String] {
+        if let credits = remainingCreditText {
+            return ["剩余额度：\(credits)", "周额度已用完，当前使用剩余额度"]
+        }
         let quota = effectiveQuota()
         let label = quota.map { "\($0.kind.label)余额" } ?? "额度"
         let percentText = quota.map { "\($0.remainingPercent)%" } ?? "--"
@@ -165,7 +205,7 @@ final class StatusBarController {
     }
 
     private func refreshQuotaPresentation() {
-        quotaRemainingPercent = effectiveQuota()?.remainingPercent
+        quotaRemainingPercent = remainingCreditText != nil ? nil : effectiveQuota()?.remainingPercent
         updateQuotaIndicator()
         item.button?.title = statusBarText()
         item.button?.toolTip = detailLines().joined(separator: "\n")

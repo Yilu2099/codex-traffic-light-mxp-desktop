@@ -434,6 +434,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StatusBarControllerDel
                     weeklyResetsAt: localObservation.weeklyResetsAt,
                     fiveHourPercent: localObservation.fiveHourRemainingPercent,
                     fiveHourResetsAt: localObservation.fiveHourResetsAt,
+                    creditBalance: localObservation.creditBalance,
                     primaryWindow: localObservation.primaryWindow,
                     source: CodexSessionQuotaCollector.source,
                     limitID: CodexSessionQuotaCollector.primaryLimitID,

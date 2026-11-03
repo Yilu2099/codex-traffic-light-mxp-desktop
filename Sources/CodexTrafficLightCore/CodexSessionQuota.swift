@@ -5,6 +5,7 @@ public struct CodexSessionQuotaObservation: Sendable, Equatable {
     public var weeklyRemainingPercent: Int?
     public var fiveHourResetsAt: Date?
     public var weeklyResetsAt: Date?
+    public var creditBalance: Double?
     public var primaryWindow: CodexQuotaWindowKind?
     public var observedAt: Date
 
@@ -13,6 +14,7 @@ public struct CodexSessionQuotaObservation: Sendable, Equatable {
         weeklyResetsAt: Date? = nil,
         fiveHourRemainingPercent: Int? = nil,
         fiveHourResetsAt: Date? = nil,
+        creditBalance: Double? = nil,
         primaryWindow: CodexQuotaWindowKind? = nil,
         observedAt: Date
     ) {
@@ -20,6 +22,7 @@ public struct CodexSessionQuotaObservation: Sendable, Equatable {
         self.weeklyRemainingPercent = weeklyRemainingPercent.map { min(100, max(0, $0)) }
         self.fiveHourResetsAt = fiveHourResetsAt
         self.weeklyResetsAt = weeklyResetsAt
+        self.creditBalance = creditBalance
         self.primaryWindow = primaryWindow ?? (fiveHourRemainingPercent != nil ? .fiveHour : .weekly)
         self.observedAt = observedAt
     }
@@ -66,6 +69,7 @@ public struct CodexSessionQuotaCollector: Sendable {
         var weeklyRemainingPercent: Int?
         var fiveHourResetsAt: TimeInterval?
         var weeklyResetsAt: TimeInterval?
+        var creditBalance: Double?
         var primaryWindow: CodexQuotaWindowKind?
         var observedAt: TimeInterval
 
@@ -74,6 +78,7 @@ public struct CodexSessionQuotaCollector: Sendable {
             weeklyRemainingPercent = observation.weeklyRemainingPercent
             fiveHourResetsAt = observation.fiveHourResetsAt?.timeIntervalSince1970
             weeklyResetsAt = observation.weeklyResetsAt?.timeIntervalSince1970
+            creditBalance = observation.creditBalance
             primaryWindow = observation.primaryWindow
             observedAt = observation.observedAt.timeIntervalSince1970
         }
@@ -84,6 +89,7 @@ public struct CodexSessionQuotaCollector: Sendable {
                 weeklyResetsAt: weeklyResetsAt.map { Date(timeIntervalSince1970: $0) },
                 fiveHourRemainingPercent: fiveHourRemainingPercent,
                 fiveHourResetsAt: fiveHourResetsAt.map { Date(timeIntervalSince1970: $0) },
+                creditBalance: creditBalance,
                 primaryWindow: primaryWindow,
                 observedAt: Date(timeIntervalSince1970: observedAt)
             )
@@ -269,11 +275,15 @@ public struct CodexSessionQuotaCollector: Sendable {
             if weeklyUsed != nil && fiveHourUsed == nil { return .weekly }
             return nil
         }()
+        let credits = limits["credits"] as? [String: Any]
+        let balance = (weeklyUsed ?? 0) >= 100 && credits?["has_credits"] as? Bool == true && credits?["unlimited"] as? Bool != true
+            ? credits.flatMap { Self.double($0["balance"]) } : nil
         return CodexSessionQuotaObservation(
             weeklyRemainingPercent: weeklyUsed.map(Self.remainingPercent),
             weeklyResetsAt: weekly.flatMap(Self.resetDate),
             fiveHourRemainingPercent: fiveHourUsed.map(Self.remainingPercent),
             fiveHourResetsAt: fiveHour.flatMap(Self.resetDate),
+            creditBalance: balance,
             primaryWindow: primaryWindow,
             observedAt: observedAt
         )

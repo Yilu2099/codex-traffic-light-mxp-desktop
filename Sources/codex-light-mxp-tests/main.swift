@@ -496,6 +496,48 @@ func testAppServerQuotaMapperReadsCodexLimitByExactDurations() throws {
     try expectEqual(quota.primaryWindow, .fiveHour, "mapper should preserve the official primary window")
 }
 
+func testRemainingCreditDisplay() throws {
+    let now = Date()
+    var quota = QuotaSnapshot(weeklyRemainingPercent: 0, weeklyResetsAt: now.addingTimeInterval(3600),
+        creditBalance: 61_066.9, source: "codex-session-rate-limits", limitID: "codex", updatedAt: now)
+    try expectEqual(quota.remainingCreditText(now: now), "61,066", "credits should use grouped whole units without overstating balance")
+    quota.weeklyRemainingPercent = 1
+    try expectEqual(quota.remainingCreditText(now: now), nil, "available weekly quota keeps percentage display")
+    quota.weeklyRemainingPercent = 0
+    try expectEqual(quota.remainingCreditText(now: now.addingTimeInterval(901)), nil, "stale balance must not appear current")
+    quota.creditBalance = nil
+    try expectEqual(quota.remainingCreditText(now: now), nil, "missing balance must stay unknown")
+    quota.creditBalance = 0
+    try expectEqual(quota.remainingCreditText(now: now), nil, "empty credits must not claim active credit use")
+    quota.creditBalance = 100
+    quota.weeklyResetsAt = now
+    try expectEqual(quota.remainingCreditText(now: now), nil, "reset weekly quota must stop credit display")
+}
+
+func testSessionCreditCollection() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let sessions = root.appendingPathComponent("sessions")
+    try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let now = Date(timeIntervalSince1970: 1_787_389_000)
+    let file = sessions.appendingPathComponent("credits.jsonl")
+    let state = root.appendingPathComponent("state.json")
+    let row = #"{"timestamp":"2026-08-22T06:30:00Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"codex","primary":{"used_percent":100,"window_minutes":10080,"resets_at":1787561781},"credits":{"has_credits":true,"unlimited":false,"balance":"61066.9"}}}}"#
+    try (row + "\n").write(to: file, atomically: true, encoding: .utf8)
+    let collector = CodexSessionQuotaCollector(stateURL: state)
+    let first = collector.collect(codexHome: root, now: now)
+    try expectEqual(first?.creditBalance, 61_066.9, "official session credits should decode numeric strings")
+    let cached = collector.collect(codexHome: root, now: now)
+    try expectEqual(cached?.creditBalance, first?.creditBalance, "incremental cache must retain credits")
+    let store = StateStore(stateURL: root.appendingPathComponent("snapshot.json"))
+    _ = try store.updateQuota(weeklyPercent: 0, weeklyResetsAt: first?.weeklyResetsAt,
+        creditBalance: first?.creditBalance, source: "codex-session-rate-limits", limitID: "codex", now: now)
+    try expectEqual(store.read().quota?.remainingCreditText(now: now), "61,066", "state persistence should retain displayable credits")
+    try (row.replacingOccurrences(of: "used_percent\":100", with: "used_percent\":99.6") + "\n").write(to: file, atomically: true, encoding: .utf8)
+    let fractional = CodexSessionQuotaCollector(stateURL: root.appendingPathComponent("fractional.json")).collect(codexHome: root, now: now)
+    try expectEqual(fractional?.creditBalance, nil, "rounded zero percent is not proof of exhaustion")
+}
+
 func testSessionQuotaCollectorUsesNewestCodexRateLimitEvent() throws {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("codex-session-quota-tests-\(UUID().uuidString)", isDirectory: true)
@@ -5178,6 +5220,8 @@ let tests: [(String, () throws -> Void)] = [
 ]
 
 let allTests = tests + [
+    ("session credit collection", testSessionCreditCollection),
+    ("remaining credit display", testRemainingCreditDisplay),
     ("native receipt audit canonical requests", testNativeReceiptAuditUsesCanonicalRequestsWithoutChangingCounters),
     ("native receipt audit physical copies and conflicts", testNativeReceiptAuditMergesCopiesAndRejectsConflicts),
     ("dot reconnect independent dates", testDotReconnectDatesAreIndependent),
