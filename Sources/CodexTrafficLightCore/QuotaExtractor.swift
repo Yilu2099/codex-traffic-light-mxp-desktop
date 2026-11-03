@@ -5,6 +5,7 @@ public struct QuotaValues: Equatable, Sendable {
     public var weeklyRemainingPercent: Int?
     public var fiveHourResetsAt: Date?
     public var weeklyResetsAt: Date?
+    public var creditBalance: Double?
     public var primaryWindow: CodexQuotaWindowKind?
     public var planType: String?
 
@@ -13,6 +14,7 @@ public struct QuotaValues: Equatable, Sendable {
         weeklyResetsAt: Date? = nil,
         fiveHourRemainingPercent: Int? = nil,
         fiveHourResetsAt: Date? = nil,
+        creditBalance: Double? = nil,
         primaryWindow: CodexQuotaWindowKind? = nil,
         planType: String? = nil
     ) {
@@ -20,6 +22,7 @@ public struct QuotaValues: Equatable, Sendable {
         self.weeklyRemainingPercent = weeklyRemainingPercent.map { min(100, max(0, $0)) }
         self.fiveHourResetsAt = fiveHourResetsAt
         self.weeklyResetsAt = weeklyResetsAt
+        self.creditBalance = creditBalance
         self.primaryWindow = primaryWindow
         self.planType = MembershipPlanType.normalized(planType)
     }

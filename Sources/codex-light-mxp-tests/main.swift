@@ -1022,6 +1022,26 @@ struct FakeAppServerTransport: CodexAppServerTransport {
     }
 }
 
+func testAppServerCreditBalanceReachesDisplay() throws {
+    let now = Date(timeIntervalSince1970: 1_787_389_000)
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let row = #"{"rateLimitsByLimitId":{"codex":{"limitId":"codex","primary":{"usedPercent":100,"windowDurationMins":10080,"resetsAt":1787561781},"credits":{"hasCredits":true,"unlimited":false,"balance":"61066.9"}},"codex_other":{"limitId":"codex_other","credits":{"hasCredits":true,"unlimited":false,"balance":"999999"}}}}"#
+    let store = StateStore(stateURL: root.appendingPathComponent("state.json"))
+    let transport = FakeAppServerTransport(result: .success(Data(row.utf8)))
+    let snapshot = try CodexAppServerQuotaCollector(transport: transport).fetchAndUpdate(store: store, now: now)
+    try expectEqual(snapshot.quota?.source, "codex-app-server", "fixture must exercise MacBook's official source")
+    try expectEqual(store.read().quota?.remainingCreditText(now: now), "61,066", "official API credits must survive mapping and persistence into display")
+    for (old, new) in [("usedPercent\":100", "usedPercent\":99.6"),
+                       ("hasCredits\":true", "hasCredits\":false"),
+                       ("unlimited\":false", "unlimited\":true"),
+                       ("balance\":\"61066.9\"", "balance\":null"),
+                       ("balance\":\"61066.9\"", "balance\":\"invalid\"") ] {
+        let quota = try CodexAppServerQuotaMapper.quotaValues(from: Data(row.replacingOccurrences(of: old, with: new).utf8))
+        try expectEqual(quota.creditBalance, nil, "invalid, unlimited or unexhausted credits must not become usable balance")
+    }
+}
+
 func testAppServerQuotaCollectorUsesTransportFixture() throws {
     let codex = appServerSnapshot(primaryUsed: 28, primaryDuration: 300, secondaryUsed: 52, secondaryDuration: 10_080)
     let data = appServerRateLimitsResponse(rateLimitsByLimitId: #"{"codex": \#(codex)}"#)
@@ -5220,6 +5240,7 @@ let tests: [(String, () throws -> Void)] = [
 ]
 
 let allTests = tests + [
+    ("app-server credit balance reaches display", testAppServerCreditBalanceReachesDisplay),
     ("session credit collection", testSessionCreditCollection),
     ("remaining credit display", testRemainingCreditDisplay),
     ("native receipt audit canonical requests", testNativeReceiptAuditUsesCanonicalRequestsWithoutChangingCounters),

@@ -121,6 +121,7 @@ public enum CodexAppServerQuotaMapper {
             weeklyResetsAt: weeklyWindow?.resetsAt,
             fiveHourRemainingPercent: fiveHourWindow.map { remainingPercent(fromUsedPercent: $0.usedPercent) },
             fiveHourResetsAt: fiveHourWindow?.resetsAt,
+            creditBalance: (weeklyWindow?.usedPercent ?? 0) >= 100 ? snapshot.credits?.availableBalance : nil,
             primaryWindow: primaryWindow,
             planType: snapshot.planType
         )
@@ -256,6 +257,7 @@ public struct CodexAppServerQuotaCollector {
             weeklyResetsAt: quota.weeklyResetsAt,
             fiveHourPercent: quota.fiveHourRemainingPercent,
             fiveHourResetsAt: quota.fiveHourResetsAt,
+            creditBalance: quota.creditBalance,
             primaryWindow: quota.primaryWindow,
             source: Self.source,
             limitID: CodexSessionQuotaCollector.primaryLimitID,
@@ -466,8 +468,21 @@ private struct AppServerRateLimitsResponse: Decodable {
 private struct AppServerRateLimitSnapshot: Decodable {
     var limitId: String?
     var planType: String?
+    var credits: AppServerCreditsSnapshot?
     var primary: AppServerRateLimitWindow?
     var secondary: AppServerRateLimitWindow?
+}
+
+private struct AppServerCreditsSnapshot: Decodable {
+    var hasCredits: Bool
+    var unlimited: Bool
+    var balance: String?
+
+    var availableBalance: Double? {
+        guard hasCredits, !unlimited, let balance = balance.flatMap(Double.init),
+              balance.isFinite, balance > 0 else { return nil }
+        return balance
+    }
 }
 
 private struct AppServerRateLimitWindow: Decodable {
