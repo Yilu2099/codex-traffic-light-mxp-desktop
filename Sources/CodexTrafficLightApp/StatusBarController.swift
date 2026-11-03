@@ -124,7 +124,7 @@ final class StatusBarController {
         let now = Date()
         controller.apply(snapshot: StateSnapshot(updatedAt: now, quota: QuotaSnapshot(
             weeklyRemainingPercent: 0, weeklyResetsAt: now.addingTimeInterval(86400),
-            creditBalance: 61_066, source: "preview", limitID: "codex", updatedAt: now)))
+            creditBalance: 60_564, source: "preview", limitID: "codex", updatedAt: now)))
         guard let button = controller.item.button else { return false }
         let preview = NSButton(title: button.title, target: nil, action: nil)
         preview.image = button.image
@@ -212,6 +212,10 @@ final class StatusBarController {
     }
 
     private func updateQuotaIndicator() {
+        if remainingCreditText != nil {
+            item.button?.image = makeCreditIndicator()
+            return
+        }
         guard let percent = quotaRemainingPercent else {
             item.button?.image = makeQuotaIndicator(color: .systemGray, glow: 0.15)
             return
@@ -268,6 +272,20 @@ final class StatusBarController {
     private func selectRankingRange(_ range: StatusRankingRange) {
         setRankingRange(range, isLoading: true)
         delegate?.statusBarDidSelectRankingRange(range)
+    }
+
+    private func makeCreditIndicator() -> NSImage {
+        let image = NSImage(size: NSSize(width: 18, height: 18))
+        image.lockFocus()
+        defer { image.unlockFocus() }
+        let symbol = NSImage(systemSymbolName: "star.fill", accessibilityDescription: "剩余额度")?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 13, weight: .semibold))?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(paletteColors: [
+                NSColor(srgbRed: 0.91, green: 0.64, blue: 0.15, alpha: 1)
+            ]))
+        symbol?.draw(in: NSRect(x: 2, y: 2, width: 14, height: 14))
+        image.isTemplate = false
+        return image
     }
 
     private func makeQuotaIndicator(

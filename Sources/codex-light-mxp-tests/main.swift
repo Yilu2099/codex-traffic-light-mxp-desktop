@@ -501,6 +501,14 @@ func testRemainingCreditDisplay() throws {
     var quota = QuotaSnapshot(weeklyRemainingPercent: 0, weeklyResetsAt: now.addingTimeInterval(3600),
         creditBalance: 61_066.9, source: "codex-session-rate-limits", limitID: "codex", updatedAt: now)
     try expectEqual(quota.remainingCreditText(now: now), "61,066", "credits should use grouped whole units without overstating balance")
+    let report = TeamQuotaReport.from(snapshot: StateSnapshot(updatedAt: now, quota: quota))
+    try expectEqual(report?.creditBalance, 61_066.9, "official credits should reach team reports")
+    let encoded = try JSONEncoder().encode(report!)
+    try expectEqual(try JSONDecoder().decode(TeamQuotaReport.self, from: encoded).creditBalance, 61_066.9, "credit balance must survive the team API contract")
+    let stale = StateSnapshot(updatedAt: now, quota: QuotaSnapshot(weeklyRemainingPercent: 0,
+        weeklyResetsAt: now.addingTimeInterval(3600), creditBalance: 100,
+        source: "codex-app-server", limitID: "codex", updatedAt: now.addingTimeInterval(-901)))
+    try expectEqual(TeamQuotaReport.from(snapshot: stale)?.creditBalance, nil, "expired credits must not be uploaded as current")
     quota.weeklyRemainingPercent = 1
     try expectEqual(quota.remainingCreditText(now: now), nil, "available weekly quota keeps percentage display")
     quota.weeklyRemainingPercent = 0

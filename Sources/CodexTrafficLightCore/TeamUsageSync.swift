@@ -225,6 +225,7 @@ public struct TeamQuotaReport: Codable, Equatable, Sendable {
     public var weeklyUsedPercent: Int?
     public var fiveHourResetsAt: String?
     public var weeklyResetsAt: String?
+    public var creditBalance: Double?
     public var primaryWindow: CodexQuotaWindowKind?
     public var updatedAt: String
     public var source: String?
@@ -238,6 +239,7 @@ public struct TeamQuotaReport: Codable, Equatable, Sendable {
         case weeklyUsedPercent = "weeklyUsedPercent"
         case fiveHourResetsAt
         case weeklyResetsAt = "weeklyResetsAt"
+        case creditBalance
         case primaryWindow
         case updatedAt
         case source
@@ -250,6 +252,7 @@ public struct TeamQuotaReport: Codable, Equatable, Sendable {
         weeklyResetsAt: Date? = nil,
         fiveHourRemainingPercent: Int? = nil,
         fiveHourResetsAt: Date? = nil,
+        creditBalance: Double? = nil,
         primaryWindow: CodexQuotaWindowKind? = nil,
         updatedAt: Date,
         source: String? = nil,
@@ -262,6 +265,7 @@ public struct TeamQuotaReport: Codable, Equatable, Sendable {
         self.weeklyUsedPercent = self.weeklyRemainingPercent.map { 100 - $0 }
         self.fiveHourResetsAt = fiveHourResetsAt.map(Self.isoString)
         self.weeklyResetsAt = weeklyResetsAt.map(Self.isoString)
+        self.creditBalance = creditBalance.flatMap { $0.isFinite && $0 > 0 ? $0 : nil }
         self.primaryWindow = primaryWindow ?? (fiveHourRemainingPercent != nil ? .fiveHour : .weekly)
         self.updatedAt = Self.isoString(updatedAt)
         self.source = source
@@ -278,6 +282,7 @@ public struct TeamQuotaReport: Codable, Equatable, Sendable {
             weeklyResetsAt: quota.weeklyResetsAt,
             fiveHourRemainingPercent: quota.fiveHourRemainingPercent,
             fiveHourResetsAt: quota.fiveHourResetsAt,
+            creditBalance: quota.remainingCreditText() != nil ? quota.creditBalance : nil,
             primaryWindow: quota.primaryWindow,
             updatedAt: quota.updatedAt,
             source: quota.source,
