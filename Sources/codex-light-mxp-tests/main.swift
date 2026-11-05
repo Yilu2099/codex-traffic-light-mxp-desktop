@@ -4888,6 +4888,19 @@ func testExternalAlertStoreDeduplicatesDeliveredEvents() throws {
     )
 }
 
+func testClaudeBackfillExpandsCachedHistory() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("tool-history-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: root) }
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let stamp = ISO8601DateFormatter().string(from: Date().addingTimeInterval(-90 * 86400))
+    let item: [String: Any] = ["type": "assistant", "timestamp": stamp, "message": ["id": "old", "usage": ["input_tokens": 2, "output_tokens": 3]]]
+    var data = try JSONSerialization.data(withJSONObject: item); data.append(10)
+    try data.write(to: root.appendingPathComponent("history.jsonl"))
+    let collector = ClaudeTokenUsageCollector(), cache = root.appendingPathComponent("cache.json")
+    try expectEqual(collector.collect(root: root, days: 45, cacheURL: cache).count, 0, "short cached history excludes older days")
+    try expectEqual(collector.collect(root: root, days: 365, cacheURL: cache).first?.totalTokens, 5, "expanding history must reparse the cached file")
+}
+
 func testToolUsageCollectorNormalizesAndDeduplicates() throws {
     let home = FileManager.default.temporaryDirectory.appendingPathComponent("tools-\(UUID().uuidString)")
     defer { try? FileManager.default.removeItem(at: home) }
@@ -5143,6 +5156,7 @@ let tests: [(String, () throws -> Void)] = [
     ("computer history summaries stay bounded and private", testComputerHistorySummariesAreBoundedAndPrivate),
     ("claude token usage deduplicates messages", testClaudeTokenUsageDeduplicatesMessages),
     ("multi tool tokens normalize and deduplicate", testToolUsageCollectorNormalizesAndDeduplicates),
+    ("Claude cached history expands for backfill", testClaudeBackfillExpandsCachedHistory),
     ("brand tagline stays aligned", {
         try expectEqual(BrandCopy.tagline, "用 Codex 手搓世界，人人都是造物主", "client tagline should match the approved brand copy")
     }),

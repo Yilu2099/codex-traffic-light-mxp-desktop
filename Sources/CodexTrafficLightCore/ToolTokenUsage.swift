@@ -40,14 +40,14 @@ public struct ToolTokenUsageCollector {
         let roots = [("kimi", URL(fileURLWithPath: env["KIMI_SHARE_DIR"] ?? home.appendingPathComponent(".kimi").path).appendingPathComponent("sessions")),
                      ("kimi", home.appendingPathComponent(".kimi-code/sessions")),
                      ("muse", URL(fileURLWithPath: env["XDG_DATA_HOME"] ?? home.appendingPathComponent(".local/share").path).appendingPathComponent("muse/sessions"))]
-        let cutoff = now.addingTimeInterval(-45 * 86400)
+        let cutoff = now.addingTimeInterval(-365 * 86400)
         let keys: Set<URLResourceKey> = [.isRegularFileKey, .contentModificationDateKey, .fileSizeKey]
         for (tool, root) in roots {
             guard let files = FileManager.default.enumerator(at: root, includingPropertiesForKeys: Array(keys)) else { continue }
             for case let file as URL in files where file.lastPathComponent == (tool == "kimi" ? "wire.jsonl" : "session.jsonl") {
                 guard let v = try? file.resourceValues(forKeys: keys), v.isRegularFile == true,
                       (v.contentModificationDate ?? .distantPast) >= cutoff else { continue }
-                let signature = "v2:\(v.fileSize ?? 0):\((v.contentModificationDate ?? .distantPast).timeIntervalSince1970)"
+                let signature = "v3-365:\(v.fileSize ?? 0):\((v.contentModificationDate ?? .distantPast).timeIntervalSince1970)"
                 let entry = old[file.path].flatMap { $0.signature == signature ? $0 : nil }
                     ?? CachedFile(signature: signature, records: parse(file: file, tool: tool, cutoff: cutoff, now: now))
                 next[file.path] = entry

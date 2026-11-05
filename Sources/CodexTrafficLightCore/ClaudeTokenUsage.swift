@@ -31,7 +31,7 @@ public struct ClaudeTokenUsageCollector {
         root: URL = URL(fileURLWithPath: ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"]
             ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude").path)
             .appendingPathComponent("projects"),
-        days: Int = 45,
+        days: Int = 365,
         cacheURL: URL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".wanhe-codex-token/claude-usage-cache.json")
     ) -> [ClaudeDailyTokens] {
         let cutoff = Date().addingTimeInterval(-Double(days) * 86_400)
@@ -43,7 +43,7 @@ public struct ClaudeTokenUsageCollector {
         for case let file as URL in files where file.pathExtension == "jsonl" {
             guard let values = try? file.resourceValues(forKeys: [.isRegularFileKey, .contentModificationDateKey, .fileSizeKey]),
                   values.isRegularFile == true, (values.contentModificationDate ?? .distantPast) >= cutoff else { continue }
-            let signature = "\(values.fileSize ?? 0):\((values.contentModificationDate ?? .distantPast).timeIntervalSince1970)"
+            let signature = "\(days):\(values.fileSize ?? 0):\((values.contentModificationDate ?? .distantPast).timeIntervalSince1970)"
             let entry = old[file.path].flatMap { $0.signature == signature ? $0 : nil }
                 ?? CachedFile(signature: signature, messages: parse(file: file, cutoff: cutoff))
             next[file.path] = entry
