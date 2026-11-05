@@ -566,6 +566,7 @@ public struct TeamRankingMember: Codable, Equatable, Sendable {
     public var devices: [DeviceSummary]?
     public var joined: Bool?
     public var tools: [String]? = nil
+    public var toolTokens: [String: Int]? = nil
 
     public init(
         id: String,

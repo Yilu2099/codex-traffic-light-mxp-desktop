@@ -19,6 +19,16 @@ func expect(_ condition: Bool, _ message: String) throws {
     }
 }
 
+func testRankingToolTokenBreakdownDecoding() throws {
+    let payload = #"{"id":"zlu","name":"张璐","tokens":9000,"sessions":1,"tools":["codex","claude","kimi"],"toolTokens":{"codex":6000,"claude":2000,"kimi":1000}}"#
+    let member = try JSONDecoder().decode(TeamRankingMember.self, from: Data(payload.utf8))
+    try expectEqual(member.toolTokens?["claude"], 2000, "badge must use the tool breakdown rather than the member total")
+    try expectEqual(member.toolTokens?["kimi"], 1000, "each badge retains its own count")
+    let legacy = #"{"id":"zlu","name":"张璐","tokens":9000,"sessions":1}"#
+    let older = try JSONDecoder().decode(TeamRankingMember.self, from: Data(legacy.utf8))
+    try expectEqual(older.toolTokens, nil, "missing breakdown stays unknown instead of becoming zero")
+}
+
 func testCommandContract() throws {
     try expectEqual(CommandContract.clientCommandName, "codex-light-mxp", "client command should preserve installed name")
     try expectEqual(CommandContract.quotaCommandName, "quota", "quota command should be named quota")
@@ -5160,6 +5170,7 @@ let tests: [(String, () throws -> Void)] = [
     ("brand tagline stays aligned", {
         try expectEqual(BrandCopy.tagline, "用 Codex 手搓世界，人人都是造物主", "client tagline should match the approved brand copy")
     }),
+    ("ranking tool token breakdown decoding", testRankingToolTokenBreakdownDecoding),
     ("command contract", testCommandContract),
     ("grind display formatter", testGrindDisplayFormatterUsesConciseLabels),
     ("workday status tracks latest human message", testWorkdayStatusTracksLatestHumanMessage),
