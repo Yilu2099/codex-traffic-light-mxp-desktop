@@ -22,6 +22,7 @@ func usage() {
            \(CommandContract.clientCommandName) quota --stdin [--json]
            \(CommandContract.clientCommandName) quota --app-server [--json]
            \(CommandContract.clientCommandName) chat-usage [--json]
+           \(CommandContract.clientCommandName) tool-usage [--json]
            \(CommandContract.clientCommandName) dot-usage [--task <thread-id>] [--json]
            \(CommandContract.clientCommandName) dot-input-audit [--json]
            \(CommandContract.clientCommandName) device-input-audit [--json]
@@ -96,6 +97,9 @@ do {
     let store = StateStore()
 
     switch command {
+    case "tool-usage":
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
+        FileHandle.standardOutput.write(try encoder.encode(ToolTokenUsageCollector().collect())); print("")
     case "dot-boundary-preview":
         FileHandle.standardOutput.write(try JSONEncoder().encode(DotReconnectRecovery.preview(stateURL: DotTokenUsageObserver.stateURL))); print("")
     case "token-receipt-audit", "token-receipt-audit-preview":

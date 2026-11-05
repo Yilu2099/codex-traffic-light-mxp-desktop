@@ -4888,6 +4888,32 @@ func testExternalAlertStoreDeduplicatesDeliveredEvents() throws {
     )
 }
 
+func testToolUsageCollectorNormalizesAndDeduplicates() throws {
+    let home = FileManager.default.temporaryDirectory.appendingPathComponent("tools-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: home) }
+    let now = Date(), time = Date().addingTimeInterval(-5).timeIntervalSince1970
+    func write(_ folder: String, _ file: String, _ items: [[String: Any]]) throws {
+        let root = home.appendingPathComponent(folder)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let lines = try items.map { String(data: try JSONSerialization.data(withJSONObject: $0), encoding: .utf8)! }.joined(separator: "\n") + "\n"
+        try lines.write(to: root.appendingPathComponent(file), atomically: true, encoding: .utf8)
+    }
+    let muse: [String: Any] = ["id": "muse-one", "recorded_at": time * 1_000_000, "payload_type": "runtime.session", "payload": ["event": ["kind": "model_completed", "usage": ["input_tokens": 100, "cached_tokens": 40, "cache_write_tokens": 10, "output_tokens": 20, "reasoning_tokens": 5]]]]
+    let embedded = String(data: try JSONSerialization.data(withJSONObject: muse), encoding: .utf8)!
+    try write(".local/share/muse/sessions/one", "session.jsonl", [muse, ["children": [["record_json": embedded]]]])
+    try write(".local/share/muse/sessions/copy", "session.jsonl", [muse])
+    let kimi: [String: Any] = ["type": "usage.record", "usageScope": "turn", "time": time * 1000, "usage": ["inputOther": 60, "inputCacheRead": 40, "inputCacheCreation": 10, "output": 20]]
+    var cumulative = kimi; cumulative["usageScope"] = "session"
+    try write(".kimi/sessions/one", "wire.jsonl", [kimi, cumulative])
+    let collector = ToolTokenUsageCollector()
+    let rows = collector.collect(home: home, now: now)
+    try expectEqual(rows.count, 2, "only tools with real usage appear")
+    try expectEqual(rows.map(\.totalTokens), [130, 130], "copies, retained frames, cumulative records and reasoning subsets count once")
+    try expectEqual(collector.collect(home: home, now: now), rows, "cached results remain stable")
+    let encoded = String(data: try JSONEncoder().encode(rows), encoding: .utf8)!
+    try expect(!encoded.contains(home.path) && !encoded.contains("muse-one"), "only counters leave this Mac")
+}
+
 func testClaudeTokenUsageDeduplicatesMessages() throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent("claude-token-\(UUID().uuidString)")
     defer { try? FileManager.default.removeItem(at: root) }
@@ -5115,6 +5141,7 @@ let tests: [(String, () throws -> Void)] = [
     ("token accuracy receipt collector integration", testNativeUsageReceiptCollectorIntegration),
     ("computer history summaries stay bounded and private", testComputerHistorySummariesAreBoundedAndPrivate),
     ("claude token usage deduplicates messages", testClaudeTokenUsageDeduplicatesMessages),
+    ("multi tool tokens normalize and deduplicate", testToolUsageCollectorNormalizesAndDeduplicates),
     ("brand tagline stays aligned", {
         try expectEqual(BrandCopy.tagline, "用 Codex 手搓世界，人人都是造物主", "client tagline should match the approved brand copy")
     }),

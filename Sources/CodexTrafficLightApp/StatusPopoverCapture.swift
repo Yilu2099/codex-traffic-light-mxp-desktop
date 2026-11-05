@@ -75,6 +75,7 @@ enum StatusPopoverCapture {
         } else {
             model.ranking = try? JSONDecoder().decode(TeamRankingSnapshot.self, from: Data(rankingJSON.utf8))
             if previewState != "unjoined", var today = model.ranking {
+                if previewState == "tools", !today.members.isEmpty { today.members[0].tools = ["codex", "claude", "muse", "kimi"] }
                 if creditPreview, let index = today.members.firstIndex(where: { $0.id == "zlu" }) {
                     today.members[index].weeklyQuota = model.syncedQuota
                 }

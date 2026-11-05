@@ -532,6 +532,15 @@ struct StatusPopoverView: View {
                     .font(.system(size: 9.5, weight: .semibold))
                     .foregroundStyle(muted)
             }
+            ForEach((member.tools ?? []).filter { $0 != "codex" }, id: \.self) { tool in
+                Text(["claude": "Claude", "muse": "Muse", "kimi": "Kimi", "grokbot": "Grok Bot"][tool] ?? tool)
+                    .font(.system(size: 8.5, weight: .semibold))
+                    .foregroundStyle(Color(red: 0.35, green: 0.38, blue: 0.41))
+                    .padding(.horizontal, 5).padding(.vertical, 2)
+                    .background(LinearGradient(colors: [.white, Color(white: 0.87), Color(white: 0.96)], startPoint: .top, endPoint: .bottom), in: RoundedRectangle(cornerRadius: 4))
+                    .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.gray.opacity(0.25), lineWidth: 0.5))
+                    .fixedSize()
+            }
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, alignment: .leading)

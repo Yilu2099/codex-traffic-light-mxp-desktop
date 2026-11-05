@@ -396,6 +396,7 @@ public struct TeamUsagePayload: Codable, Equatable, Sendable {
     public var humanInputMetadata: HumanInputMetadata? = nil
     public var todayLiveUsage: TodayLiveUsageReport
     public var claudeDailyUsage: [ClaudeDailyTokens]?
+    public var toolDailyUsage: [ToolDailyUsage]? = nil
     public var sessionActivity: [TeamSessionActivity]
     public var sessionActivityMode: String?
     public var sessionActivityCutoffDay: String?
@@ -410,7 +411,7 @@ public struct TeamUsagePayload: Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case collector, collectedAt, profile, device, client, updaterHealth, quota, quotaDiagnostic, officialUsage, todayLiveUsage, claudeDailyUsage
         case sessionActivity, sessionActivityMode, sessionActivityCutoffDay, interactionSummary, grindHistory, grindHistoryMode
-        case projects, inputEvents, sessions, usageOnly, chatUsage, computerHistory, humanInputMetadata
+        case projects, inputEvents, sessions, usageOnly, chatUsage, computerHistory, humanInputMetadata, toolDailyUsage
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -429,6 +430,7 @@ public struct TeamUsagePayload: Codable, Equatable, Sendable {
         try container.encodeIfPresent(humanInputMetadata, forKey: .humanInputMetadata)
         try container.encode(todayLiveUsage, forKey: .todayLiveUsage)
         try container.encodeIfPresent(claudeDailyUsage, forKey: .claudeDailyUsage)
+        try container.encodeIfPresent(toolDailyUsage, forKey: .toolDailyUsage)
         // Retain only daily timestamp bounds. The constant key keeps the existing
         // server protocol compatible without transmitting conversation identities.
         if grindHistoryMode == "interaction_v8" {
@@ -563,6 +565,7 @@ public struct TeamRankingMember: Codable, Equatable, Sendable {
     public var weeklyQuota: TeamQuotaReport?
     public var devices: [DeviceSummary]?
     public var joined: Bool?
+    public var tools: [String]? = nil
 
     public init(
         id: String,
@@ -1132,6 +1135,7 @@ public struct TeamUsageSyncService: Sendable {
             humanInputMetadata: pilot ? HumanInputMetadata(dot: HumanInputIntegration.cachedDot(configuration: configuration, now: now), nativeCoverage: nativeCoverage) : nil,
             todayLiveUsage: todayLiveUsage,
             claudeDailyUsage: nil,
+            toolDailyUsage: ToolTokenUsageCollector().collect(),
             sessionActivity: [],
             sessionActivityMode: nil,
             sessionActivityCutoffDay: nil,
