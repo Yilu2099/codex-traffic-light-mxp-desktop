@@ -4902,9 +4902,10 @@ func testToolUsageCollectorNormalizesAndDeduplicates() throws {
     let embedded = String(data: try JSONSerialization.data(withJSONObject: muse), encoding: .utf8)!
     try write(".local/share/muse/sessions/one", "session.jsonl", [muse, ["children": [["record_json": embedded]]]])
     try write(".local/share/muse/sessions/copy", "session.jsonl", [muse])
-    let kimi: [String: Any] = ["type": "usage.record", "usageScope": "turn", "time": time * 1000, "usage": ["inputOther": 60, "inputCacheRead": 40, "inputCacheCreation": 10, "output": 20]]
+    let kimi: [String: Any] = ["type": "usage.record", "agentId": "kimi-agent", "usageScope": "turn", "time": time * 1000, "usage": ["inputOther": 60, "inputCacheRead": 40, "inputCacheCreation": 10, "output": 20]]
     var cumulative = kimi; cumulative["usageScope"] = "session"
     try write(".kimi/sessions/one", "wire.jsonl", [kimi, cumulative])
+    try write(".kimi/sessions/copied", "wire.jsonl", [kimi])
     let collector = ToolTokenUsageCollector()
     let rows = collector.collect(home: home, now: now)
     try expectEqual(rows.count, 2, "only tools with real usage appear")

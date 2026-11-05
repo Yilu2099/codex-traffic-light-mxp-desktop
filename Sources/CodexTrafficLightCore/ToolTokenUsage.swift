@@ -47,7 +47,7 @@ public struct ToolTokenUsageCollector {
             for case let file as URL in files where file.lastPathComponent == (tool == "kimi" ? "wire.jsonl" : "session.jsonl") {
                 guard let v = try? file.resourceValues(forKeys: keys), v.isRegularFile == true,
                       (v.contentModificationDate ?? .distantPast) >= cutoff else { continue }
-                let signature = "\(v.fileSize ?? 0):\((v.contentModificationDate ?? .distantPast).timeIntervalSince1970)"
+                let signature = "v2:\(v.fileSize ?? 0):\((v.contentModificationDate ?? .distantPast).timeIntervalSince1970)"
                 let entry = old[file.path].flatMap { $0.signature == signature ? $0 : nil }
                     ?? CachedFile(signature: signature, records: parse(file: file, tool: tool, cutoff: cutoff, now: now))
                 next[file.path] = entry
@@ -86,7 +86,7 @@ public struct ToolTokenUsageCollector {
                 items = children.compactMap { child in (child["record_json"] as? String)?.data(using: .utf8).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } }
             }
             for item in items {
-                guard let (id, date, row) = parseRecord(item, tool: tool, fallbackID: file.path + ":" + String(lineIndex)), date >= cutoff, date <= now else { continue }
+                guard let (id, date, row) = parseRecord(item, tool: tool, fallbackID: file.resolvingSymlinksInPath().path + ":" + String(lineIndex)), date >= cutoff, date <= now else { continue }
                 if row.totalTokens > (result[id]?.totalTokens ?? -1) { result[id] = row }
             }
         }
@@ -113,6 +113,7 @@ public struct ToolTokenUsageCollector {
         } else if item["type"] as? String == "usage.record" {
             guard item["usageScope"] as? String == "turn", let raw = item["usage"] as? [String: Any], let time = item["time"] as? NSNumber else { return nil }
             usage = raw; date = Date(timeIntervalSince1970: time.doubleValue / 1000)
+            if let agent = item["agentId"] as? String { id = agent + ":" + time.stringValue }
             cached = n(usage, "inputCacheRead"); input = n(usage, "inputOther") + cached
             write = n(usage, "inputCacheCreation"); output = n(usage, "output")
         } else {
