@@ -397,6 +397,7 @@ public struct TeamUsagePayload: Codable, Equatable, Sendable {
     public var todayLiveUsage: TodayLiveUsageReport
     public var claudeDailyUsage: [ClaudeDailyTokens]?
     public var toolDailyUsage: [ToolDailyUsage]? = nil
+    public var toolInteractionSummary: [TeamSessionInteractionSummary]? = nil
     public var sessionActivity: [TeamSessionActivity]
     public var sessionActivityMode: String?
     public var sessionActivityCutoffDay: String?
@@ -411,7 +412,7 @@ public struct TeamUsagePayload: Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case collector, collectedAt, profile, device, client, updaterHealth, quota, quotaDiagnostic, officialUsage, todayLiveUsage, claudeDailyUsage
         case sessionActivity, sessionActivityMode, sessionActivityCutoffDay, interactionSummary, grindHistory, grindHistoryMode
-        case projects, inputEvents, sessions, usageOnly, chatUsage, computerHistory, humanInputMetadata, toolDailyUsage
+        case projects, inputEvents, sessions, usageOnly, chatUsage, computerHistory, humanInputMetadata, toolDailyUsage, toolInteractionSummary
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -431,6 +432,7 @@ public struct TeamUsagePayload: Codable, Equatable, Sendable {
         try container.encode(todayLiveUsage, forKey: .todayLiveUsage)
         try container.encodeIfPresent(claudeDailyUsage, forKey: .claudeDailyUsage)
         try container.encodeIfPresent(toolDailyUsage, forKey: .toolDailyUsage)
+        try container.encodeIfPresent(toolInteractionSummary, forKey: .toolInteractionSummary)
         // Retain only daily timestamp bounds. The constant key keeps the existing
         // server protocol compatible without transmitting conversation identities.
         if grindHistoryMode == "interaction_v8" {
@@ -1137,6 +1139,7 @@ public struct TeamUsageSyncService: Sendable {
             todayLiveUsage: todayLiveUsage,
             claudeDailyUsage: nil,
             toolDailyUsage: ToolTokenUsageCollector().collect(),
+            toolInteractionSummary: ToolHumanActivityCollector().collect(now: now),
             sessionActivity: [],
             sessionActivityMode: nil,
             sessionActivityCutoffDay: nil,

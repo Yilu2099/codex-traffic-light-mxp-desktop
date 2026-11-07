@@ -5165,6 +5165,7 @@ let tests: [(String, () throws -> Void)] = [
     ("token accuracy receipt collector integration", testNativeUsageReceiptCollectorIntegration),
     ("computer history summaries stay bounded and private", testComputerHistorySummariesAreBoundedAndPrivate),
     ("claude token usage deduplicates messages", testClaudeTokenUsageDeduplicatesMessages),
+    ("tool human activity provenance and boundaries", testToolHumanActivityProvenanceAndBoundaries),
     ("multi tool tokens normalize and deduplicate", testToolUsageCollectorNormalizesAndDeduplicates),
     ("Claude cached history expands for backfill", testClaudeBackfillExpandsCachedHistory),
     ("brand tagline stays aligned", {

@@ -7,7 +7,7 @@ public struct TeamClientMetadata: Codable, Equatable, Sendable {
 
     public static var current: Self {
         Self(version: ClientVersion.current, platform: "mac", capabilities: [
-            "local_tokens", "official_account_usage", "presence", "signed_updates", "updater_schedule_health",
+            "local_tokens", "official_account_usage", "presence", "signed_updates", "updater_schedule_health", "multi_tool_tokens_v1", "multi_tool_human_times_v1",
         ])
     }
 }

@@ -1,0 +1,382 @@
+{
+  "now": "2026-11-06T06:00:00+08:00",
+  "rows": [
+    {
+      "tool": "claude",
+      "item": {
+        "type": "user",
+        "uuid": "private-human-id",
+        "timestamp": "2026-11-05T08:30:00+08:00",
+        "entrypoint": "claude-desktop",
+        "message": {
+          "role": "user",
+          "content": "PRIVATE_MESSAGE"
+        }
+      }
+    },
+    {
+      "tool": "claude",
+      "item": {
+        "type": "user",
+        "uuid": "isSidechain",
+        "timestamp": "2026-11-05T08:30:00+08:00",
+        "entrypoint": "claude-desktop",
+        "message": {
+          "role": "user",
+          "content": "PRIVATE_MESSAGE"
+        },
+        "isSidechain": true
+      }
+    },
+    {
+      "tool": "claude",
+      "item": {
+        "type": "user",
+        "uuid": "isMeta",
+        "timestamp": "2026-11-05T08:30:00+08:00",
+        "entrypoint": "claude-desktop",
+        "message": {
+          "role": "user",
+          "content": "PRIVATE_MESSAGE"
+        },
+        "isMeta": true
+      }
+    },
+    {
+      "tool": "claude",
+      "item": {
+        "type": "user",
+        "uuid": "isCompactSummary",
+        "timestamp": "2026-11-05T08:30:00+08:00",
+        "entrypoint": "claude-desktop",
+        "message": {
+          "role": "user",
+          "content": "PRIVATE_MESSAGE"
+        },
+        "isCompactSummary": true
+      }
+    },
+    {
+      "tool": "claude",
+      "item": {
+        "type": "user",
+        "uuid": "origin",
+        "timestamp": "2026-11-05T08:30:00+08:00",
+        "entrypoint": "claude-desktop",
+        "message": {
+          "role": "user",
+          "content": "PRIVATE_MESSAGE"
+        },
+        "origin": {
+          "kind": "task-notification"
+        }
+      }
+    },
+    {
+      "tool": "claude",
+      "item": {
+        "type": "user",
+        "uuid": "entrypoint",
+        "timestamp": "2026-11-05T08:30:00+08:00",
+        "entrypoint": "sdk-cli",
+        "message": {
+          "role": "user",
+          "content": "PRIVATE_MESSAGE"
+        }
+      }
+    },
+    {
+      "tool": "claude",
+      "item": {
+        "type": "user",
+        "uuid": "turnOrigin",
+        "timestamp": "2026-11-05T08:30:00+08:00",
+        "entrypoint": "claude-desktop",
+        "message": {
+          "role": "user",
+          "content": "PRIVATE_MESSAGE"
+        },
+        "turnOrigin": "sdk"
+      }
+    },
+    {
+      "tool": "claude",
+      "item": {
+        "type": "user",
+        "uuid": "private-human-id",
+        "timestamp": "2026-11-05T08:30:00+08:00",
+        "entrypoint": "claude-desktop",
+        "message": {
+          "role": "user",
+          "content": [
+            {
+              "type": "tool_result",
+              "content": "PRIVATE_MESSAGE"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "tool": "claude",
+      "item": {
+        "type": "user",
+        "uuid": "private-human-id",
+        "timestamp": "2026-11-05T08:30:00+08:00",
+        "entrypoint": "claude-desktop",
+        "message": {
+          "role": "user",
+          "content": "<task-notification>PRIVATE_MESSAGE"
+        }
+      }
+    },
+    {
+      "tool": "claude",
+      "item": {
+        "type": "user",
+        "uuid": "private-human-id",
+        "timestamp": "2026-11-05T08:30:00+08:00",
+        "entrypoint": "claude-desktop",
+        "message": {
+          "role": "assistant",
+          "content": "PRIVATE_MESSAGE"
+        }
+      }
+    },
+    {
+      "tool": "claude",
+      "item": {
+        "type": "user",
+        "uuid": "human-2",
+        "timestamp": "2026-11-05T09:00:00+08:00",
+        "entrypoint": "claude-desktop",
+        "message": {
+          "role": "user",
+          "content": "PRIVATE_MESSAGE"
+        },
+        "promptSource": "sdk",
+        "turnOrigin": "human",
+        "origin": {
+          "kind": "human"
+        }
+      }
+    },
+    {
+      "tool": "kimi",
+      "item": {
+        "type": "turn.prompt",
+        "agentId": "private-agent",
+        "promptId": "private-prompt",
+        "input": [
+          {
+            "type": "text",
+            "text": "PRIVATE_MESSAGE"
+          }
+        ],
+        "origin": {
+          "kind": "user"
+        },
+        "time": 1793912340000
+      }
+    },
+    {
+      "tool": "kimi",
+      "item": {
+        "type": "turn.prompt",
+        "agentId": "private-agent",
+        "promptId": "system",
+        "input": [
+          {
+            "type": "text",
+            "text": "PRIVATE_MESSAGE"
+          }
+        ],
+        "origin": {
+          "kind": "system_trigger"
+        },
+        "time": 1793912340000
+      }
+    },
+    {
+      "tool": "kimi",
+      "item": {
+        "type": "turn.prompt",
+        "agentId": "private-agent",
+        "promptId": "after-five",
+        "input": [
+          {
+            "type": "text",
+            "text": "PRIVATE_MESSAGE"
+          }
+        ],
+        "origin": {
+          "kind": "user"
+        },
+        "time": 1793912400000
+      }
+    },
+    {
+      "tool": "kimi",
+      "item": {
+        "type": "turn.prompt",
+        "agentId": "private-agent",
+        "promptId": "future",
+        "input": [
+          {
+            "type": "text",
+            "text": "PRIVATE_MESSAGE"
+          }
+        ],
+        "origin": {
+          "kind": "user"
+        },
+        "time": 1793919600000
+      }
+    },
+    {
+      "tool": "muse",
+      "item": {
+        "id": "private-muse",
+        "stream": {
+          "kind": "session",
+          "id": "root"
+        },
+        "recorded_at": 1793892600000000,
+        "payload_type": "runtime.session",
+        "payload": {
+          "kind": "run",
+          "event": {
+            "kind": "started",
+            "prompt": "PRIVATE_MESSAGE",
+            "origin": {
+              "kind": "human"
+            }
+          }
+        }
+      }
+    },
+    {
+      "tool": "muse",
+      "item": {
+        "children": [
+          {
+            "record_json": "{\"id\": \"private-muse\", \"stream\": {\"kind\": \"session\", \"id\": \"root\"}, \"recorded_at\": 1793892600000000, \"payload_type\": \"runtime.session\", \"payload\": {\"kind\": \"run\", \"event\": {\"kind\": \"started\", \"prompt\": \"PRIVATE_MESSAGE\", \"origin\": {\"kind\": \"human\"}}}}"
+          }
+        ]
+      }
+    },
+    {
+      "tool": "muse",
+      "item": {
+        "id": "{'origin': {'kind': 'schedule'}}",
+        "stream": {
+          "kind": "session",
+          "id": "root"
+        },
+        "recorded_at": 1793892600000000,
+        "payload_type": "runtime.session",
+        "payload": {
+          "kind": "run",
+          "event": {
+            "kind": "started",
+            "prompt": "PRIVATE_MESSAGE",
+            "origin": {
+              "kind": "schedule"
+            }
+          }
+        }
+      }
+    },
+    {
+      "tool": "muse",
+      "item": {
+        "id": "{'origin': {}}",
+        "stream": {
+          "kind": "session",
+          "id": "root"
+        },
+        "recorded_at": 1793892600000000,
+        "payload_type": "runtime.session",
+        "payload": {
+          "kind": "run",
+          "event": {
+            "kind": "started",
+            "prompt": "PRIVATE_MESSAGE",
+            "origin": {}
+          }
+        }
+      }
+    },
+    {
+      "tool": "muse",
+      "item": {
+        "id": "{'scheduled': True}",
+        "stream": {
+          "kind": "session",
+          "id": "root"
+        },
+        "recorded_at": 1793892600000000,
+        "payload_type": "runtime.session",
+        "payload": {
+          "kind": "run",
+          "event": {
+            "kind": "started",
+            "prompt": "PRIVATE_MESSAGE",
+            "origin": {
+              "kind": "human"
+            },
+            "scheduled": true
+          }
+        }
+      }
+    },
+    {
+      "tool": "muse",
+      "item": {
+        "id": "{'kind': 'model_completed'}",
+        "stream": {
+          "kind": "session",
+          "id": "root"
+        },
+        "recorded_at": 1793892600000000,
+        "payload_type": "runtime.session",
+        "payload": {
+          "kind": "run",
+          "event": {
+            "kind": "model_completed",
+            "prompt": "PRIVATE_MESSAGE",
+            "origin": {
+              "kind": "human"
+            }
+          }
+        }
+      }
+    },
+    {
+      "tool": "claude",
+      "item": {
+        "type": "user",
+        "uuid": "old-retained-human",
+        "timestamp": "2026-07-01T08:00:00+08:00",
+        "entrypoint": "claude-desktop",
+        "message": {
+          "role": "user",
+          "content": "PRIVATE_MESSAGE"
+        }
+      }
+    },
+    {
+      "tool": "kimi",
+      "item": {
+        "type": "turn.prompt",
+        "agentId": "private-agent",
+        "promptId": "empty-input",
+        "input": [],
+        "origin": {
+          "kind": "user"
+        },
+        "time": 1793912340000
+      }
+    }
+  ]
+}
