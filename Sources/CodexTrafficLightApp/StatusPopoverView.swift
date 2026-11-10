@@ -534,8 +534,7 @@ struct StatusPopoverView: View {
             }
             ForEach((member.tools ?? []).filter { $0 != "codex" }, id: \.self) { tool in
                 let name = ["claude": "Claude", "muse": "Muse Code", "kimi": "Kimi", "grokbot": "Grok Bot"][tool] ?? tool
-                let period = model.selectedRange == .today ? "今日" : model.selectedRange == .week ? "本周" : "本月"
-                let usage = member.toolTokens?[tool].map { formatTokens($0) + " Token" } ?? "用量待同步"
+                let usage = member.toolTokens?[tool].map { formatTokens($0).replacingOccurrences(of: "万", with: " 万").replacingOccurrences(of: "亿", with: " 亿") + " token" } ?? "用量待同步"
                 Text(tool == "muse" ? "Muse" : name)
                     .font(.system(size: 8.5, weight: .semibold))
                     .foregroundStyle(Color(red: 0.35, green: 0.38, blue: 0.41))
@@ -543,7 +542,7 @@ struct StatusPopoverView: View {
                     .background(LinearGradient(colors: [.white, Color(white: 0.87), Color(white: 0.96)], startPoint: .top, endPoint: .bottom), in: RoundedRectangle(cornerRadius: 4))
                     .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.gray.opacity(0.25), lineWidth: 0.5))
                     .fixedSize()
-                    .help("\(name) · \(period) · \(usage)")
+                    .help(usage)
             }
             Spacer(minLength: 0)
         }
