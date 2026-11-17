@@ -38,6 +38,7 @@ final class StatusBarController {
     private let popover = NSPopover()
     var isPopoverShown: Bool { popover.isShown }
     private let popoverModel = StatusPopoverModel()
+    private var claudeQuotaTask: Task<Void, Never>?
     var onPopoverOpen: (() -> Void)?
     weak var delegate: StatusBarControllerDelegate?
     private var snapshot: StateSnapshot?
@@ -235,11 +236,26 @@ final class StatusBarController {
         )
     }
 
+    private func refreshClaudeQuota() {
+        guard claudeQuotaTask == nil else { return }
+        guard FileManager.default.fileExists(atPath: Sub2APIQuota.Configuration.localFile.path) else {
+            popoverModel.claudeQuota = nil
+            return
+        }
+        popoverModel.claudeQuota = .loading
+        claudeQuotaTask = Task { [weak self] in
+            let quota = try? await Sub2APIQuota.Configuration.load().fetch()
+            self?.popoverModel.claudeQuota = quota.map(Sub2APIQuotaState.sample) ?? .unavailable
+            self?.claudeQuotaTask = nil
+        }
+    }
+
     @objc private func togglePopover() {
         guard let button = item.button else { return }
         if popover.isShown {
             popover.performClose(nil)
         } else {
+            refreshClaudeQuota()
             onPopoverOpen?()
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
             popover.contentViewController?.view.window?.makeKey()

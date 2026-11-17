@@ -26,7 +26,12 @@ if let capturePath = ProcessInfo.processInfo.environment["CODEX_LIGHT_CAPTURE_EX
 }
 if let capturePath = ProcessInfo.processInfo.environment["CODEX_LIGHT_CAPTURE_STATUS_POPOVER"] {
     app.setActivationPolicy(.prohibited)
-    let succeeded = StatusPopoverCapture.writePreview(to: URL(fileURLWithPath: capturePath))
+    var claudeQuota: Sub2APIQuotaState?
+    if let file = ProcessInfo.processInfo.environment["CODEX_LIGHT_CAPTURE_CLAUDE_CONFIG"] {
+        let quota = try? await Sub2APIQuota.Configuration.load(from: URL(fileURLWithPath: file)).fetch()
+        claudeQuota = quota.map(Sub2APIQuotaState.sample) ?? .unavailable
+    }
+    let succeeded = StatusPopoverCapture.writePreview(to: URL(fileURLWithPath: capturePath), claudeQuota: claudeQuota)
     exit(succeeded ? 0 : 1)
 }
 if let capturePath = ProcessInfo.processInfo.environment["CODEX_LIGHT_CAPTURE_CREDIT_STATUS"] {

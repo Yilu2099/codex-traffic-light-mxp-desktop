@@ -39,6 +39,7 @@ final class StatusPopoverModel: ObservableObject {
     @Published var ranking: TeamRankingSnapshot?
     @Published var highlights: [String: MemberHighlight] = [:]
     @Published var syncedQuota: TeamQuotaReport?
+    @Published var claudeQuota: Sub2APIQuotaState?
     @Published var syncDetail: String = "正在读取团队数据…"
     @Published var websiteURL: URL?
     @Published var selectedRange: StatusRankingRange = .today
@@ -154,7 +155,20 @@ struct StatusPopoverView: View {
         let remaining = quota?.remainingPercent
         let credits = QuotaCreditPresentation.text(local: model.snapshot?.quota, synced: model.syncedQuota)
         let balance = Double(remaining ?? 0) / 100
-        return HStack(alignment: .center, spacing: 12) {
+        return VStack(spacing: 10) {
+            codexQuotaRow(quota: quota, remaining: remaining, credits: credits, balance: balance)
+            if let state = model.claudeQuota {
+                line.frame(height: 1)
+                claudeQuotaRows(state)
+            }
+        }
+        .padding(14)
+        .background(green.opacity(0.025), in: RoundedRectangle(cornerRadius: 17, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 17, style: .continuous).stroke(line, lineWidth: 1))
+    }
+
+    private func codexQuotaRow(quota: CodexQuotaWindow?, remaining: Int?, credits: String?, balance: Double) -> some View {
+        HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
                 Text(credits != nil ? "剩余额度" : "个人\(quota?.kind.label ?? "")余额")
                     .font(.system(size: 11, weight: .bold))
@@ -201,9 +215,53 @@ struct StatusPopoverView: View {
             .frame(width: 92, alignment: .trailing)
             .frame(minHeight: 44, alignment: .trailing)
         }
-        .padding(14)
-        .background(green.opacity(0.025), in: RoundedRectangle(cornerRadius: 17, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 17, style: .continuous).stroke(line, lineWidth: 1))
+    }
+
+    private func claudeQuotaRows(_ state: Sub2APIQuotaState) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack {
+                Text("Claude 订阅额度").fontWeight(.bold).foregroundStyle(ink)
+                Spacer()
+                if case let .sample(quota) = state, let sampledAt = Sub2APIQuota.date(quota.updatedAt) {
+                    Text("采样于 \(QuotaDisplayFormatter.absoluteDateTimeText(sampledAt))")
+                }
+            }
+            switch state {
+            case .loading:
+                Text("正在读取额度…")
+            case .unavailable:
+                Text("暂时读不到额度，重新打开面板可重试")
+            case let .sample(quota):
+                claudeWindowRow("5 小时", quota.fiveHour)
+                claudeWindowRow("周额度", quota.sevenDay)
+                if let fable = quota.sevenDayFable {
+                    claudeWindowRow("Fable 周额度", fable)
+                }
+            }
+        }
+        .font(.system(size: 11, weight: .medium))
+        .foregroundStyle(muted)
+        .lineLimit(1)
+    }
+
+    private func claudeWindowRow(_ label: String, _ window: Sub2APIQuota.Window?) -> some View {
+        HStack(spacing: 8) {
+            Text(label).frame(width: 82, alignment: .leading)
+            if let remaining = window?.remaining, let reset = window?.reset {
+                ProgressView(value: remaining / 100)
+                    .tint(green)
+                    .accessibilityHidden(true)
+                Text("剩余 " + remaining.formatted(.number.precision(.fractionLength(0...1))) + "%")
+                    .monospacedDigit().fontWeight(.semibold).foregroundStyle(ink)
+                    .frame(width: 72, alignment: .trailing)
+                Text(QuotaDisplayFormatter.absoluteDateTimeText(reset))
+                    .frame(width: 94, alignment: .trailing)
+                    .accessibilityLabel("刷新时间 " + QuotaDisplayFormatter.absoluteDateTimeText(reset))
+            } else {
+                Spacer()
+                Text("等待 Sub2API 更新")
+            }
+        }
     }
 
     private var rankingSection: some View {

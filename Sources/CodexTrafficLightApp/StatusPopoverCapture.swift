@@ -4,10 +4,11 @@ import CodexTrafficLightCore
 
 @MainActor
 enum StatusPopoverCapture {
-    static func writePreview(to url: URL) -> Bool {
+    static func writePreview(to url: URL, claudeQuota: Sub2APIQuotaState? = nil) -> Bool {
         let now = Date()
         let creditPreview = ProcessInfo.processInfo.environment["CODEX_LIGHT_CAPTURE_STATUS_STATE"] == "credits"
         let model = StatusPopoverModel()
+        model.claudeQuota = claudeQuota
         model.snapshot = StateSnapshot(
             updatedAt: now,
             quota: QuotaSnapshot(
