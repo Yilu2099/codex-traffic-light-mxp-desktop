@@ -97,3 +97,46 @@ public enum MemberHighlights {
         return value < 301 ? value + 1440 : value
     }
 }
+
+public enum TeamRoster {
+    public typealias Entry = (id: String, name: String, avatar: String)
+
+    /// Merges server members into the fixed roster. IDs match case-insensitively; the first
+    /// server copy of a duplicate wins, roster gaps stay as placeholders and members the
+    /// roster does not know yet are kept after roster entries.
+    public static func merge(_ incoming: [TeamRankingMember], roster: [Entry]) -> [TeamRankingMember] {
+        var byKey: [String: TeamRankingMember] = [:]
+        var serverOrder: [String] = []
+        for member in incoming {
+            let key = member.id.lowercased()
+            guard byKey[key] == nil else { continue }
+            byKey[key] = member
+            serverOrder.append(key)
+        }
+        let rosterKeys = Set(roster.map { $0.id.lowercased() })
+        let fixed = roster.map { entry -> TeamRankingMember in
+            var member = byKey[entry.id.lowercased()] ?? TeamRankingMember(id: entry.id, name: entry.name)
+            if member.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                member.name = entry.name
+            }
+            if member.avatar?.isEmpty != false {
+                member.avatar = "/avatars/\(entry.avatar)"
+            }
+            return member
+        }
+        let extra = serverOrder.filter { !rosterKeys.contains($0) }.compactMap { byKey[$0] }
+        return (fixed + extra).enumerated()
+            .sorted { left, right in
+                if left.1.hasEverJoined != right.1.hasEverJoined { return left.1.hasEverJoined }
+                if left.1.tokens != right.1.tokens { return left.1.tokens > right.1.tokens }
+                if left.1.sessions != right.1.sessions { return left.1.sessions > right.1.sessions }
+                return left.0 < right.0
+            }
+            .map(\.1)
+    }
+
+    public static func entry(for id: String, in roster: [Entry]) -> Entry? {
+        let key = id.lowercased()
+        return roster.first { $0.id.lowercased() == key }
+    }
+}

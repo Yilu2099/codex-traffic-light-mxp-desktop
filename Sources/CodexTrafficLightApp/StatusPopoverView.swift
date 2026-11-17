@@ -68,7 +68,7 @@ struct StatusPopoverView: View {
     private let dayInk = Color(red: 0.64, green: 0.39, blue: 0.08)
     private let nightTint = Color(red: 0.90, green: 0.92, blue: 0.965)
     private let nightInk = Color(red: 0.16, green: 0.28, blue: 0.48)
-    private let roster: [(id: String, name: String, avatar: String)] = [
+    private let roster: [TeamRoster.Entry] = [
         ("zlu", "张璐", "58.png"),
         ("qiubo", "仇博", "193.png"),
         ("yangang", "杨昂", "101.png"),
@@ -531,30 +531,13 @@ struct StatusPopoverView: View {
     }
 
     private var rankedMembers: [TeamRankingMember] {
-        let incoming = Dictionary(uniqueKeysWithValues: (model.ranking?.members ?? []).map { ($0.id.lowercased(), $0) })
-        return roster.enumerated().map { index, entry in
-            var member = incoming[entry.id] ?? TeamRankingMember(id: entry.id, name: entry.name)
-            if member.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                member.name = entry.name
-            }
-            if member.avatar?.isEmpty != false {
-                member.avatar = "/avatars/\(entry.avatar)"
-            }
-            return (index, member)
-        }
-        .sorted { left, right in
-            if left.1.hasEverJoined != right.1.hasEverJoined { return left.1.hasEverJoined }
-            if left.1.tokens != right.1.tokens { return left.1.tokens > right.1.tokens }
-            if left.1.sessions != right.1.sessions { return left.1.sessions > right.1.sessions }
-            return left.0 < right.0
-        }
-        .map(\.1)
+        TeamRoster.merge(model.ranking?.members ?? [], roster: roster)
     }
 
     private func displayName(_ member: TeamRankingMember) -> String {
         let serverName = member.name.trimmingCharacters(in: .whitespacesAndNewlines)
         if !serverName.isEmpty { return serverName }
-        return roster.first(where: { $0.id == member.id.lowercased() })?.name ?? member.id
+        return TeamRoster.entry(for: member.id, in: roster)?.name ?? member.id
     }
 
     private func memberActiveText(_ member: TeamRankingMember) -> String {
@@ -681,7 +664,7 @@ struct StatusPopoverView: View {
 
     private func localAvatar(_ member: TeamRankingMember) -> NSImage? {
         let serverFilename = member.avatar?.split(separator: "/").last.map(String.init)
-        guard let filename = serverFilename ?? roster.first(where: { $0.id == member.id.lowercased() })?.avatar else { return nil }
+        guard let filename = serverFilename ?? TeamRoster.entry(for: member.id, in: roster)?.avatar else { return nil }
         return BundledAvatarStore.image(for: filename)
     }
 

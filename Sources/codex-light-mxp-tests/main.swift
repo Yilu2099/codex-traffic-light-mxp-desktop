@@ -29,6 +29,18 @@ func testRankingToolTokenBreakdownDecoding() throws {
     try expectEqual(older.toolTokens, nil, "missing breakdown stays unknown instead of becoming zero")
 }
 
+func testTeamRosterMergeToleratesCaseDuplicatesAndKeepsNewMembers() throws {
+    let payload = #"[{"id":"ZLU","name":"张璐","tokens":900,"sessions":3},{"id":"zlu","name":"重复","tokens":1,"sessions":1},{"id":"newbie","name":"新人","tokens":50,"sessions":1}]"#
+    let incoming = try JSONDecoder().decode([TeamRankingMember].self, from: Data(payload.utf8))
+    let roster: [TeamRoster.Entry] = [("zlu", "张璐", "58.png"), ("qiubo", "仇博", "193.png")]
+    let merged = TeamRoster.merge(incoming, roster: roster)
+    try expectEqual(merged.map { $0.id.lowercased() }, ["zlu", "newbie", "qiubo"], "duplicates collapse, server-only member stays, roster gap stays last")
+    try expectEqual(merged[0].tokens, 900, "first server copy wins over a case-variant duplicate")
+    try expectEqual(merged[2].name, "仇博", "missing roster member keeps its placeholder")
+    try expectEqual(merged[2].avatar, "/avatars/193.png", "placeholder keeps roster avatar")
+    try expectEqual(TeamRoster.entry(for: "QiuBo", in: roster)?.name, "仇博", "roster lookup ignores case")
+}
+
 func testCommandContract() throws {
     try expectEqual(CommandContract.clientCommandName, "codex-light-mxp", "client command should preserve installed name")
     try expectEqual(CommandContract.quotaCommandName, "quota", "quota command should be named quota")
@@ -5328,6 +5340,7 @@ let tests: [(String, () throws -> Void)] = [
 ]
 
 let allTests = tests + [
+    ("team roster merge tolerates case duplicates", testTeamRosterMergeToleratesCaseDuplicatesAndKeepsNewMembers),
     ("app-server credit balance reaches display", testAppServerCreditBalanceReachesDisplay),
     ("session credit collection", testSessionCreditCollection),
     ("remaining credit display", testRemainingCreditDisplay),

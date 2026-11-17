@@ -9,8 +9,10 @@ ROOT="${DATA_DIR:h}"
 HEAD="$(git -C "$DIR" rev-parse HEAD)"
 MAIN="$(git -C "$DIR" ls-remote origin refs/heads/main | cut -f1)"
 [[ "$HEAD" == "$MAIN" ]] || { echo "发布源码尚未同步到 GitHub main，已停止。" >&2; exit 2; }
-git -C "$DIR" diff --quiet
-git -C "$DIR" diff --cached --quiet
+git -C "$DIR" diff --quiet && git -C "$DIR" diff --cached --quiet \
+  || { echo "发布源码存在未提交改动，已停止。" >&2; exit 2; }
+UNTRACKED="$(git -C "$DIR" ls-files --others --exclude-standard)"
+[[ -z "$UNTRACKED" ]] || { echo "发布源码存在未跟踪文件，已停止：" >&2; echo "$UNTRACKED" >&2; exit 2; }
 EXPECTED="$(ssh "$REMOTE" "readlink -f '$ROOT/current'")"
 BEFORE="$(ssh "$REMOTE" "sha256sum '$DATA_DIR/macos-client-update.json' | cut -d ' ' -f1")"
 LIVE="$(ssh "$REMOTE" "cat '$DATA_DIR/macos-client-update.json'" | node -e 'let s="";process.stdin.on("data",d=>s+=d);process.stdin.on("end",()=>console.log(JSON.parse(s).version));')"
