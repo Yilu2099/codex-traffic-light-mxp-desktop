@@ -6,34 +6,35 @@ import CodexTrafficLightCore
 enum StatusPopoverCapture {
     static func writePreview(to url: URL, claudeQuota: Sub2APIQuotaState? = nil) -> Bool {
         let now = Date()
-        let creditPreview = ProcessInfo.processInfo.environment["CODEX_LIGHT_CAPTURE_STATUS_STATE"] == "credits"
+        let previewState = ProcessInfo.processInfo.environment["CODEX_LIGHT_CAPTURE_STATUS_STATE"]
+        let creditPreview = previewState == "credits"
+        let weeklyPreview = previewState == "weekly"
         let model = StatusPopoverModel()
         model.claudeQuota = claudeQuota
         model.snapshot = StateSnapshot(
             updatedAt: now,
             quota: QuotaSnapshot(
-                weeklyRemainingPercent: creditPreview ? 0 : nil,
-                weeklyResetsAt: now.addingTimeInterval(4 * 86_400),
+                weeklyRemainingPercent: creditPreview ? 0 : (weeklyPreview ? 91 : nil),
+                weeklyResetsAt: now.addingTimeInterval((weeklyPreview ? 6 : 4) * 86_400),
                 fiveHourRemainingPercent: creditPreview ? nil : 82,
                 fiveHourResetsAt: now.addingTimeInterval(3 * 3_600),
                 creditBalance: nil,
-                primaryWindow: creditPreview ? .weekly : .fiveHour,
+                primaryWindow: creditPreview || weeklyPreview ? .weekly : .fiveHour,
                 source: "preview",
                 limitID: "codex",
                 updatedAt: now
             )
         )
         model.syncedQuota = TeamQuotaReport(
-            weeklyRemainingPercent: creditPreview ? 0 : 48,
-            weeklyResetsAt: now.addingTimeInterval(4 * 86_400 + 12 * 3_600),
+            weeklyRemainingPercent: creditPreview ? 0 : (weeklyPreview ? 91 : 48),
+            weeklyResetsAt: now.addingTimeInterval((weeklyPreview ? 6 : 4) * 86_400 + 12 * 3_600),
             fiveHourRemainingPercent: creditPreview ? nil : 82,
             fiveHourResetsAt: now.addingTimeInterval(3 * 3_600),
             creditBalance: creditPreview ? 60_564 : nil,
             creditUpdatedAt: creditPreview ? now : nil,
-            primaryWindow: creditPreview ? .weekly : .fiveHour,
+            primaryWindow: creditPreview || weeklyPreview ? .weekly : .fiveHour,
             updatedAt: now, source: "codex-app-server", limitID: "codex"
         )
-        let previewState = ProcessInfo.processInfo.environment["CODEX_LIGHT_CAPTURE_STATUS_STATE"]
         let previewRange = StatusRankingRange(
             rawValue: ProcessInfo.processInfo.environment["CODEX_LIGHT_CAPTURE_RANGE"] ?? "today"
         ) ?? .today
@@ -121,6 +122,7 @@ enum StatusPopoverCapture {
             selectRange: { _ in },
             openGuide: {},
             openBureau: {},
+            refreshClaude: {},
             quit: {}
         ))
         view.appearance = NSAppearance(named: .aqua)

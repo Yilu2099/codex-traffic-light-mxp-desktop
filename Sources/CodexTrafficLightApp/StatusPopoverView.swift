@@ -40,6 +40,8 @@ final class StatusPopoverModel: ObservableObject {
     @Published var highlights: [String: MemberHighlight] = [:]
     @Published var syncedQuota: TeamQuotaReport?
     @Published var claudeQuota: Sub2APIQuotaState?
+    @Published var isRefreshingClaude = false
+    @Published var claudeRefreshFailed = false
     @Published var syncDetail: String = "正在读取团队数据…"
     @Published var websiteURL: URL?
     @Published var selectedRange: StatusRankingRange = .today
@@ -53,6 +55,7 @@ struct StatusPopoverView: View {
     let selectRange: (StatusRankingRange) -> Void
     let openGuide: () -> Void
     let openBureau: () -> Void
+    let refreshClaude: () -> Void
     let quit: () -> Void
 
     private let canvas = Color(red: 0.985, green: 0.982, blue: 0.974)
@@ -151,15 +154,11 @@ struct StatusPopoverView: View {
     }
 
     private var quotaCard: some View {
-        let quota = quotaWindow
-        let remaining = quota?.remainingPercent
-        let credits = QuotaCreditPresentation.text(local: model.snapshot?.quota, synced: model.syncedQuota)
-        let balance = Double(remaining ?? 0) / 100
-        return VStack(spacing: 10) {
-            codexQuotaRow(quota: quota, remaining: remaining, credits: credits, balance: balance)
+        VStack(spacing: 11) {
+            codexWeeklyQuota
             if let state = model.claudeQuota {
                 line.frame(height: 1)
-                claudeQuotaRows(state)
+                claudeQuotaRow(state)
             }
         }
         .padding(14)
@@ -167,101 +166,109 @@ struct StatusPopoverView: View {
         .overlay(RoundedRectangle(cornerRadius: 17, style: .continuous).stroke(line, lineWidth: 1))
     }
 
-    private func codexQuotaRow(quota: CodexQuotaWindow?, remaining: Int?, credits: String?, balance: Double) -> some View {
-        HStack(alignment: .center, spacing: 12) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(credits != nil ? "剩余额度" : "个人\(quota?.kind.label ?? "")余额")
-                    .font(.system(size: 11, weight: .bold))
+    private var codexWeeklyQuota: some View {
+        let weekly = quotaWindows.first { $0.kind == .weekly }
+        let credits = QuotaCreditPresentation.text(local: model.snapshot?.quota, synced: model.syncedQuota)
+        let reset = credits == nil ? weekly?.resetsAt
+            : (model.syncedQuota?.weeklyResetsAtDate ?? model.snapshot?.quota?.weeklyResetsAt)
+        return HStack(spacing: 16) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(credits == nil ? "Codex 周额度" : "Codex 余额")
+                    .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(muted)
-                HStack(alignment: .firstTextBaseline, spacing: 4) {
-                    Text(credits ?? remaining.map(String.init) ?? "--")
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    Text(credits ?? weekly.map { "\($0.remainingPercent)%" } ?? "—")
                         .font(.system(size: 30, weight: .bold, design: .rounded))
+                        .monospacedDigit()
                         .foregroundStyle(ink)
-                    Text(credits != nil ? "" : "% 剩余")
-                        .font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(muted)
+                    if credits == nil, weekly != nil {
+                        Text("剩余")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(muted)
+                    }
                 }
             }
-            .frame(width: credits != nil ? 150 : 102, alignment: .leading)
-
-            VStack(alignment: .leading, spacing: 7) {
-                Text(credits != nil ? "周额度已用完" : "已用 \(remaining.map { 100 - $0 } ?? 0)%")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(muted)
-                if credits == nil, let secondaryQuotaWindow {
-                    Text("同时有 \(secondaryQuotaWindow.kind.label)余额 \(secondaryQuotaWindow.remainingPercent)%")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(muted)
-                        .lineLimit(1)
-                }
-                if credits == nil {
-                    ProgressView(value: max(0, min(1, balance)))
-                        .tint(green)
-                        .scaleEffect(x: 1, y: 1.25, anchor: .center)
-                }
-            }
-            .frame(maxWidth: .infinity)
-
+            Spacer(minLength: 0)
             VStack(alignment: .trailing, spacing: 4) {
-                Text(resetRelativeText)
-                    .font(.system(size: 14, weight: .bold, design: .rounded))
-                    .foregroundStyle(ink)
-                    .lineLimit(1)
-                Text(resetAbsoluteText)
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(muted)
-                    .lineLimit(1)
+                if let reset {
+                    Text(QuotaDisplayFormatter.refreshCountdownText(until: reset))
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .foregroundStyle(ink)
+                    Text(QuotaDisplayFormatter.absoluteDateTimeText(reset))
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(muted)
+                } else if weekly == nil, credits == nil {
+                    Text("等待同步")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(muted)
+                }
             }
-            .frame(width: 92, alignment: .trailing)
-            .frame(minHeight: 44, alignment: .trailing)
         }
+        .lineLimit(1)
     }
 
-    private func claudeQuotaRows(_ state: Sub2APIQuotaState) -> some View {
-        VStack(alignment: .leading, spacing: 7) {
-            HStack {
-                Text("Claude 订阅额度").fontWeight(.bold).foregroundStyle(ink)
-                Spacer()
-                if case let .sample(quota) = state, let sampledAt = Sub2APIQuota.date(quota.updatedAt) {
-                    Text("采样于 \(QuotaDisplayFormatter.absoluteDateTimeText(sampledAt))")
-                }
-            }
+    private func claudeQuotaRow(_ state: Sub2APIQuotaState) -> some View {
+        HStack(spacing: 15) {
+            Text("Claude")
+                .fontWeight(.semibold)
+                .foregroundStyle(ink)
+                .accessibilityLabel("Claude 订阅额度")
+            Spacer(minLength: 0)
             switch state {
             case .loading:
-                Text("正在读取额度…")
+                Text("读取中…")
             case .unavailable:
-                Text("暂时读不到额度，重新打开面板可重试")
+                Text("暂时读不到额度")
             case let .sample(quota):
-                claudeWindowRow("5 小时", quota.fiveHour)
-                claudeWindowRow("周额度", quota.sevenDay)
+                claudeWindow("5 小时", quota.fiveHour, sampledAt: quota.updatedAt)
+                claudeWindow("周额度", quota.sevenDay, sampledAt: quota.updatedAt)
                 if let fable = quota.sevenDayFable {
-                    claudeWindowRow("Fable 周额度", fable)
+                    claudeWindow("Fable 周", fable, sampledAt: quota.updatedAt)
                 }
             }
+            claudeRefreshButton
         }
         .font(.system(size: 11, weight: .medium))
         .foregroundStyle(muted)
         .lineLimit(1)
     }
 
-    private func claudeWindowRow(_ label: String, _ window: Sub2APIQuota.Window?) -> some View {
-        HStack(spacing: 8) {
-            Text(label).frame(width: 82, alignment: .leading)
-            if let remaining = window?.remaining, let reset = window?.reset {
-                ProgressView(value: remaining / 100)
-                    .tint(green)
-                    .accessibilityHidden(true)
-                Text("剩余 " + remaining.formatted(.number.precision(.fractionLength(0...1))) + "%")
-                    .monospacedDigit().fontWeight(.semibold).foregroundStyle(ink)
-                    .frame(width: 72, alignment: .trailing)
-                Text(QuotaDisplayFormatter.absoluteDateTimeText(reset))
-                    .frame(width: 94, alignment: .trailing)
-                    .accessibilityLabel("刷新时间 " + QuotaDisplayFormatter.absoluteDateTimeText(reset))
-            } else {
-                Spacer()
-                Text("等待 Sub2API 更新")
+    private var claudeRefreshButton: some View {
+        Button(action: refreshClaude) {
+            Group {
+                if model.isRefreshingClaude {
+                    ProgressView().controlSize(.small).scaleEffect(0.7)
+                } else {
+                    Image(systemName: model.claudeRefreshFailed ? "exclamationmark.circle" : "arrow.clockwise")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(model.claudeRefreshFailed ? dayInk : green)
+                }
             }
+            .frame(width: 26, height: 26)
+            .background(line.opacity(0.45), in: RoundedRectangle(cornerRadius: 8))
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
+        .disabled(model.isRefreshingClaude)
+        .accessibilityLabel("刷新 Claude 额度")
+        .help(model.claudeRefreshFailed ? "刷新失败，点击重试" : "刷新 Claude 额度")
+    }
+
+    private func claudeWindow(_ label: String, _ window: Sub2APIQuota.Window?, sampledAt: String?) -> some View {
+        let remaining = window?.remaining
+        let value = remaining.map { $0.formatted(.number.precision(.fractionLength(0...1))) + "%" } ?? "—"
+        let reset = remaining == nil ? nil : window?.reset
+        let detail = reset.map { "剩余 \(value) · \(QuotaDisplayFormatter.absoluteDateTimeText($0)) 刷新" }
+            ?? "等待 Sub2API 更新"
+        let sample = Sub2APIQuota.date(sampledAt).map { "\n采样于 \(QuotaDisplayFormatter.absoluteDateTimeText($0))" } ?? ""
+        return HStack(alignment: .firstTextBaseline, spacing: 4) {
+            Text(label)
+            Text(value).monospacedDigit().fontWeight(.semibold).foregroundStyle(ink)
+        }
+        .fixedSize()
+        .help(detail + sample)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(label + "，" + detail)
     }
 
     private var rankingSection: some View {
@@ -692,31 +699,6 @@ struct StatusPopoverView: View {
         guard let quota = model.snapshot?.quota,
               quota.limitID == CodexSessionQuotaCollector.primaryLimitID else { return [] }
         return quota.availableWindows
-    }
-
-    private var quotaWindow: CodexQuotaWindow? {
-        quotaWindows.first
-    }
-
-    private var secondaryQuotaWindow: CodexQuotaWindow? {
-        quotaWindows.dropFirst().first
-    }
-
-    private var displayedResetAt: Date? {
-        if QuotaCreditPresentation.text(local: model.snapshot?.quota, synced: model.syncedQuota) != nil {
-            return model.syncedQuota?.weeklyResetsAtDate ?? model.snapshot?.quota?.weeklyResetsAt
-        }
-        return quotaWindow?.resetsAt
-    }
-
-    private var resetRelativeText: String {
-        guard let date = displayedResetAt else { return "暂无数据" }
-        return QuotaDisplayFormatter.refreshCountdownText(until: date)
-    }
-
-    private var resetAbsoluteText: String {
-        guard let date = displayedResetAt else { return "—" }
-        return QuotaDisplayFormatter.absoluteDateTimeText(date)
     }
 
     private var syncStatus: String {

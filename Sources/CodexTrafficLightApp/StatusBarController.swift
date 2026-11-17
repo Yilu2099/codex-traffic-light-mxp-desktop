@@ -63,6 +63,7 @@ final class StatusBarController {
             selectRange: { [weak self] range in self?.selectRankingRange(range) },
             openGuide: { [weak self] in self?.openTeamGuide() },
             openBureau: { [weak self] in self?.openBureau() },
+            refreshClaude: { [weak self] in self?.refreshClaudeQuota(manual: true) },
             quit: { [weak self] in self?.delegate?.statusBarDidRequestQuit() }
         )
         let hostingController = NSHostingController(rootView: rootView)
@@ -236,17 +237,27 @@ final class StatusBarController {
         )
     }
 
-    private func refreshClaudeQuota() {
+    private func refreshClaudeQuota(manual: Bool = false) {
         guard claudeQuotaTask == nil else { return }
         guard FileManager.default.fileExists(atPath: Sub2APIQuota.Configuration.localFile.path) else {
             popoverModel.claudeQuota = nil
             return
         }
-        popoverModel.claudeQuota = .loading
+        let previous = popoverModel.claudeQuota
+        popoverModel.claudeQuota = previous ?? .loading
+        popoverModel.isRefreshingClaude = true
+        popoverModel.claudeRefreshFailed = false
         claudeQuotaTask = Task { [weak self] in
-            let quota = try? await Sub2APIQuota.Configuration.load().fetch()
-            self?.popoverModel.claudeQuota = quota.map(Sub2APIQuotaState.sample) ?? .unavailable
-            self?.claudeQuotaTask = nil
+            let quota = try? await Sub2APIQuota.Configuration.load().fetch(refresh: manual)
+            guard let self else { return }
+            if let quota {
+                popoverModel.claudeQuota = .sample(quota)
+            } else {
+                popoverModel.claudeQuota = previous ?? .unavailable
+                popoverModel.claudeRefreshFailed = true
+            }
+            popoverModel.isRefreshingClaude = false
+            claudeQuotaTask = nil
         }
     }
 

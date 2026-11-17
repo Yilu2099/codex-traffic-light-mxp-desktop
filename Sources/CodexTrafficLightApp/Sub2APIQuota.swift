@@ -13,6 +13,8 @@ struct Sub2APIQuota: Decodable {
         }
     }
 
+    private let error: String?
+    private let errorCode: String?
     let updatedAt: String?
     let fiveHour: Window?
     let sevenDay: Window?
@@ -35,7 +37,9 @@ struct Sub2APIQuota: Decodable {
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
         let response = try decoder.decode(Envelope.self, from: data)
-        return response.code == 0 ? response.data : nil
+        guard response.code == 0, let quota = response.data,
+              quota.error?.isEmpty != false, quota.errorCode?.isEmpty != false else { return nil }
+        return quota
     }
 
     struct Configuration: Decodable {
@@ -55,12 +59,13 @@ struct Sub2APIQuota: Decodable {
             return try JSONDecoder().decode(Self.self, from: Data(contentsOf: file))
         }
 
-        func fetch() async throws -> Sub2APIQuota? {
+        func fetch(refresh: Bool = false) async throws -> Sub2APIQuota? {
             guard var url = URLComponents(url: origin, resolvingAgainstBaseURL: false),
                   url.scheme == "https", url.host != nil, url.user == nil, url.password == nil,
                   accountID > 0, !apiKey.isEmpty else { throw URLError(.badURL) }
             url.path = "/api/v1/admin/accounts/\(accountID)/usage"
-            url.queryItems = [URLQueryItem(name: "source", value: "passive")]
+            url.queryItems = [URLQueryItem(name: "source", value: refresh ? "active" : "passive")]
+            if refresh { url.queryItems?.append(URLQueryItem(name: "force", value: "true")) }
             url.fragment = nil
             guard let endpoint = url.url else { throw URLError(.badURL) }
             var request = URLRequest(url: endpoint, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 10)

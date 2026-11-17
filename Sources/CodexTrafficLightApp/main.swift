@@ -28,7 +28,8 @@ if let capturePath = ProcessInfo.processInfo.environment["CODEX_LIGHT_CAPTURE_ST
     app.setActivationPolicy(.prohibited)
     var claudeQuota: Sub2APIQuotaState?
     if let file = ProcessInfo.processInfo.environment["CODEX_LIGHT_CAPTURE_CLAUDE_CONFIG"] {
-        let quota = try? await Sub2APIQuota.Configuration.load(from: URL(fileURLWithPath: file)).fetch()
+        let refresh = ProcessInfo.processInfo.environment["CODEX_LIGHT_CAPTURE_CLAUDE_REFRESH"] == "1"
+        let quota = try? await Sub2APIQuota.Configuration.load(from: URL(fileURLWithPath: file)).fetch(refresh: refresh)
         claudeQuota = quota.map(Sub2APIQuotaState.sample) ?? .unavailable
     }
     let succeeded = StatusPopoverCapture.writePreview(to: URL(fileURLWithPath: capturePath), claudeQuota: claudeQuota)
