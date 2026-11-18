@@ -90,6 +90,7 @@ private final class ToolMembershipLoopback: NSObject, URLSessionTaskDelegate {
 actor ToolMembershipCollector {
     static let shared = ToolMembershipCollector()
     private var lastAttempt = Date.distantPast
+    private(set) var gatewayDailyUsage: [ToolDailyUsage] = []
     private var lastReports: [String: ToolMembership] = [:]
 
     func collect(now: Date = Date()) async -> [String: ToolMembership]? {
@@ -98,8 +99,12 @@ actor ToolMembershipCollector {
             let home = FileManager.default.homeDirectoryForCurrentUser
             async let claude = Self.claude(home: home, now: now)
             async let kimi = Self.kimi(home: home, now: now)
-            let (account, quota) = await (claude, kimi)
-            lastReports = ["claude": account, "kimi": quota].compactMapValues { $0 }
+            let settings = try? Sub2APIQuota.Configuration.load()
+            async let gateway = try? settings?.fetch()
+            async let gatewayUsage = settings?.dailyUsage(now: now) ?? []
+            let (account, quota, gatewayQuota) = await (claude, kimi, gateway)
+            lastReports = ["claude": account, "kimi": quota, "claude_sub2api": gatewayQuota?.membership(now: Date())].compactMapValues { $0 }
+            gatewayDailyUsage = await gatewayUsage
         }
         return lastReports.isEmpty ? nil : lastReports
     }

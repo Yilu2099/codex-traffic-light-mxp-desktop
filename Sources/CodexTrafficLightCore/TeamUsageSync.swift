@@ -396,6 +396,7 @@ public struct TeamUsagePayload: Codable, Equatable, Sendable {
     public var humanInputMetadata: HumanInputMetadata? = nil
     public var todayLiveUsage: TodayLiveUsageReport
     public var claudeDailyUsage: [ClaudeDailyTokens]?
+    public var toolGatewayDailyUsage: [ToolDailyUsage]? = nil
     public var toolDailyUsage: [ToolDailyUsage]? = nil
     public var toolMemberships: [String: ToolMembership]? = nil
     public var toolInteractionSummary: [TeamSessionInteractionSummary]? = nil
@@ -413,7 +414,7 @@ public struct TeamUsagePayload: Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case collector, collectedAt, profile, device, client, updaterHealth, quota, quotaDiagnostic, officialUsage, todayLiveUsage, claudeDailyUsage
         case sessionActivity, sessionActivityMode, sessionActivityCutoffDay, interactionSummary, grindHistory, grindHistoryMode
-        case projects, inputEvents, sessions, usageOnly, chatUsage, computerHistory, humanInputMetadata, toolDailyUsage, toolMemberships, toolInteractionSummary
+        case projects, inputEvents, sessions, usageOnly, chatUsage, computerHistory, humanInputMetadata, toolDailyUsage, toolGatewayDailyUsage, toolMemberships, toolInteractionSummary
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -433,6 +434,7 @@ public struct TeamUsagePayload: Codable, Equatable, Sendable {
         try container.encode(todayLiveUsage, forKey: .todayLiveUsage)
         try container.encodeIfPresent(claudeDailyUsage, forKey: .claudeDailyUsage)
         try container.encodeIfPresent(toolDailyUsage, forKey: .toolDailyUsage)
+        try container.encodeIfPresent(toolGatewayDailyUsage, forKey: .toolGatewayDailyUsage)
         try container.encodeIfPresent(toolMemberships, forKey: .toolMemberships)
         try container.encodeIfPresent(toolInteractionSummary, forKey: .toolInteractionSummary)
         // Retain only daily timestamp bounds. The constant key keeps the existing
@@ -1187,6 +1189,8 @@ public struct TeamUsageSyncService: Sendable {
     public func sync(quota: TeamQuotaReport?, quotaDiagnostic: TeamQuotaDiagnostic? = nil) async throws -> TeamUsageSyncResult {
         var payload = try makePayload(quota: quota)
         payload.toolMemberships = await ToolMembershipCollector.shared.collect()
+        let gateway = await ToolMembershipCollector.shared.gatewayDailyUsage
+        payload.toolGatewayDailyUsage = gateway.isEmpty ? nil : gateway
         var request = URLRequest(url: configuration.endpoint)
         request.httpMethod = "POST"
         request.timeoutInterval = 45

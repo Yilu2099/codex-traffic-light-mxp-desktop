@@ -17,6 +17,9 @@ Claude 已登录官方 Claude Code 时，从 `claude auth status` 读取它报�
 
 Gemini CLI 和 Grok Build 从本机留存的会话记录提取实际 Token。账目覆盖已识别的 CLI 日志，包括使用 API 登录的会话。网页登录、移动 App 和账号的官方历史统计需要独立来源。当前按设备上报日汇总，跨设备复制的会话应避免在多台设备重复采集。
 
+
+已配置 Sub2API 的统计设备通过本机受限只读 Key 获取 Claude 额度快照。配置的调用 Key ID 按北京时间分别汇总今天和昨天，完整取齐后才上传日账。密钥和请求明细留在本机与网关。
+
 ## 安装
 
 ```bash
