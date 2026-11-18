@@ -12,6 +12,14 @@ public enum QuotaDisplayFormatter {
         return "\(totalHours)小时后刷新"
     }
 
+    public static func weeklyResetText(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.timeZone = TimeZone(secondsFromGMT: 8 * 3_600)
+        formatter.dateFormat = "EEE HH:mm"
+        return formatter.string(from: date)
+    }
+
     public static func absoluteDateTimeText(_ date: Date, timeZone: TimeZone = .current) -> String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "zh_CN")

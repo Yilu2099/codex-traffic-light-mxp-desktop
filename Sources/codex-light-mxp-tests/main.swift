@@ -1326,6 +1326,8 @@ func testQuotaDisplayFormatterUsesNaturalChineseDate() throws {
     let text = QuotaDisplayFormatter.absoluteDateTimeText(date, timeZone: components.timeZone!)
 
     try expectEqual(text, "6月3日 09:05", "date text should not zero-pad month or day")
+    let midnight = ISO8601DateFormatter().date(from: "2026-06-02T16:05:00Z")!
+    try expectEqual(QuotaDisplayFormatter.weeklyResetText(midnight), "周三 00:05", "weekdays use Beijing time across UTC midnight")
 }
 
 func testTeamSyncParsesEnvironmentFile() throws {

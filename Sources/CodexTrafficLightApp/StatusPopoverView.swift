@@ -154,14 +154,15 @@ struct StatusPopoverView: View {
     }
 
     private var quotaCard: some View {
-        VStack(spacing: 11) {
+        VStack(spacing: 10) {
             codexWeeklyQuota
             if let state = model.claudeQuota {
                 line.frame(height: 1)
                 claudeQuotaRow(state)
             }
         }
-        .padding(14)
+        .padding(.vertical, 14)
+        .padding(.horizontal, 17)
         .background(green.opacity(0.025), in: RoundedRectangle(cornerRadius: 17, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 17, style: .continuous).stroke(line, lineWidth: 1))
     }
@@ -194,9 +195,10 @@ struct StatusPopoverView: View {
                     Text(QuotaDisplayFormatter.refreshCountdownText(until: reset))
                         .font(.system(size: 13, weight: .semibold, design: .rounded))
                         .foregroundStyle(ink)
-                    Text(QuotaDisplayFormatter.absoluteDateTimeText(reset))
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(muted)
+                    Text(QuotaDisplayFormatter.weeklyResetText(reset))
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(green)
+                        .help(QuotaDisplayFormatter.absoluteDateTimeText(reset, timeZone: TimeZone(secondsFromGMT: 8 * 3_600)!))
                 } else if weekly == nil, credits == nil {
                     Text("等待同步")
                         .font(.system(size: 11, weight: .medium))
@@ -208,25 +210,29 @@ struct StatusPopoverView: View {
     }
 
     private func claudeQuotaRow(_ state: Sub2APIQuotaState) -> some View {
-        HStack(spacing: 15) {
-            Text("Claude")
-                .fontWeight(.semibold)
-                .foregroundStyle(ink)
-                .accessibilityLabel("Claude 订阅额度")
-            Spacer(minLength: 0)
-            switch state {
-            case .loading:
-                Text("读取中…")
-            case .unavailable:
-                Text("暂时读不到额度")
-            case let .sample(quota):
-                claudeWindow("5 小时", quota.fiveHour, sampledAt: quota.updatedAt)
-                claudeWindow("周额度", quota.sevenDay, sampledAt: quota.updatedAt)
-                if let fable = quota.sevenDayFable {
-                    claudeWindow("Fable 周", fable, sampledAt: quota.updatedAt)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Text("Claude")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(ink)
+                    .accessibilityLabel("Claude 订阅额度")
+                Spacer(minLength: 0)
+                switch state {
+                case .loading: Text("读取中…")
+                case .unavailable: Text("暂时读不到额度")
+                case .sample: EmptyView()
+                }
+                claudeRefreshButton
+            }
+            if case let .sample(quota) = state {
+                HStack(alignment: .center, spacing: 12) {
+                    claudeWindow("5 小时", quota.fiveHour, sampledAt: quota.updatedAt)
+                    claudeWindow("周额度", quota.sevenDay, sampledAt: quota.updatedAt, weekly: true)
+                    if let fable = quota.sevenDayFable {
+                        claudeWindow("Fable 周额度", fable, sampledAt: quota.updatedAt, weekly: true)
+                    }
                 }
             }
-            claudeRefreshButton
         }
         .font(.system(size: 11, weight: .medium))
         .foregroundStyle(muted)
@@ -239,13 +245,13 @@ struct StatusPopoverView: View {
                 if model.isRefreshingClaude {
                     ProgressView().controlSize(.small).scaleEffect(0.7)
                 } else {
-                    Image(systemName: model.claudeRefreshFailed ? "exclamationmark.circle" : "arrow.clockwise")
-                        .font(.system(size: 12, weight: .semibold))
+                    Text(model.claudeRefreshFailed ? "重试" : "刷新")
+                        .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(model.claudeRefreshFailed ? dayInk : green)
                 }
             }
-            .frame(width: 26, height: 26)
-            .background(line.opacity(0.45), in: RoundedRectangle(cornerRadius: 8))
+            .frame(width: 38, height: 24)
+            .background(green.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -254,18 +260,26 @@ struct StatusPopoverView: View {
         .help(model.claudeRefreshFailed ? "刷新失败，点击重试" : "刷新 Claude 额度")
     }
 
-    private func claudeWindow(_ label: String, _ window: Sub2APIQuota.Window?, sampledAt: String?) -> some View {
+    private func claudeWindow(_ label: String, _ window: Sub2APIQuota.Window?, sampledAt: String?, weekly: Bool = false) -> some View {
         let remaining = window?.remaining
         let value = remaining.map { $0.formatted(.number.precision(.fractionLength(0...1))) + "%" } ?? "—"
         let reset = remaining == nil ? nil : window?.reset
         let detail = reset.map { "剩余 \(value) · \(QuotaDisplayFormatter.absoluteDateTimeText($0)) 刷新" }
             ?? "等待 Sub2API 更新"
         let sample = Sub2APIQuota.date(sampledAt).map { "\n采样于 \(QuotaDisplayFormatter.absoluteDateTimeText($0))" } ?? ""
-        return HStack(alignment: .firstTextBaseline, spacing: 4) {
+        let weeklyTime = reset.map { QuotaDisplayFormatter.weeklyResetText($0) + " 刷新" }
+        return VStack(alignment: .leading, spacing: 3) {
             Text(label)
-            Text(value).monospacedDigit().fontWeight(.semibold).foregroundStyle(ink)
+            Text(value)
+                .font(.system(size: 20, weight: .bold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(ink)
+            if weekly {
+                Text(weeklyTime ?? "刷新时间待同步")
+                    .foregroundStyle(weeklyTime == nil ? muted : green)
+            }
         }
-        .fixedSize()
+        .frame(maxWidth: .infinity, alignment: .leading)
         .help(detail + sample)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(label + "，" + detail)
