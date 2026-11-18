@@ -31,27 +31,50 @@ public struct ToolDailyUsage: Codable, Equatable, Sendable {
 public struct ToolTokenUsageCollector {
     private struct CachedFile: Codable { var signature: String; var records: [String: ToolDailyUsage] }
     public init() {}
-    public func collect(home: URL = FileManager.default.homeDirectoryForCurrentUser, now: Date = Date()) -> [ToolDailyUsage] {
+    public func collect(
+        home: URL = FileManager.default.homeDirectoryForCurrentUser, now: Date = Date(),
+        environment env: [String: String] = ProcessInfo.processInfo.environment
+    ) -> [ToolDailyUsage] {
         let cache = home.appendingPathComponent(".wanhe-codex-token/tool-usage-cache.json")
         let old = (try? Data(contentsOf: cache)).flatMap { try? JSONDecoder().decode([String: CachedFile].self, from: $0) } ?? [:]
         var next: [String: CachedFile] = [:]
         var records: [String: ToolDailyUsage] = [:]
-        let env = ProcessInfo.processInfo.environment
+        var geminiJSONLEvents: Set<String> = []
+        let geminiHome = configuredHome(env["GEMINI_CLI_HOME"], fallback: home)
+        let grokHome = configuredHome(env["GROK_HOME"], fallback: home.appendingPathComponent(".grok"))
         let roots = [("kimi", URL(fileURLWithPath: env["KIMI_SHARE_DIR"] ?? home.appendingPathComponent(".kimi").path).appendingPathComponent("sessions")),
                      ("kimi", home.appendingPathComponent(".kimi-code/sessions")),
-                     ("muse", URL(fileURLWithPath: env["XDG_DATA_HOME"] ?? home.appendingPathComponent(".local/share").path).appendingPathComponent("muse/sessions"))]
+                     ("muse", URL(fileURLWithPath: env["XDG_DATA_HOME"] ?? home.appendingPathComponent(".local/share").path).appendingPathComponent("muse/sessions")),
+                     ("grok", grokHome.appendingPathComponent("sessions"))]
+            + CodingCLITokenUsage.geminiChatRoots(home: geminiHome).map { ("gemini", $0) }
         let cutoff = now.addingTimeInterval(-365 * 86400)
-        let keys: Set<URLResourceKey> = [.isRegularFileKey, .contentModificationDateKey, .fileSizeKey]
+        let keys: Set<URLResourceKey> = [.isRegularFileKey, .isSymbolicLinkKey, .contentModificationDateKey, .fileSizeKey]
         for (tool, root) in roots {
             guard let files = FileManager.default.enumerator(at: root, includingPropertiesForKeys: Array(keys)) else { continue }
-            for case let file as URL in files where file.lastPathComponent == (tool == "kimi" ? "wire.jsonl" : "session.jsonl") {
-                guard let v = try? file.resourceValues(forKeys: keys), v.isRegularFile == true,
+            for case let file as URL in files where matches(file: file, tool: tool) {
+                guard let v = try? file.resourceValues(forKeys: keys), v.isRegularFile == true, v.isSymbolicLink != true,
                       (v.contentModificationDate ?? .distantPast) >= cutoff else { continue }
                 let signature = "v3-365:\(v.fileSize ?? 0):\((v.contentModificationDate ?? .distantPast).timeIntervalSince1970)"
-                let entry = old[file.path].flatMap { $0.signature == signature ? $0 : nil }
-                    ?? CachedFile(signature: signature, records: parse(file: file, tool: tool, cutoff: cutoff, now: now))
-                next[file.path] = entry
+                let codingCLI = tool == "gemini" || tool == "grok"
+                let cacheKey = codingCLI ? tool + ":" + CodingCLITokenUsage.hash(file.path) : file.path
+                let entry = old[cacheKey].flatMap { $0.signature == signature ? $0 : nil }
+                    ?? CachedFile(signature: signature, records: codingCLI
+                                  ? CodingCLITokenUsage.read(file, tool: tool, cutoff: cutoff, now: now, day: day)
+                                  : parse(file: file, tool: tool, cutoff: cutoff, now: now))
+                next[cacheKey] = entry
                 for (id, row) in entry.records where row.day >= day(cutoff) {
+                    if tool == "gemini" {
+                        // Resuming a legacy session migrates to JSONL. Prefer its updated
+                        // message when both the legacy and migrated copy still exist.
+                        if file.pathExtension == "jsonl" {
+                            if geminiJSONLEvents.insert(id).inserted {
+                                records[id] = row
+                                continue
+                            }
+                        } else if geminiJSONLEvents.contains(id) {
+                            continue
+                        }
+                    }
                     if row.totalTokens > (records[id]?.totalTokens ?? -1) { records[id] = row }
                 }
             }
@@ -70,6 +93,18 @@ public struct ToolTokenUsageCollector {
         }
         let claude = ClaudeTokenUsageCollector().collect(root: URL(fileURLWithPath: env["CLAUDE_CONFIG_DIR"] ?? home.appendingPathComponent(".claude").path).appendingPathComponent("projects"), cacheURL: home.appendingPathComponent(".wanhe-codex-token/claude-usage-cache.json"))
         return (Array(daily.values) + claude.map { ToolDailyUsage(tool: "claude", day: $0.day, inputTokens: $0.inputTokens + $0.cachedInputTokens, cachedInputTokens: $0.cachedInputTokens, cacheWriteInputTokens: $0.cacheWriteInputTokens, outputTokens: $0.outputTokens) }).filter { $0.totalTokens > 0 }.sorted { ($0.day, $0.tool) < ($1.day, $1.tool) }
+    }
+    private func configuredHome(_ value: String?, fallback: URL) -> URL {
+        guard let value, !value.isEmpty else { return fallback }
+        return URL(fileURLWithPath: value, isDirectory: true)
+    }
+    private func matches(file: URL, tool: String) -> Bool {
+        switch tool {
+        case "gemini": return ["json", "jsonl"].contains(file.pathExtension)
+        case "grok": return file.lastPathComponent == "updates.jsonl"
+        case "kimi": return file.lastPathComponent == "wire.jsonl"
+        default: return file.lastPathComponent == "session.jsonl"
+        }
     }
     private func parse(file: URL, tool: String, cutoff: Date, now: Date) -> [String: ToolDailyUsage] {
         guard let h = try? FileHandle(forReadingFrom: file) else { return [:] }

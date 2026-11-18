@@ -5342,6 +5342,8 @@ let tests: [(String, () throws -> Void)] = [
 ]
 
 let allTests = tests + [
+    ("tool membership reports scrub provider metadata", testToolMembershipUsesAllowlistedOfficialFields),
+    ("Gemini and Grok CLI usage", testGeminiAndGrokTokenCollection),
     ("team roster merge tolerates case duplicates", testTeamRosterMergeToleratesCaseDuplicatesAndKeepsNewMembers),
     ("app-server credit balance reaches display", testAppServerCreditBalanceReachesDisplay),
     ("session credit collection", testSessionCreditCollection),
