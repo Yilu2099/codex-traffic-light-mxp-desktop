@@ -225,12 +225,12 @@ struct StatusPopoverView: View {
                 claudeRefreshButton
             }
             if case let .sample(quota) = state {
-                HStack(alignment: .center, spacing: 12) {
+                HStack(alignment: .center, spacing: 4) {
                     claudeWindow("5 小时", quota.fiveHour, sampledAt: quota.updatedAt)
+                    claudeWindowSeparator
+                    claudeWindow("Fable 周额度", quota.sevenDayFable, sampledAt: quota.updatedAt, weekly: true)
+                    claudeWindowSeparator
                     claudeWindow("周额度", quota.sevenDay, sampledAt: quota.updatedAt, weekly: true)
-                    if let fable = quota.sevenDayFable {
-                        claudeWindow("Fable 周额度", fable, sampledAt: quota.updatedAt, weekly: true)
-                    }
                 }
             }
         }
@@ -245,12 +245,12 @@ struct StatusPopoverView: View {
                 if model.isRefreshingClaude {
                     ProgressView().controlSize(.small).scaleEffect(0.7)
                 } else {
-                    Text(model.claudeRefreshFailed ? "重试" : "刷新")
+                    Image(systemName: "arrow.clockwise")
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(model.claudeRefreshFailed ? dayInk : green)
                 }
             }
-            .frame(width: 38, height: 24)
+            .frame(width: 32, height: 24)
             .background(green.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
             .contentShape(Rectangle())
         }
@@ -267,22 +267,30 @@ struct StatusPopoverView: View {
         let detail = reset.map { "剩余 \(value) · \(QuotaDisplayFormatter.absoluteDateTimeText($0)) 刷新" }
             ?? "等待 Sub2API 更新"
         let sample = Sub2APIQuota.date(sampledAt).map { "\n采样于 \(QuotaDisplayFormatter.absoluteDateTimeText($0))" } ?? ""
-        let weeklyTime = reset.map { QuotaDisplayFormatter.weeklyResetText($0) + " 刷新" }
-        return VStack(alignment: .leading, spacing: 3) {
+        let refresh = reset.map { date in
+            let countdown = QuotaDisplayFormatter.refreshCountdownText(until: date)
+            let time = QuotaDisplayFormatter.weeklyResetText(date)
+            return countdown + " · " + (weekly ? time : String(time.suffix(5)))
+        }
+        return VStack(spacing: 3) {
             Text(label)
             Text(value)
                 .font(.system(size: 20, weight: .bold, design: .rounded))
                 .monospacedDigit()
                 .foregroundStyle(ink)
-            if weekly {
-                Text(weeklyTime ?? "刷新时间待同步")
-                    .foregroundStyle(weeklyTime == nil ? muted : green)
-            }
+            Text(refresh ?? "待同步")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(refresh == nil ? muted : green)
+                .minimumScaleFactor(0.8)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity)
         .help(detail + sample)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(label + "，" + detail)
+        .accessibilityLabel([label, value, refresh ?? "待同步"].joined(separator: "，"))
+    }
+
+    private var claudeWindowSeparator: some View {
+        Rectangle().fill(line).frame(width: 1, height: 42).accessibilityHidden(true)
     }
 
     private var rankingSection: some View {
