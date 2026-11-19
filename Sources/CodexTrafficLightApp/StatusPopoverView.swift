@@ -603,7 +603,7 @@ struct StatusPopoverView: View {
                     .foregroundStyle(muted)
             }
             ForEach((member.tools ?? []).filter { $0 != "codex" }, id: \.self) { tool in
-                let name = ["claude": "Claude", "muse": "Muse Code", "kimi": "Kimi", "grokbot": "Grok Bot"][tool] ?? tool
+                let name = ["claude": "Claude", "muse": "Muse Code", "kimi": "Kimi", "grok": "Grok", "grokbot": "Grok Bot"][tool] ?? tool
                 let usage = member.toolTokens?[tool].map { formatTokens($0).replacingOccurrences(of: "万", with: " 万").replacingOccurrences(of: "亿", with: " 亿") + " token" } ?? "用量待同步"
                 Text(tool == "muse" ? "Muse" : name)
                     .font(.system(size: 8.5, weight: .semibold))
