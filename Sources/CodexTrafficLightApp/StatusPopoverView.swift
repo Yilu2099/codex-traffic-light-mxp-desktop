@@ -40,6 +40,7 @@ final class StatusPopoverModel: ObservableObject {
     @Published var highlights: [String: MemberHighlight] = [:]
     @Published var syncedQuota: TeamQuotaReport?
     @Published var isBalanceVisible = false
+    @Published var balanceGlowStartedAt: Date?
     @Published var claudeQuota: Sub2APIQuotaState?
     @Published var isRefreshingClaude = false
     @Published var claudeRefreshFailed = false
@@ -59,6 +60,7 @@ struct StatusPopoverView: View {
     let refreshClaude: () -> Void
     let quit: () -> Void
 
+    private let balanceGlowDuration: TimeInterval = 2
     private let canvas = Color(red: 0.985, green: 0.982, blue: 0.974)
     private let card = Color.white
     private let ink = Color(red: 0.10, green: 0.105, blue: 0.10)
@@ -136,6 +138,7 @@ struct StatusPopoverView: View {
             }
             Spacer()
             Button {
+                model.balanceGlowStartedAt = nil
                 model.isBalanceVisible.toggle()
             } label: {
                 HStack(spacing: 6) {
@@ -148,15 +151,57 @@ struct StatusPopoverView: View {
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
                 .background(green.opacity(0.09), in: Capsule())
+                .overlay {
+                    if !reduceMotion, !model.isBalanceVisible, let start = model.balanceGlowStartedAt {
+                        TimelineView(.animation) { context in
+                            balanceGlow(elapsed: context.date.timeIntervalSince(start))
+                        }
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                        .task(id: start) {
+                            try? await Task.sleep(for: .seconds(balanceGlowDuration))
+                            if !Task.isCancelled, model.balanceGlowStartedAt == start {
+                                model.balanceGlowStartedAt = nil
+                            }
+                        }
+                    }
+                }
                 .frame(minHeight: 44)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .background {
+                BalanceHoverTracking {
+                    if !reduceMotion, !model.isBalanceVisible, model.balanceGlowStartedAt == nil {
+                        model.balanceGlowStartedAt = .now
+                    }
+                }
+            }
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 4)
         .background(card)
         .overlay(alignment: .bottom) { line.frame(height: 1) }
+    }
+
+    private func balanceGlow(elapsed: TimeInterval) -> some View {
+        let angle = Angle.degrees(elapsed / balanceGlowDuration * 360 - 90)
+        return Capsule().strokeBorder(
+            AngularGradient(
+                stops: [
+                    .init(color: .clear, location: 0),
+                    .init(color: .clear, location: 0.72),
+                    .init(color: green.opacity(0.34), location: 0.84),
+                    .init(color: green.opacity(0.54), location: 0.92),
+                    .init(color: .clear, location: 1)
+                ],
+                center: .center,
+                startAngle: angle,
+                endAngle: angle + .degrees(360)
+            ),
+            lineWidth: 1.25
+        )
+        .opacity(max(0, min(1, elapsed / 0.12, (balanceGlowDuration - elapsed) / 0.22)))
     }
 
     private var quotaCard: some View {
@@ -744,5 +789,34 @@ struct StatusPopoverView: View {
         }
         if value >= 10_000 { return String(format: "%.2f万", (Double(value) / 100).rounded() / 100) }
         return NumberFormatter.localizedString(from: NSNumber(value: value), number: .decimal)
+    }
+}
+
+private struct BalanceHoverTracking: NSViewRepresentable {
+    var onEnter: () -> Void
+
+    func makeNSView(context: Context) -> TrackingView {
+        let view = TrackingView()
+        view.addTrackingArea(NSTrackingArea(
+            rect: .zero,
+            options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+            owner: view,
+            userInfo: nil
+        ))
+        return view
+    }
+
+    func updateNSView(_ view: TrackingView, context: Context) {
+        view.onEnter = onEnter
+    }
+
+    final class TrackingView: NSView {
+        var onEnter: (() -> Void)?
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        override func mouseEntered(with event: NSEvent) {
+            onEnter?()
+        }
     }
 }
