@@ -39,6 +39,7 @@ final class StatusPopoverModel: ObservableObject {
     @Published var ranking: TeamRankingSnapshot?
     @Published var highlights: [String: MemberHighlight] = [:]
     @Published var syncedQuota: TeamQuotaReport?
+    @Published var isBalanceVisible = false
     @Published var claudeQuota: Sub2APIQuotaState?
     @Published var isRefreshingClaude = false
     @Published var claudeRefreshFailed = false
@@ -84,9 +85,13 @@ struct StatusPopoverView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
+            if model.isBalanceVisible {
+                quotaCard
+                    .padding(.horizontal, 20)
+                    .padding(.top, 12)
+            }
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 12) {
-                    quotaCard
                     rankingSection
                     versionNote
                 }
@@ -127,28 +132,29 @@ struct StatusPopoverView: View {
                 Text(BrandCopy.tagline)
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(muted)
+                    .lineLimit(1)
             }
             Spacer()
             Button {
-                guard let url = model.websiteURL?.appendingPathComponent("history") else { return }
-                NSWorkspace.shared.open(url)
+                model.isBalanceVisible.toggle()
             } label: {
                 HStack(spacing: 6) {
-                    Image(systemName: "clock.arrow.circlepath")
-                    Text("历史排行").lineLimit(1)
+                    Image(systemName: "creditcard")
+                    Text(model.isBalanceVisible ? "收起余额" : "查看余额")
+                        .lineLimit(1)
                 }
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(green)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
                 .background(green.opacity(0.09), in: Capsule())
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .disabled(model.websiteURL == nil)
-            .help("查看每月官方 Token 用量排行")
         }
         .padding(.horizontal, 20)
-        .padding(.vertical, 9)
+        .padding(.vertical, 4)
         .background(card)
         .overlay(alignment: .bottom) { line.frame(height: 1) }
     }
@@ -265,7 +271,7 @@ struct StatusPopoverView: View {
         let value = remaining.map { $0.formatted(.number.precision(.fractionLength(0...1))) + "%" } ?? "—"
         let reset = remaining == nil ? nil : window?.reset
         let detail = reset.map { "剩余 \(value) · \(QuotaDisplayFormatter.absoluteDateTimeText($0)) 刷新" }
-            ?? "等待 Sub2API 更新"
+            ?? "等待 Claude 额度同步"
         let sample = Sub2APIQuota.date(sampledAt).map { "\n采样于 \(QuotaDisplayFormatter.absoluteDateTimeText($0))" } ?? ""
         let refresh = reset.map { date in
             let countdown = QuotaDisplayFormatter.refreshCountdownText(until: date)

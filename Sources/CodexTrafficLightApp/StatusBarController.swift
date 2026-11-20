@@ -266,6 +266,7 @@ final class StatusBarController {
         if popover.isShown {
             popover.performClose(nil)
         } else {
+            popoverModel.isBalanceVisible = false
             refreshClaudeQuota()
             onPopoverOpen?()
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)

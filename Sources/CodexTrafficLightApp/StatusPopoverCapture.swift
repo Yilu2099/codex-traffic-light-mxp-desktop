@@ -10,7 +10,22 @@ enum StatusPopoverCapture {
         let creditPreview = previewState == "credits"
         let weeklyPreview = previewState == "weekly"
         let model = StatusPopoverModel()
-        model.claudeQuota = claudeQuota
+        model.isBalanceVisible = ProcessInfo.processInfo.environment["CODEX_LIGHT_CAPTURE_BALANCE"] == "1"
+        if previewState == "balance", claudeQuota == nil {
+            let formatter = ISO8601DateFormatter()
+            func reset(after hours: Double) -> String {
+                formatter.string(from: now.addingTimeInterval(hours * 3_600))
+            }
+            let sample = """
+            {"updatedAt":"\(formatter.string(from: now))",
+             "fiveHour":{"utilization":33,"resetsAt":"\(reset(after: 5))"},
+             "sevenDayFable":{"utilization":24,"resetsAt":"\(reset(after: 78))"},
+             "sevenDay":{"utilization":39,"resetsAt":"\(reset(after: 78))"}}
+            """
+            model.claudeQuota = try? .sample(JSONDecoder().decode(Sub2APIQuota.self, from: Data(sample.utf8)))
+        } else {
+            model.claudeQuota = claudeQuota
+        }
         model.snapshot = StateSnapshot(
             updatedAt: now,
             quota: QuotaSnapshot(

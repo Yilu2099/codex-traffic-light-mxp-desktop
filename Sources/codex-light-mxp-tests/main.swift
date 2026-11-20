@@ -5183,7 +5183,7 @@ let tests: [(String, () throws -> Void)] = [
     ("multi tool tokens normalize and deduplicate", testToolUsageCollectorNormalizesAndDeduplicates),
     ("Claude cached history expands for backfill", testClaudeBackfillExpandsCachedHistory),
     ("brand tagline stays aligned", {
-        try expectEqual(BrandCopy.tagline, "用 Codex 手搓世界，人人都是造物主", "client tagline should match the approved brand copy")
+        try expectEqual(BrandCopy.tagline, "用 AI 手搓世界，人人都是造物主", "client tagline should match the approved brand copy")
     }),
     ("ranking tool token breakdown decoding", testRankingToolTokenBreakdownDecoding),
     ("command contract", testCommandContract),
