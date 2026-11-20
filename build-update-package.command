@@ -19,15 +19,26 @@ if [[ "$VERSION" != "$SOURCE_VERSION" ]]; then
 fi
 
 cd "$DIR"
-BUILD_FLAGS=(-c release --arch arm64 --arch x86_64 --scratch-path "$DIR/.build/update-universal")
+ARCHITECTURES=(arm64 x86_64)
+BUILD_KIND=universal
+if [[ "${WANHE_UPDATE_APPLE_SILICON_ONLY:-false}" == true ]]; then
+  ARCHITECTURES=(arm64)
+  BUILD_KIND=arm64
+fi
+BUILD_FLAGS=(-c release --scratch-path "$DIR/.build/update-$BUILD_KIND")
+for architecture in "${ARCHITECTURES[@]}"; do
+  BUILD_FLAGS+=(--arch "$architecture")
+done
 swift build "${BUILD_FLAGS[@]}"
 RELEASE_DIR="$(swift build "${BUILD_FLAGS[@]}" --show-bin-path)"
 for product in CodexTrafficLightApp codex-light-mxp codex-light-hook-mxp wanhe-status-updater; do
   PRODUCT_ARCHS=" $(xcrun lipo -archs "$RELEASE_DIR/$product") "
-  [[ "$PRODUCT_ARCHS" == *" arm64 "* && "$PRODUCT_ARCHS" == *" x86_64 "* ]] || {
-    echo "更新包缺少架构：$product ($PRODUCT_ARCHS)" >&2
-    exit 2
-  }
+  for architecture in "${ARCHITECTURES[@]}"; do
+    [[ "$PRODUCT_ARCHS" == *" $architecture "* ]] || {
+      echo "更新包缺少架构：$product ($architecture)" >&2
+      exit 2
+    }
+  done
 done
 /bin/mkdir -p "$OUTPUT_DIR"
 STAGING="$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/wanhe-status-$VERSION.XXXXXX")"

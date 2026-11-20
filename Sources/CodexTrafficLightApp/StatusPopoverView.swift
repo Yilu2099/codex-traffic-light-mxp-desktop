@@ -123,7 +123,7 @@ struct StatusPopoverView: View {
                         .background(green.opacity(0.13))
                 }
             }
-            .frame(width: 38, height: 38)
+            .frame(width: 48, height: 48)
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(green.opacity(0.12), lineWidth: 1))
 
@@ -147,8 +147,8 @@ struct StatusPopoverView: View {
                 }
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(green)
-                .padding(.horizontal, 12)
-                .frame(height: 36)
+                .padding(.horizontal, 9)
+                .frame(height: 32)
                 .background(green.opacity(0.09), in: Capsule())
                 .overlay {
                     if !reduceMotion, let start = model.balanceGlowStartedAt {
@@ -165,7 +165,7 @@ struct StatusPopoverView: View {
             .buttonStyle(.plain)
         }
         .padding(.horizontal, 20)
-        .padding(.vertical, 11)
+        .frame(minHeight: 96)
         .background(card)
         .overlay(alignment: .bottom) { line.frame(height: 1) }
     }
