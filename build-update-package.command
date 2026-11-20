@@ -18,22 +18,32 @@ if [[ "$VERSION" != "$SOURCE_VERSION" ]]; then
   exit 2
 fi
 
-"$DIR/build.command"
+cd "$DIR"
+BUILD_FLAGS=(-c release --arch arm64 --arch x86_64 --scratch-path "$DIR/.build/update-universal")
+swift build "${BUILD_FLAGS[@]}"
+RELEASE_DIR="$(swift build "${BUILD_FLAGS[@]}" --show-bin-path)"
+for product in CodexTrafficLightApp codex-light-mxp codex-light-hook-mxp wanhe-status-updater; do
+  PRODUCT_ARCHS=" $(xcrun lipo -archs "$RELEASE_DIR/$product") "
+  [[ "$PRODUCT_ARCHS" == *" arm64 "* && "$PRODUCT_ARCHS" == *" x86_64 "* ]] || {
+    echo "更新包缺少架构：$product ($PRODUCT_ARCHS)" >&2
+    exit 2
+  }
+done
 /bin/mkdir -p "$OUTPUT_DIR"
 STAGING="$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/wanhe-status-$VERSION.XXXXXX")"
 trap '/bin/rm -rf -- "$STAGING"' EXIT
 
-/bin/cp "$DIR/.build/release/CodexTrafficLightApp" "$STAGING/CodexTrafficLightApp"
-/bin/cp "$DIR/.build/release/codex-light-mxp" "$STAGING/codex-light-mxp"
-/bin/cp "$DIR/.build/release/codex-light-hook-mxp" "$STAGING/codex-light-hook-mxp"
-/bin/cp "$DIR/.build/release/wanhe-status-updater" "$STAGING/wanhe-status-updater"
+/bin/cp "$RELEASE_DIR/CodexTrafficLightApp" "$STAGING/CodexTrafficLightApp"
+/bin/cp "$RELEASE_DIR/codex-light-mxp" "$STAGING/codex-light-mxp"
+/bin/cp "$RELEASE_DIR/codex-light-hook-mxp" "$STAGING/codex-light-hook-mxp"
+/bin/cp "$RELEASE_DIR/wanhe-status-updater" "$STAGING/wanhe-status-updater"
 /bin/cp "$DIR/scripts/codex-light-codex-monitor" "$STAGING/codex-light-codex-monitor"
 /bin/cp "$DIR/com.codex.traffic-light-codex-monitor.plist.template" "$STAGING/com.codex.traffic-light-codex-monitor.plist.template"
 /bin/cp "$DIR/com.codex.traffic-light-mxp.plist.template" "$STAGING/com.codex.traffic-light-mxp.plist.template"
 /bin/cp "$DIR/com.codex.traffic-light-mxp-updater.plist.template" "$STAGING/com.codex.traffic-light-mxp-updater.plist.template"
 /bin/cp "$DIR/VERSION" "$STAGING/VERSION"
 /usr/bin/rsync -a --delete \
-  "$DIR/.build/release/CodexTrafficLightMXP_CodexTrafficLightApp.bundle/" \
+  "$RELEASE_DIR/CodexTrafficLightMXP_CodexTrafficLightApp.bundle/" \
   "$STAGING/CodexTrafficLightMXP_CodexTrafficLightApp.bundle/"
 /bin/chmod 755 "$STAGING/CodexTrafficLightApp" "$STAGING/codex-light-mxp" "$STAGING/codex-light-hook-mxp" "$STAGING/wanhe-status-updater" "$STAGING/codex-light-codex-monitor"
 

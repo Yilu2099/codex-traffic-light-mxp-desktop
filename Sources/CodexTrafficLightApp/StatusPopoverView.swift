@@ -109,7 +109,7 @@ struct StatusPopoverView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 12) {
             Group {
                 if let logo = Self.brandLogo {
                     Image(nsImage: logo)
@@ -123,9 +123,9 @@ struct StatusPopoverView: View {
                         .background(green.opacity(0.13))
                 }
             }
-            .frame(width: 34, height: 34)
-            .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).stroke(green.opacity(0.12), lineWidth: 1))
+            .frame(width: 38, height: 38)
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(green.opacity(0.12), lineWidth: 1))
 
             VStack(alignment: .leading, spacing: 2) {
                 Text("万合创新局")
@@ -138,7 +138,6 @@ struct StatusPopoverView: View {
             }
             Spacer()
             Button {
-                model.balanceGlowStartedAt = nil
                 model.isBalanceVisible.toggle()
             } label: {
                 HStack(spacing: 6) {
@@ -148,44 +147,32 @@ struct StatusPopoverView: View {
                 }
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(green)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
+                .padding(.horizontal, 12)
+                .frame(height: 36)
                 .background(green.opacity(0.09), in: Capsule())
                 .overlay {
-                    if !reduceMotion, !model.isBalanceVisible, let start = model.balanceGlowStartedAt {
-                        TimelineView(.animation) { context in
+                    if !reduceMotion, let start = model.balanceGlowStartedAt {
+                        TimelineView(.animation(minimumInterval: 1.0 / 30)) { context in
                             balanceGlow(elapsed: context.date.timeIntervalSince(start))
                         }
                         .allowsHitTesting(false)
                         .accessibilityHidden(true)
-                        .task(id: start) {
-                            try? await Task.sleep(for: .seconds(balanceGlowDuration))
-                            if !Task.isCancelled, model.balanceGlowStartedAt == start {
-                                model.balanceGlowStartedAt = nil
-                            }
-                        }
                     }
                 }
                 .frame(minHeight: 44)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .background {
-                BalanceHoverTracking {
-                    if !reduceMotion, !model.isBalanceVisible, model.balanceGlowStartedAt == nil {
-                        model.balanceGlowStartedAt = .now
-                    }
-                }
-            }
         }
         .padding(.horizontal, 20)
-        .padding(.vertical, 4)
+        .padding(.vertical, 11)
         .background(card)
         .overlay(alignment: .bottom) { line.frame(height: 1) }
     }
 
     private func balanceGlow(elapsed: TimeInterval) -> some View {
-        let angle = Angle.degrees(elapsed / balanceGlowDuration * 360 - 90)
+        let phase = elapsed.truncatingRemainder(dividingBy: balanceGlowDuration) / balanceGlowDuration
+        let angle = Angle.degrees(phase * 360 - 90)
         return Capsule().strokeBorder(
             AngularGradient(
                 stops: [
@@ -201,7 +188,6 @@ struct StatusPopoverView: View {
             ),
             lineWidth: 1.25
         )
-        .opacity(max(0, min(1, elapsed / 0.12, (balanceGlowDuration - elapsed) / 0.22)))
     }
 
     private var quotaCard: some View {
@@ -789,34 +775,5 @@ struct StatusPopoverView: View {
         }
         if value >= 10_000 { return String(format: "%.2f万", (Double(value) / 100).rounded() / 100) }
         return NumberFormatter.localizedString(from: NSNumber(value: value), number: .decimal)
-    }
-}
-
-private struct BalanceHoverTracking: NSViewRepresentable {
-    var onEnter: () -> Void
-
-    func makeNSView(context: Context) -> TrackingView {
-        let view = TrackingView()
-        view.addTrackingArea(NSTrackingArea(
-            rect: .zero,
-            options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
-            owner: view,
-            userInfo: nil
-        ))
-        return view
-    }
-
-    func updateNSView(_ view: TrackingView, context: Context) {
-        view.onEnter = onEnter
-    }
-
-    final class TrackingView: NSView {
-        var onEnter: (() -> Void)?
-
-        override func hitTest(_ point: NSPoint) -> NSView? { nil }
-
-        override func mouseEntered(with event: NSEvent) {
-            onEnter?()
-        }
     }
 }

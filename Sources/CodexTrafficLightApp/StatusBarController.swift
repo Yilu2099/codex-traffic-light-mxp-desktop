@@ -9,7 +9,7 @@ protocol StatusBarControllerDelegate: AnyObject {
 }
 
 @MainActor
-final class StatusBarController {
+final class StatusBarController: NSObject, NSPopoverDelegate {
     private let healthyGreen = NSColor(
         srgbRed: 0x35 / 255,
         green: 0xD2 / 255,
@@ -48,12 +48,14 @@ final class StatusBarController {
     private var syncedQuota: TeamQuotaReport?
     private var quotaRemainingPercent: Int?
 
-    init() {
+    override init() {
+        super.init()
         item.button?.imagePosition = .imageLeft
         item.button?.imageScaling = .scaleProportionallyDown
         item.button?.target = self
         item.button?.action = #selector(togglePopover)
         item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        popover.delegate = self
         popover.behavior = .transient
         popover.animates = true
         popover.contentSize = NSSize(width: 456, height: 640)
@@ -271,8 +273,15 @@ final class StatusBarController {
             onPopoverOpen?()
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
             popover.contentViewController?.view.window?.makeKey()
-            popoverModel.balanceGlowStartedAt = .now
         }
+    }
+
+    func popoverWillShow(_ notification: Notification) {
+        popoverModel.balanceGlowStartedAt = .now
+    }
+
+    func popoverDidClose(_ notification: Notification) {
+        popoverModel.balanceGlowStartedAt = nil
     }
 
     private func openTeamWebsite(memberID: String?) {
