@@ -188,9 +188,13 @@ public struct TeamDeviceIdentity: Codable, Equatable, Sendable {
         process.standardError = FileHandle.nullDevice
         do {
             try process.run()
+            let watchdog = DispatchWorkItem { if process.isRunning { process.terminate() } }
+            DispatchQueue.global().asyncAfter(deadline: .now() + 15, execute: watchdog)
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
             process.waitUntilExit()
+            watchdog.cancel()
             guard process.terminationStatus == 0 else { return nil }
-            return pipe.fileHandleForReading.readDataToEndOfFile()
+            return data
         } catch {
             return nil
         }

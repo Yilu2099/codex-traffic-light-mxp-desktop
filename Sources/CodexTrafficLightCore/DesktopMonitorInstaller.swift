@@ -83,8 +83,12 @@ public enum DesktopMonitorInstaller {
         process.standardError = pipe
         do {
             try process.run()
+            let watchdog = DispatchWorkItem { if process.isRunning { process.terminate() } }
+            DispatchQueue.global().asyncAfter(deadline: .now() + 30, execute: watchdog)
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
             process.waitUntilExit()
-            let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            watchdog.cancel()
+            let output = String(data: data, encoding: .utf8) ?? ""
             return (process.terminationStatus, output)
         } catch {
             return (-1, String(describing: error))

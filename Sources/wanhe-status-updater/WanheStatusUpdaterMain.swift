@@ -251,7 +251,7 @@ struct WanheStatusUpdater {
         }
 
         appendLog("installed: \(ClientVersion.current) -> \(version) mandatory=\(manifest.mandatory)")
-        prune(appRoot: appRoot, releases: releases, keeping: [version, previousTarget.map(rollbackVersion)].compactMap { $0 })
+        prune(appRoot: appRoot, installedVersion: version, previousVersion: previousTarget.map(rollbackVersion))
         await report(configuration, version: version, status: "installed", error: nil)
     }
 
@@ -262,12 +262,11 @@ struct WanheStatusUpdater {
 
     // Every install used to leave its predecessor on disk forever, plus one `failed-<version>-<ts>`
     // directory per retry. After dozens of releases that is gigabytes of dead weight on each Mac.
-    static func prune(appRoot: URL, releases: URL, keeping: [String]) {
-        let previous = keeping.first { $0 != ClientVersion.current }
+    static func prune(appRoot: URL, installedVersion: String, previousVersion: String?) {
         let result = ClientReleaseRetention.prune(
             appRoot: appRoot,
-            currentVersion: ClientVersion.current,
-            previousVersion: previous
+            currentVersion: installedVersion,
+            previousVersion: previousVersion
         )
         for name in result.failures { appendLog("prune: could not remove \(name)") }
     }
@@ -369,8 +368,12 @@ struct WanheStatusUpdater {
         process.standardError = pipe
         do {
             try process.run()
+            let watchdog = DispatchWorkItem { if process.isRunning { process.terminate() } }
+            DispatchQueue.global().asyncAfter(deadline: .now() + 60, execute: watchdog)
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
             process.waitUntilExit()
-            let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            watchdog.cancel()
+            let output = String(data: data, encoding: .utf8) ?? ""
             return ProcessResult(status: process.terminationStatus, output: output)
         } catch {
             return ProcessResult(status: -1, output: String(describing: error))
