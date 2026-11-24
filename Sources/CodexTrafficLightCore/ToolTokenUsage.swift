@@ -96,7 +96,18 @@ public struct ToolTokenUsageCollector {
             extraRoots: ClaudeTokenUsageCollector.t3ProviderRoots(home: home),
             cacheURL: home.appendingPathComponent(".wanhe-codex-token/claude-usage-cache.json")
         )
-        let antigravity = ZouzheTokenUsageCollector().collect(home: home, now: now)
+        let antigravityNative = AntigravityUsageCollector().collect(home: home, now: now)
+        let antigravityZouzhe = ZouzheTokenUsageCollector().collect(home: home, now: now)
+        var antigravityByDay: [String: ToolDailyUsage] = [:]
+        for row in antigravityZouzhe {
+            antigravityByDay[row.day] = row
+        }
+        for row in antigravityNative {
+            if row.totalTokens >= (antigravityByDay[row.day]?.totalTokens ?? -1) {
+                antigravityByDay[row.day] = row
+            }
+        }
+        let antigravity = antigravityByDay.values.sorted { $0.day < $1.day }
         return (Array(daily.values)
             + claude.map { ToolDailyUsage(tool: "claude", day: $0.day, inputTokens: $0.inputTokens + $0.cachedInputTokens, cachedInputTokens: $0.cachedInputTokens, cacheWriteInputTokens: $0.cacheWriteInputTokens, outputTokens: $0.outputTokens) }
             + antigravity)
