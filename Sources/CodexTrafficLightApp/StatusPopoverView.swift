@@ -650,72 +650,16 @@ struct StatusPopoverView: View {
                 }
             }()
             ForEach(extraTools.prefix(4), id: \.self) { tool in
-                let name = ["claude": "Claude", "antigravity": "Antigravity", "muse": "Muse Code", "kimi": "Kimi", "gemini": "Gemini", "grok": "Grok", "grokbot": "Grok Bot"][tool] ?? tool
-                let quota = member.toolQuotas?[tool]
-                let usage = member.toolTokens?[tool].map { formatTokens($0).replacingOccurrences(of: "万", with: " 万").replacingOccurrences(of: "亿", with: " 亿") + " Token" }
-                let helpText: String = {
-                    var parts = [name]
-                    if let q = quota { parts.append("剩余 \(Int(q.remainingPercent.rounded()))%") }
-                    if let u = usage { parts.append(u) }
-                    return parts.joined(separator: " · ")
-                }()
-                let ringFraction = quota.map { max(0, min(1, $0.remainingPercent / 100)) }
-                let ringColor: Color = {
-                    guard let pct = quota?.remainingPercent else { return Color.gray.opacity(0.28) }
-                    if pct <= 5 { return Color(red: 0.86, green: 0.15, blue: 0.15) }
-                    if pct <= 20 { return Color(red: 0.85, green: 0.47, blue: 0.02) }
-                    return Color(red: 0.23, green: 0.43, blue: 0.96)
-                }()
-                ZStack {
-                    Circle().stroke(Color.gray.opacity(0.24), lineWidth: 1.8)
-                    if let fraction = ringFraction {
-                        Circle()
-                            .trim(from: 0, to: fraction)
-                            .stroke(ringColor, style: StrokeStyle(lineWidth: 1.8, lineCap: .round))
-                            .rotationEffect(.degrees(-90))
-                    }
-                    toolBrandGlyph(tool)
-                }
-                .frame(width: 18, height: 18)
-                .help(helpText)
+                StatusToolBadge(
+                    tool: tool,
+                    tokens: member.toolTokens?[tool],
+                    quota: member.toolQuotas?[tool],
+                    periodLabel: model.selectedRange.badgePeriodLabel
+                )
             }
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    @ViewBuilder
-    private func toolBrandGlyph(_ tool: String) -> some View {
-        switch tool {
-        case "antigravity":
-            Text("A")
-                .font(.system(size: 9.5, weight: .black, design: .rounded))
-                .foregroundStyle(LinearGradient(colors: [Color(red: 0.23, green: 0.51, blue: 0.96), Color(red: 0.13, green: 0.77, blue: 0.37), Color(red: 0.94, green: 0.27, blue: 0.27)], startPoint: .bottomLeading, endPoint: .topTrailing))
-        case "claude":
-            Image(systemName: "sun.max.fill")
-                .font(.system(size: 9, weight: .bold))
-                .foregroundStyle(Color(red: 0.85, green: 0.47, blue: 0.34))
-        case "gemini":
-            Image(systemName: "sparkle")
-                .font(.system(size: 9.5, weight: .bold))
-                .foregroundStyle(Color(red: 0.31, green: 0.27, blue: 0.90))
-        case "grok", "grokbot":
-            Image(systemName: "circle.slash")
-                .font(.system(size: 9.5, weight: .bold))
-                .foregroundStyle(Color.primary.opacity(0.8))
-        case "kimi":
-            Text("K")
-                .font(.system(size: 9.5, weight: .black, design: .rounded))
-                .foregroundStyle(Color(red: 0.11, green: 0.31, blue: 0.85))
-        case "muse":
-            Text("M")
-                .font(.system(size: 9, weight: .black, design: .rounded))
-                .foregroundStyle(Color(red: 0.49, green: 0.23, blue: 0.93))
-        default:
-            Text(String(tool.prefix(1)).uppercased())
-                .font(.system(size: 9, weight: .bold))
-                .foregroundStyle(Color.primary.opacity(0.75))
-        }
     }
 
     private func grindActivityBand(_ member: TeamRankingMember) -> some View {
@@ -836,6 +780,154 @@ struct StatusPopoverView: View {
             return String(format: "%.2f亿", (Double(value) / 1_000_000).rounded() / 100)
         }
         if value >= 10_000 { return String(format: "%.2f万", (Double(value) / 100).rounded() / 100) }
+        return NumberFormatter.localizedString(from: NSNumber(value: value), number: .decimal)
+    }
+}
+
+private extension StatusRankingRange {
+    var badgePeriodLabel: String {
+        switch self {
+        case .today: return "今日"
+        case .week: return "本周"
+        case .month: return "本月"
+        }
+    }
+}
+
+private enum ToolBrandAssetCache {
+    static let claude: NSImage? = load("tool-claude")
+    static let antigravity: NSImage? = load("tool-antigravity")
+    static let gemini: NSImage? = load("tool-gemini")
+
+    private static func load(_ name: String) -> NSImage? {
+        let url = Bundle.module.url(forResource: name, withExtension: "png", subdirectory: "Brand")
+            ?? Bundle.module.url(forResource: name, withExtension: "png")
+        return url.flatMap(NSImage.init(contentsOf:))
+    }
+}
+
+private struct StatusToolBadge: View {
+    let tool: String
+    let tokens: Int?
+    let quota: TeamRankingMember.ToolQuotaSummary?
+    let periodLabel: String
+
+    @State private var isHovered = false
+    @State private var isPinned = false
+
+    private var showPopover: Binding<Bool> {
+        Binding(
+            get: { isHovered || isPinned },
+            set: { if !$0 { isHovered = false; isPinned = false } }
+        )
+    }
+
+    private var displayName: String {
+        ["claude": "Claude", "antigravity": "Antigravity", "muse": "Muse Code",
+         "kimi": "Kimi", "gemini": "Gemini", "grok": "Grok", "grokbot": "Grok Bot"][tool] ?? tool
+    }
+
+    private var ringColor: Color {
+        guard let pct = quota?.remainingPercent else { return Color.gray.opacity(0.26) }
+        if pct <= 5 { return Color(red: 0.86, green: 0.15, blue: 0.15) }
+        if pct <= 20 { return Color(red: 0.85, green: 0.47, blue: 0.02) }
+        return Color(red: 0.23, green: 0.43, blue: 0.96)
+    }
+
+    var body: some View {
+        Button {
+            isPinned.toggle()
+        } label: {
+            ZStack {
+                Circle().fill(Color.white)
+                Circle().stroke(Color.gray.opacity(0.22), lineWidth: 1.9)
+                if let pct = quota?.remainingPercent {
+                    Circle()
+                        .trim(from: 0, to: max(0, min(1, pct / 100)))
+                        .stroke(ringColor, style: StrokeStyle(lineWidth: 1.9, lineCap: .round))
+                        .rotationEffect(.degrees(-90))
+                }
+                brandIcon
+            }
+            .frame(width: 20, height: 20)
+            .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            isHovered = hovering
+        }
+        .popover(isPresented: showPopover, arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 12) {
+                    Text(displayName)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Color.primary)
+                    Spacer(minLength: 8)
+                    if let pct = quota?.remainingPercent {
+                        Text("剩余 \(formatPct(pct))%")
+                            .font(.system(size: 12.5, weight: .semibold))
+                            .foregroundStyle(pct <= 20 ? Color(red: 0.85, green: 0.47, blue: 0.02) : Color(red: 0.15, green: 0.39, blue: 0.92))
+                    }
+                }
+                if let tokens, tokens > 0 {
+                    popoverRow("\(periodLabel)用量", formatBadgeTokens(tokens))
+                }
+                if let five = quota?.fiveHourRemaining {
+                    popoverRow("5 小时剩余", "\(formatPct(five))%")
+                }
+                if let seven = quota?.sevenDayRemaining {
+                    popoverRow("周额度剩余", "\(formatPct(seven))%")
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .frame(minWidth: 162)
+        }
+    }
+
+    @ViewBuilder
+    private var brandIcon: some View {
+        if tool == "claude", let image = ToolBrandAssetCache.claude {
+            Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fit).frame(width: 12.5, height: 12.5)
+        } else if tool == "antigravity", let image = ToolBrandAssetCache.antigravity {
+            Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fit).frame(width: 12.5, height: 12.5)
+        } else if tool == "gemini", let image = ToolBrandAssetCache.gemini {
+            Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fit).frame(width: 12.5, height: 12.5)
+        } else if tool == "grok" || tool == "grokbot" {
+            Image(systemName: "circle.slash").font(.system(size: 9.5, weight: .bold)).foregroundStyle(Color.primary.opacity(0.82))
+        } else if tool == "kimi" {
+            Text("K").font(.system(size: 9.5, weight: .black, design: .rounded)).foregroundStyle(Color(red: 0.11, green: 0.31, blue: 0.85))
+        } else if tool == "muse" {
+            Text("M").font(.system(size: 9, weight: .black, design: .rounded)).foregroundStyle(Color(red: 0.49, green: 0.23, blue: 0.93))
+        } else {
+            Text(String(displayName.prefix(1)).uppercased()).font(.system(size: 9, weight: .bold)).foregroundStyle(Color.primary.opacity(0.75))
+        }
+    }
+
+    private func popoverRow(_ label: String, _ value: String) -> some View {
+        HStack {
+            Text(label)
+                .font(.system(size: 11.5))
+                .foregroundStyle(Color.secondary)
+            Spacer(minLength: 12)
+            Text(value)
+                .font(.system(size: 11.5, weight: .semibold).monospacedDigit())
+                .foregroundStyle(Color.primary)
+        }
+    }
+
+    private func formatPct(_ value: Double) -> String {
+        let rounded = (value * 10).rounded() / 10
+        return rounded.truncatingRemainder(dividingBy: 1) == 0 ? String(Int(rounded)) : String(format: "%.1f", rounded)
+    }
+
+    private func formatBadgeTokens(_ value: Int) -> String {
+        if value >= 100_000_000 {
+            return String(format: "%.2f 亿", (Double(value) / 1_000_000).rounded() / 100)
+        }
+        if value >= 10_000 {
+            return String(format: "%.2f 万", (Double(value) / 100).rounded() / 100)
+        }
         return NumberFormatter.localizedString(from: NSNumber(value: value), number: .decimal)
     }
 }

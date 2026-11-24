@@ -1,5 +1,6 @@
 import Foundation
 import CryptoKit
+import SQLite3
 
 /// Only verified user timestamps leave the machine. Text and paths are never stored in this cache or payload.
 public struct ToolHumanActivityCollector {
@@ -25,6 +26,18 @@ public struct ToolHumanActivityCollector {
                 next[key] = entry
                 for e in entry.events where e.stamp >= cutoff && e.stamp <= now { events[e.id] = e }
             }
+        }
+        let zouzheDB = home.appendingPathComponent(".zouzhe-t3/userdata/statev2.sqlite")
+        let zouzheWAL = home.appendingPathComponent(".zouzhe-t3/userdata/statev2.sqlite-wal")
+        if fm.fileExists(atPath: zouzheDB.path) {
+            let key = digest("zouzhe-human:" + zouzheDB.path)
+            let dbSig = fileSignature(zouzheDB)
+            let walSig = fileSignature(zouzheWAL)
+            let signature = "v1-zouzhe:\(dbSig):\(walSig)"
+            let entry = old[key].flatMap { $0.signature == signature ? $0 : nil }
+                ?? CachedFile(signature: signature, events: scanZouzheHumanEvents(dbURL: zouzheDB, cutoff: cutoff, now: now))
+            next[key] = entry
+            for e in entry.events where e.stamp >= cutoff && e.stamp <= now { events[e.id] = e }
         }
         if let data = try? JSONEncoder().encode(next) {
             try? fm.createDirectory(at: cache.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -62,14 +75,63 @@ public struct ToolHumanActivityCollector {
                 if latest == nil || date > latest! { latest = date }
             }
         }
+        for url in [home.appendingPathComponent(".zouzhe-t3/userdata/statev2.sqlite-wal"), home.appendingPathComponent(".zouzhe-t3/userdata/statev2.sqlite")] {
+            if let date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate,
+               latest == nil || date > latest! {
+                latest = date
+            }
+        }
         return latest
+    }
+    private func fileSignature(_ url: URL) -> String {
+        guard let v = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey]) else { return "0:0" }
+        return "\(v.fileSize ?? 0):\((v.contentModificationDate ?? .distantPast).timeIntervalSince1970)"
+    }
+    private func scanZouzheHumanEvents(dbURL: URL, cutoff: Date, now: Date) -> [Event] {
+        var db: OpaquePointer?
+        guard sqlite3_open_v2(dbURL.path, &db, SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX, nil) == SQLITE_OK, let db else {
+            if let db { sqlite3_close(db) }
+            return []
+        }
+        defer { sqlite3_close(db) }
+        sqlite3_busy_timeout(db, 1000)
+        let sql = """
+            SELECT m.message_id, m.created_at
+            FROM orchestration_v2_projection_messages AS m
+            WHERE m.role = 'user'
+              AND m.streaming = 0
+              AND COALESCE(json_extract(m.payload_json, '$.createdBy'), 'user') = 'user'
+              AND json_extract(m.payload_json, '$.notification') IS NULL
+              AND json_extract(m.payload_json, '$.delegatedCompletion') IS NULL
+              AND NOT EXISTS (
+                SELECT 1 FROM orchestration_v2_projection_threads AS t
+                WHERE t.thread_id = m.thread_id
+                  AND json_extract(t.payload_json, '$.lineage.relationshipToParent') = 'subagent'
+              )
+            """
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK, let stmt else { return [] }
+        defer { sqlite3_finalize(stmt) }
+        var result: [Event] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            guard let idPtr = sqlite3_column_text(stmt, 0),
+                  let tsPtr = sqlite3_column_text(stmt, 1) else { continue }
+            let id = String(cString: idPtr)
+            let ts = String(cString: tsPtr)
+            guard !id.isEmpty,
+                  let stamp = SharedDateFormatters.shared.iso8601Date(from: ts),
+                  stamp >= cutoff, stamp <= now else { continue }
+            result.append(Event(id: digest("zouzhe|" + id), tool: "zouzhe", stamp: stamp))
+        }
+        return result
     }
     private func roots(_ home: URL) -> [(String, URL, String)] {
         let env = ProcessInfo.processInfo.environment
-        return [("claude", URL(fileURLWithPath: env["CLAUDE_CONFIG_DIR"] ?? home.appendingPathComponent(".claude").path).appendingPathComponent("projects"), ""),
-                     ("kimi", URL(fileURLWithPath: env["KIMI_SHARE_DIR"] ?? home.appendingPathComponent(".kimi").path).appendingPathComponent("sessions"), "wire.jsonl"),
-                     ("kimi", home.appendingPathComponent(".kimi-code/sessions"), "wire.jsonl"),
-                     ("muse", URL(fileURLWithPath: env["XDG_DATA_HOME"] ?? home.appendingPathComponent(".local/share").path).appendingPathComponent("muse/sessions"), "session.jsonl")]
+        return [("claude", URL(fileURLWithPath: env["CLAUDE_CONFIG_DIR"] ?? home.appendingPathComponent(".claude").path).appendingPathComponent("projects"), "")]
+            + ClaudeTokenUsageCollector.t3ProviderRoots(home: home).map { ("claude", $0, "") }
+            + [("kimi", URL(fileURLWithPath: env["KIMI_SHARE_DIR"] ?? home.appendingPathComponent(".kimi").path).appendingPathComponent("sessions"), "wire.jsonl"),
+               ("kimi", home.appendingPathComponent(".kimi-code/sessions"), "wire.jsonl"),
+               ("muse", URL(fileURLWithPath: env["XDG_DATA_HOME"] ?? home.appendingPathComponent(".local/share").path).appendingPathComponent("muse/sessions"), "session.jsonl")]
     }
     private func digest(_ text: String) -> String { SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined() }
     private func scan(_ file: URL, tool: String, cutoff: Date, now: Date) -> [Event] {
