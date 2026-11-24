@@ -80,12 +80,21 @@ public enum ToolMembershipSource {
         var windows: [ToolMembership.Window] = []
         for rawLine in output.split(whereSeparator: \.isNewline) {
             let cols = rawLine.split(separator: "\t").map { $0.trimmingCharacters(in: .whitespaces) }
-            guard cols.count >= 3, cols[0].lowercased().contains("gemini") else { continue }
-            let key: String
+            guard cols.count >= 3 else { continue }
+            let group = cols[0].lowercased()
             let label = cols[1].lowercased()
-            if label.contains("five hour") { key = "five_hour" }
-            else if label.contains("weekly") { key = "seven_day" }
-            else { continue }
+            let key: String
+            if group.contains("gemini") {
+                if label.contains("five hour") { key = "five_hour" }
+                else if label.contains("weekly") { key = "seven_day" }
+                else { continue }
+            } else if group.contains("claude") || group.contains("gpt") {
+                if label.contains("five hour") { key = "bonus_five_hour" }
+                else if label.contains("weekly") { key = "bonus_seven_day" }
+                else { continue }
+            } else {
+                continue
+            }
             let pctText = cols[2].replacingOccurrences(of: "%", with: "").trimmingCharacters(in: .whitespaces)
             guard let remaining = Double(pctText), remaining.isFinite, (0...100).contains(remaining) else { continue }
             let reset = cols.count >= 4 ? date(cols[3]) : nil
