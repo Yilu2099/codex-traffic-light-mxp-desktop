@@ -575,8 +575,17 @@ public struct TeamRankingMember: Codable, Equatable, Sendable {
     public var weeklyQuota: TeamQuotaReport?
     public var devices: [DeviceSummary]?
     public var joined: Bool?
+    public struct ToolQuotaSummary: Codable, Equatable, Sendable {
+        public var remainingPercent: Double
+        public var fiveHourRemaining: Double?
+        public var sevenDayRemaining: Double?
+        public var resetsAt: String?
+        public var observedAt: String?
+    }
+
     public var tools: [String]? = nil
     public var toolTokens: [String: Int]? = nil
+    public var toolQuotas: [String: ToolQuotaSummary]? = nil
 
     public init(
         id: String,

@@ -27,10 +27,23 @@ public struct ClaudeTokenUsageCollector {
 
     public init() {}
 
+    public static func t3ProviderRoots(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> [URL] {
+        let providers = home.appendingPathComponent(".t3/providers", isDirectory: true)
+        guard let entries = try? FileManager.default.contentsOfDirectory(
+            at: providers, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]
+        ) else { return [] }
+        return entries.compactMap { entry in
+            let projects = entry.appendingPathComponent("projects", isDirectory: true)
+            var isDir: ObjCBool = false
+            return FileManager.default.fileExists(atPath: projects.path, isDirectory: &isDir) && isDir.boolValue ? projects : nil
+        }
+    }
+
     public func collect(
         root: URL = URL(fileURLWithPath: ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"]
             ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude").path)
             .appendingPathComponent("projects"),
+        extraRoots: [URL] = [],
         days: Int = 365,
         cacheURL: URL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".wanhe-codex-token/claude-usage-cache.json")
     ) -> [ClaudeDailyTokens] {
@@ -39,16 +52,18 @@ public struct ClaudeTokenUsageCollector {
         let earliestDay = dayString(cutoff)
         var next: [String: CachedFile] = [:]
         var messages: [String: Message] = [:]
-        guard let files = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey, .contentModificationDateKey, .fileSizeKey]) else { return [] }
-        for case let file as URL in files where file.pathExtension == "jsonl" {
-            guard let values = try? file.resourceValues(forKeys: [.isRegularFileKey, .contentModificationDateKey, .fileSizeKey]),
-                  values.isRegularFile == true, (values.contentModificationDate ?? .distantPast) >= cutoff else { continue }
-            let signature = "\(days):\(values.fileSize ?? 0):\((values.contentModificationDate ?? .distantPast).timeIntervalSince1970)"
-            let entry = old[file.path].flatMap { $0.signature == signature ? $0 : nil }
-                ?? CachedFile(signature: signature, messages: parse(file: file, cutoff: cutoff))
-            next[file.path] = entry
-            for (id, message) in entry.messages where message.day >= earliestDay {
-                if message.total > (messages[id]?.total ?? -1) { messages[id] = message }
+        for scanRoot in [root] + extraRoots {
+            guard let files = FileManager.default.enumerator(at: scanRoot, includingPropertiesForKeys: [.isRegularFileKey, .contentModificationDateKey, .fileSizeKey]) else { continue }
+            for case let file as URL in files where file.pathExtension == "jsonl" {
+                guard let values = try? file.resourceValues(forKeys: [.isRegularFileKey, .contentModificationDateKey, .fileSizeKey]),
+                      values.isRegularFile == true, (values.contentModificationDate ?? .distantPast) >= cutoff else { continue }
+                let signature = "\(days):\(values.fileSize ?? 0):\((values.contentModificationDate ?? .distantPast).timeIntervalSince1970)"
+                let entry = old[file.path].flatMap { $0.signature == signature ? $0 : nil }
+                    ?? CachedFile(signature: signature, messages: parse(file: file, cutoff: cutoff))
+                next[file.path] = entry
+                for (id, message) in entry.messages where message.day >= earliestDay {
+                    if message.total > (messages[id]?.total ?? -1) { messages[id] = message }
+                }
             }
         }
         if let data = try? JSONEncoder().encode(next) {

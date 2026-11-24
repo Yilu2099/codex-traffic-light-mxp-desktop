@@ -75,6 +75,26 @@ public enum ToolMembershipSource {
         }
         return report(plan: plan(info?["userLevelName"] as? String, allowed: kimiPlans), windows: windows, now: now)
     }
+
+    public static func antigravity(_ output: String, now: Date = Date()) -> ToolMembership? {
+        var windows: [ToolMembership.Window] = []
+        for rawLine in output.split(whereSeparator: \.isNewline) {
+            let cols = rawLine.split(separator: "\t").map { $0.trimmingCharacters(in: .whitespaces) }
+            guard cols.count >= 3, cols[0].lowercased().contains("gemini") else { continue }
+            let key: String
+            let label = cols[1].lowercased()
+            if label.contains("five hour") { key = "five_hour" }
+            else if label.contains("weekly") { key = "seven_day" }
+            else { continue }
+            let pctText = cols[2].replacingOccurrences(of: "%", with: "").trimmingCharacters(in: .whitespaces)
+            guard let remaining = Double(pctText), remaining.isFinite, (0...100).contains(remaining) else { continue }
+            let reset = cols.count >= 4 ? date(cols[3]) : nil
+            if let reset, reset <= now || reset.timeIntervalSince(now) > 45 * 86_400 { continue }
+            let usedPercent = max(0, min(100, 100 - remaining))
+            windows.append(.init(key: key, usedPercent: usedPercent, resetsAt: reset.map(ISO8601DateFormatter().string(from:))))
+        }
+        return report(plan: nil, windows: windows, now: now)
+    }
 }
 
 /// Disable external proxies, cookies, and redirects before using a Kimi Web
@@ -90,6 +110,8 @@ private final class ToolMembershipLoopback: NSObject, URLSessionTaskDelegate {
 actor ToolMembershipCollector {
     static let shared = ToolMembershipCollector()
     private var lastAttempt = Date.distantPast
+    private var lastAntigravityAttempt = Date.distantPast
+    private var lastAntigravityReport: ToolMembership?
     private(set) var gatewayDailyUsage: [ToolDailyUsage] = []
     private var lastReports: [String: ToolMembership] = [:]
 
@@ -102,11 +124,34 @@ actor ToolMembershipCollector {
             let settings = try? Sub2APIQuota.Configuration.load()
             async let gateway = try? settings?.fetch()
             async let gatewayUsage = settings?.dailyUsage(now: now) ?? []
+            if now.timeIntervalSince(lastAntigravityAttempt) >= 600 {
+                lastAntigravityAttempt = now
+                if let fresh = await Self.antigravity(home: home, now: now) {
+                    lastAntigravityReport = fresh
+                }
+            }
             let (account, quota, gatewayQuota) = await (claude, kimi, gateway)
-            lastReports = ["claude": account, "kimi": quota, "claude_sub2api": gatewayQuota?.membership(now: Date())].compactMapValues { $0 }
+            lastReports = [
+                "claude": account,
+                "kimi": quota,
+                "claude_sub2api": gatewayQuota?.membership(now: Date()),
+                "antigravity": lastAntigravityReport,
+            ].compactMapValues { $0 }
             gatewayDailyUsage = await gatewayUsage
         }
         return lastReports.isEmpty ? nil : lastReports
+    }
+
+    private static func antigravity(home: URL, now: Date) async -> ToolMembership? {
+        let paths = [
+            home.appendingPathComponent(".local/bin/agy").path,
+            "/opt/homebrew/bin/agy",
+            "/usr/local/bin/agy",
+        ]
+        guard let executable = paths.first(where: FileManager.default.isExecutableFile(atPath:)) else { return nil }
+        let result = boundedProcessResult(executable: executable, arguments: ["-p", "/usage"], timeout: 10)
+        guard result.status == 0 else { return nil }
+        return ToolMembershipSource.antigravity(result.output, now: now)
     }
 
     private static func claude(home: URL, now: Date) async -> ToolMembership? {

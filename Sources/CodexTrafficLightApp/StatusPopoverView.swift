@@ -639,21 +639,83 @@ struct StatusPopoverView: View {
                     .font(.system(size: 9.5, weight: .semibold))
                     .foregroundStyle(muted)
             }
-            ForEach((member.tools ?? []).filter { $0 != "codex" }, id: \.self) { tool in
-                let name = ["claude": "Claude", "muse": "Muse Code", "kimi": "Kimi", "grok": "Grok", "grokbot": "Grok Bot"][tool] ?? tool
-                let usage = member.toolTokens?[tool].map { formatTokens($0).replacingOccurrences(of: "万", with: " 万").replacingOccurrences(of: "亿", with: " 亿") + " token" } ?? "用量待同步"
-                Text(tool == "muse" ? "Muse" : name)
-                    .font(.system(size: 8.5, weight: .semibold))
-                    .foregroundStyle(Color(red: 0.35, green: 0.38, blue: 0.41))
-                    .padding(.horizontal, 5).padding(.vertical, 2)
-                    .background(LinearGradient(colors: [.white, Color(white: 0.87), Color(white: 0.96)], startPoint: .top, endPoint: .bottom), in: RoundedRectangle(cornerRadius: 4))
-                    .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.gray.opacity(0.25), lineWidth: 0.5))
-                    .fixedSize()
-                    .help(usage)
+            let extraTools: [String] = {
+                var set = Set((member.tools ?? []).filter { $0 != "codex" })
+                for key in (member.toolQuotas ?? [:]).keys where key != "codex" { set.insert(key) }
+                return set.sorted { lhs, rhs in
+                    let lTok = member.toolTokens?[lhs] ?? 0
+                    let rTok = member.toolTokens?[rhs] ?? 0
+                    if lTok != rTok { return lTok > rTok }
+                    return lhs < rhs
+                }
+            }()
+            ForEach(extraTools.prefix(4), id: \.self) { tool in
+                let name = ["claude": "Claude", "antigravity": "Antigravity", "muse": "Muse Code", "kimi": "Kimi", "gemini": "Gemini", "grok": "Grok", "grokbot": "Grok Bot"][tool] ?? tool
+                let quota = member.toolQuotas?[tool]
+                let usage = member.toolTokens?[tool].map { formatTokens($0).replacingOccurrences(of: "万", with: " 万").replacingOccurrences(of: "亿", with: " 亿") + " Token" }
+                let helpText: String = {
+                    var parts = [name]
+                    if let q = quota { parts.append("剩余 \(Int(q.remainingPercent.rounded()))%") }
+                    if let u = usage { parts.append(u) }
+                    return parts.joined(separator: " · ")
+                }()
+                let ringFraction = quota.map { max(0, min(1, $0.remainingPercent / 100)) }
+                let ringColor: Color = {
+                    guard let pct = quota?.remainingPercent else { return Color.gray.opacity(0.28) }
+                    if pct <= 5 { return Color(red: 0.86, green: 0.15, blue: 0.15) }
+                    if pct <= 20 { return Color(red: 0.85, green: 0.47, blue: 0.02) }
+                    return Color(red: 0.23, green: 0.43, blue: 0.96)
+                }()
+                ZStack {
+                    Circle().stroke(Color.gray.opacity(0.24), lineWidth: 1.8)
+                    if let fraction = ringFraction {
+                        Circle()
+                            .trim(from: 0, to: fraction)
+                            .stroke(ringColor, style: StrokeStyle(lineWidth: 1.8, lineCap: .round))
+                            .rotationEffect(.degrees(-90))
+                    }
+                    toolBrandGlyph(tool)
+                }
+                .frame(width: 18, height: 18)
+                .help(helpText)
             }
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private func toolBrandGlyph(_ tool: String) -> some View {
+        switch tool {
+        case "antigravity":
+            Text("A")
+                .font(.system(size: 9.5, weight: .black, design: .rounded))
+                .foregroundStyle(LinearGradient(colors: [Color(red: 0.23, green: 0.51, blue: 0.96), Color(red: 0.13, green: 0.77, blue: 0.37), Color(red: 0.94, green: 0.27, blue: 0.27)], startPoint: .bottomLeading, endPoint: .topTrailing))
+        case "claude":
+            Image(systemName: "sun.max.fill")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(Color(red: 0.85, green: 0.47, blue: 0.34))
+        case "gemini":
+            Image(systemName: "sparkle")
+                .font(.system(size: 9.5, weight: .bold))
+                .foregroundStyle(Color(red: 0.31, green: 0.27, blue: 0.90))
+        case "grok", "grokbot":
+            Image(systemName: "circle.slash")
+                .font(.system(size: 9.5, weight: .bold))
+                .foregroundStyle(Color.primary.opacity(0.8))
+        case "kimi":
+            Text("K")
+                .font(.system(size: 9.5, weight: .black, design: .rounded))
+                .foregroundStyle(Color(red: 0.11, green: 0.31, blue: 0.85))
+        case "muse":
+            Text("M")
+                .font(.system(size: 9, weight: .black, design: .rounded))
+                .foregroundStyle(Color(red: 0.49, green: 0.23, blue: 0.93))
+        default:
+            Text(String(tool.prefix(1)).uppercased())
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(Color.primary.opacity(0.75))
+        }
     }
 
     private func grindActivityBand(_ member: TeamRankingMember) -> some View {

@@ -91,8 +91,17 @@ public struct ToolTokenUsageCollector {
             sum.cacheWriteInputTokens += row.cacheWriteInputTokens; sum.outputTokens += row.outputTokens
             daily[key] = sum
         }
-        let claude = ClaudeTokenUsageCollector().collect(root: URL(fileURLWithPath: env["CLAUDE_CONFIG_DIR"] ?? home.appendingPathComponent(".claude").path).appendingPathComponent("projects"), cacheURL: home.appendingPathComponent(".wanhe-codex-token/claude-usage-cache.json"))
-        return (Array(daily.values) + claude.map { ToolDailyUsage(tool: "claude", day: $0.day, inputTokens: $0.inputTokens + $0.cachedInputTokens, cachedInputTokens: $0.cachedInputTokens, cacheWriteInputTokens: $0.cacheWriteInputTokens, outputTokens: $0.outputTokens) }).filter { $0.totalTokens > 0 }.sorted { ($0.day, $0.tool) < ($1.day, $1.tool) }
+        let claude = ClaudeTokenUsageCollector().collect(
+            root: URL(fileURLWithPath: env["CLAUDE_CONFIG_DIR"] ?? home.appendingPathComponent(".claude").path).appendingPathComponent("projects"),
+            extraRoots: ClaudeTokenUsageCollector.t3ProviderRoots(home: home),
+            cacheURL: home.appendingPathComponent(".wanhe-codex-token/claude-usage-cache.json")
+        )
+        let antigravity = ZouzheTokenUsageCollector().collect(home: home, now: now)
+        return (Array(daily.values)
+            + claude.map { ToolDailyUsage(tool: "claude", day: $0.day, inputTokens: $0.inputTokens + $0.cachedInputTokens, cachedInputTokens: $0.cachedInputTokens, cacheWriteInputTokens: $0.cacheWriteInputTokens, outputTokens: $0.outputTokens) }
+            + antigravity)
+            .filter { $0.totalTokens > 0 }
+            .sorted { ($0.day, $0.tool) < ($1.day, $1.tool) }
     }
     private func configuredHome(_ value: String?, fallback: URL) -> URL {
         guard let value, !value.isEmpty else { return fallback }
