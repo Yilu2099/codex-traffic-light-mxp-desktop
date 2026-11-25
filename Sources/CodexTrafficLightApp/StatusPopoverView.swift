@@ -649,7 +649,7 @@ struct StatusPopoverView: View {
                     return lhs < rhs
                 }
             }()
-            ForEach(extraTools.prefix(4), id: \.self) { tool in
+            ForEach(extraTools, id: \.self) { tool in
                 StatusToolBadge(
                     tool: tool,
                     tokens: member.toolTokens?[tool],
