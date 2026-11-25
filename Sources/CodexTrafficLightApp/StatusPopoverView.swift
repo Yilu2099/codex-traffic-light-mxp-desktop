@@ -798,6 +798,8 @@ private enum ToolBrandAssetCache {
     static let claude: NSImage? = load("tool-claude")
     static let antigravity: NSImage? = load("tool-antigravity")
     static let gemini: NSImage? = load("tool-gemini")
+    static let grok: NSImage? = load("tool-grok")
+    static let kimi: NSImage? = load("tool-kimi")
 
     private static func load(_ name: String) -> NSImage? {
         let url = Bundle.module.url(forResource: name, withExtension: "png", subdirectory: "Brand")
@@ -893,10 +895,10 @@ private struct StatusToolBadge: View {
             Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fit).frame(width: 12.5, height: 12.5)
         } else if tool == "gemini", let image = ToolBrandAssetCache.gemini {
             Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fit).frame(width: 12.5, height: 12.5)
-        } else if tool == "grok" || tool == "grokbot" {
-            Image(systemName: "circle.slash").font(.system(size: 9.5, weight: .bold)).foregroundStyle(Color.primary.opacity(0.82))
-        } else if tool == "kimi" {
-            Text("K").font(.system(size: 9.5, weight: .black, design: .rounded)).foregroundStyle(Color(red: 0.11, green: 0.31, blue: 0.85))
+        } else if (tool == "grok" || tool == "grokbot"), let image = ToolBrandAssetCache.grok {
+            Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fill).frame(width: 15.5, height: 15.5).clipShape(Circle())
+        } else if tool == "kimi", let image = ToolBrandAssetCache.kimi {
+            Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fill).frame(width: 15.5, height: 15.5).clipShape(Circle())
         } else if tool == "muse" {
             Text("M").font(.system(size: 9, weight: .black, design: .rounded)).foregroundStyle(Color(red: 0.49, green: 0.23, blue: 0.93))
         } else {
