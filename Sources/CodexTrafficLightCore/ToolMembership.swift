@@ -104,6 +104,109 @@ public enum ToolMembershipSource {
         }
         return report(plan: nil, windows: windows, now: now)
     }
+
+    public static func antigravityQuotaSummary(_ data: Data, now: Date = Date()) -> ToolMembership? {
+        guard let root = object(data) else { return nil }
+        var buckets: [[String: Any]] = []
+        if let groups = root["groups"] as? [[String: Any]] {
+            for group in groups {
+                if let list = group["buckets"] as? [[String: Any]] {
+                    buckets.append(contentsOf: list)
+                }
+            }
+        }
+        if let top = root["buckets"] as? [[String: Any]] {
+            buckets.append(contentsOf: top)
+        }
+        var seen = Set<String>()
+        var windows: [ToolMembership.Window] = []
+        for bucket in buckets {
+            if bucket["disabled"] as? Bool == true { continue }
+            guard let bucketID = (bucket["bucketId"] as? String)?.lowercased(),
+                  let remainingFraction = number(bucket["remainingFraction"]),
+                  (0...1).contains(remainingFraction) else { continue }
+            let windowKind = (bucket["window"] as? String)?.lowercased() ?? ""
+            let key: String
+            if bucketID.hasPrefix("gemini-") && !bucketID.hasPrefix("gemini-argon-") && !bucketID.hasPrefix("gemini-carbon-") {
+                if windowKind == "5h" || bucketID.hasSuffix("-5h") { key = "five_hour" }
+                else if windowKind == "weekly" || bucketID.hasSuffix("-weekly") { key = "seven_day" }
+                else { continue }
+            } else if bucketID.hasPrefix("3p-") {
+                if windowKind == "5h" || bucketID.hasSuffix("-5h") { key = "bonus_five_hour" }
+                else if windowKind == "weekly" || bucketID.hasSuffix("-weekly") { key = "bonus_seven_day" }
+                else { continue }
+            } else {
+                continue
+            }
+            guard !seen.contains(key) else { continue }
+            seen.insert(key)
+            let reset = (bucket["resetTime"] as? String).flatMap(date)
+            let validReset = reset.flatMap { ($0 > now && $0.timeIntervalSince(now) <= 45 * 86_400) ? $0 : nil }
+            let usedPercent = max(0, min(100, (1 - remainingFraction) * 100))
+            windows.append(.init(key: key, usedPercent: usedPercent, resetsAt: validReset.map(ISO8601DateFormatter().string(from:))))
+        }
+        return report(plan: nil, windows: windows, now: now)
+    }
+
+    public static func kimiDirectUsage(_ data: Data, now: Date = Date()) -> ToolMembership? {
+        guard let root = object(data) else { return nil }
+        var windows: [ToolMembership.Window] = []
+
+        func validReset(_ raw: Any?) -> String? {
+            guard let text = raw as? String, let parsed = date(text),
+                  parsed > now, parsed.timeIntervalSince(now) <= 45 * 86_400 else { return nil }
+            return ISO8601DateFormatter().string(from: parsed)
+        }
+        func usedPercent(from detail: [String: Any]?) -> Double? {
+            guard let detail else { return nil }
+            let limit = number(detail["limit"]) ?? (detail["limit"] as? String).flatMap(Double.init)
+            let remaining = number(detail["remaining"]) ?? (detail["remaining"] as? String).flatMap(Double.init)
+            guard let limit, let remaining, limit > 0, limit.isFinite, remaining.isFinite else { return nil }
+            return max(0, min(100, ((limit - remaining) / limit) * 100))
+        }
+
+        let usages = root["usages"] as? [String: Any]
+        if let l5 = usages?["limit_5h"] as? [String: Any], let ratio = number(l5["used_ratio"]), (0...1).contains(ratio) {
+            windows.append(.init(key: "five_hour", usedPercent: ratio * 100, resetsAt: validReset(l5["reset_time"])))
+        } else if let limits = root["limits"] as? [[String: Any]] {
+            for entry in limits {
+                let win = entry["window"] as? [String: Any]
+                let dur = number(win?["duration"]) ?? 0
+                let unit = (win?["timeUnit"] as? String) ?? ""
+                let mins = unit == "TIME_UNIT_HOUR" ? dur * 60 : unit == "TIME_UNIT_DAY" ? dur * 1440 : dur
+                if mins > 0 && mins <= 1440, let detail = entry["detail"] as? [String: Any], let used = usedPercent(from: detail) {
+                    windows.append(.init(key: "five_hour", usedPercent: used, resetsAt: validReset(detail["resetTime"])))
+                    break
+                }
+            }
+        }
+
+        if let l7 = usages?["limit_7d"] as? [String: Any], let ratio = number(l7["used_ratio"]), (0...1).contains(ratio) {
+            windows.append(.init(key: "seven_day", usedPercent: ratio * 100, resetsAt: validReset(l7["reset_time"])))
+        } else if let usage = root["usage"] as? [String: Any], let used = usedPercent(from: usage) {
+            windows.append(.init(key: "seven_day", usedPercent: used, resetsAt: validReset(usage["resetTime"])))
+        }
+
+        return report(plan: nil, windows: windows, now: now)
+    }
+
+    public static func grokBilling(_ data: Data, now: Date = Date()) -> ToolMembership? {
+        guard let root = object(data), let config = root["config"] as? [String: Any] else { return nil }
+        let period = config["currentPeriod"] as? [String: Any]
+        let rawType = (period?["type"] as? String ?? "").uppercased()
+        let key = rawType.contains("WEEKLY") ? "seven_day" : rawType.contains("MONTHLY") ? "month_total" : "seven_day"
+        let reset = (period?["end"] as? String).flatMap(date)
+        let validReset = reset.flatMap { ($0 > now && $0.timeIntervalSince(now) <= 45 * 86_400) ? $0 : nil }
+        let usedPercent: Double
+        if let pct = number(config["creditUsagePercent"]), (0...100).contains(pct) {
+            usedPercent = pct
+        } else if validReset != nil && (rawType.contains("WEEKLY") || rawType.contains("MONTHLY")) {
+            usedPercent = 0
+        } else {
+            return nil
+        }
+        return report(plan: nil, windows: [.init(key: key, usedPercent: usedPercent, resetsAt: validReset.map(ISO8601DateFormatter().string(from:)))], now: now)
+    }
 }
 
 /// Disable external proxies, cookies, and redirects before using a Kimi Web
@@ -130,19 +233,21 @@ actor ToolMembershipCollector {
             let home = FileManager.default.homeDirectoryForCurrentUser
             async let claude = Self.claude(home: home, now: now)
             async let kimi = Self.kimi(home: home, now: now)
+            async let grok = Self.grok(home: home, now: now)
             let settings = try? Sub2APIQuota.Configuration.load()
             async let gateway = try? settings?.fetch()
             async let gatewayUsage = settings?.dailyUsage(now: now) ?? []
-            if now.timeIntervalSince(lastAntigravityAttempt) >= 600 {
+            if now.timeIntervalSince(lastAntigravityAttempt) >= 300 {
                 lastAntigravityAttempt = now
                 if let fresh = await Self.antigravity(home: home, now: now) {
                     lastAntigravityReport = fresh
                 }
             }
-            let (account, quota, gatewayQuota) = await (claude, kimi, gateway)
+            let (account, quota, grokQuota, gatewayQuota) = await (claude, kimi, grok, gateway)
             lastReports = [
                 "claude": account,
                 "kimi": quota,
+                "grok": grokQuota,
                 "claude_sub2api": gatewayQuota?.membership(now: Date()),
                 "antigravity": lastAntigravityReport,
             ].compactMapValues { $0 }
@@ -158,23 +263,102 @@ actor ToolMembershipCollector {
         "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
     ]
 
+    private static func makeEphemeralSession(timeout: TimeInterval = 8) -> URLSession {
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = timeout
+        config.timeoutIntervalForResource = timeout + 2
+        config.urlCredentialStorage = nil
+        config.httpCookieStorage = nil
+        return URLSession(configuration: config, delegate: ToolMembershipLoopback(), delegateQueue: nil)
+    }
+
+    private static func decodeGoKeyringSecret(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("go-keyring-base64:") {
+            let b64 = String(trimmed.dropFirst("go-keyring-base64:".count))
+            if let data = Data(base64Encoded: b64), let decoded = String(data: data, encoding: .utf8) {
+                return decoded
+            }
+        } else if trimmed.hasPrefix("go-keyring-encoded:") {
+            let hex = String(trimmed.dropFirst("go-keyring-encoded:".count))
+            var bytes = [UInt8]()
+            var index = hex.startIndex
+            while index < hex.endIndex, let next = hex.index(index, offsetBy: 2, limitedBy: hex.endIndex) {
+                if let byte = UInt8(hex[index..<next], radix: 16) { bytes.append(byte) }
+                index = next
+            }
+            if let decoded = String(bytes: bytes, encoding: .utf8) { return decoded }
+        }
+        return trimmed
+    }
+
+    /// Silent direct Antigravity quota read from macOS Keychain (no `agy` CLI spawn, zero browser prompts).
     private static func antigravity(home: URL, now: Date) async -> ToolMembership? {
-        let paths = [
-            home.appendingPathComponent(".local/bin/agy").path,
-            "/opt/homebrew/bin/agy",
-            "/usr/local/bin/agy",
+        let sec = boundedProcessResult(
+            executable: "/usr/bin/security",
+            arguments: ["find-generic-password", "-s", "gemini", "-a", "antigravity", "-w"],
+            timeout: 3
+        )
+        guard sec.status == 0, !sec.output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        let decoded = decodeGoKeyringSecret(sec.output)
+        guard let data = decoded.data(using: .utf8),
+              let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let tokenObj = json["token"] as? [String: Any],
+              let accessToken = (tokenObj["access_token"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !accessToken.isEmpty else { return nil }
+        if let expiryStr = tokenObj["expiry"] as? String {
+            let fmt = ISO8601DateFormatter()
+            fmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            if let exp = fmt.date(from: expiryStr) ?? ISO8601DateFormatter().date(from: expiryStr),
+               exp <= now.addingTimeInterval(30) {
+                return nil
+            }
+        }
+
+        let session = makeEphemeralSession(timeout: 8)
+        defer { session.finishTasksAndInvalidate() }
+        let endpoints = [
+            "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
+            "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
         ]
-        guard let executable = paths.first(where: FileManager.default.isExecutableFile(atPath:)) else { return nil }
-        // Only query /usage when local Antigravity/Gemini credentials exist, and block browser OAuth prompts.
-        let credPaths = [
-            home.appendingPathComponent(".gemini/oauth_creds.json").path,
-            home.appendingPathComponent(".gemini/google_accounts.json").path,
-            home.appendingPathComponent(".gemini/antigravity-cli/installation_id").path,
-        ]
-        guard credPaths.contains(where: { FileManager.default.fileExists(atPath: $0) }) else { return nil }
-        let result = boundedProcessResult(executable: executable, arguments: ["-p", "/usage"], timeout: 10, environment: nonInteractiveEnv)
-        guard result.status == 0 else { return nil }
-        return ToolMembershipSource.antigravity(result.output, now: now)
+        for endpoint in endpoints {
+            guard let url = URL(string: endpoint) else { continue }
+            var req = URLRequest(url: url)
+            req.httpMethod = "POST"
+            req.httpBody = Data("{}".utf8)
+            req.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.setValue("antigravity/hub/2.24.0 (aidev_client; os_type=darwin; arch=arm64; cl=963137146)", forHTTPHeaderField: "User-Agent")
+            guard let (body, response) = try? await session.data(for: req),
+                  (response as? HTTPURLResponse)?.statusCode == 200 else { continue }
+            if let report = ToolMembershipSource.antigravityQuotaSummary(body, now: now) {
+                return report
+            }
+        }
+        return nil
+    }
+
+    private static func grok(home: URL, now: Date) async -> ToolMembership? {
+        let grokHome = ProcessInfo.processInfo.environment["GROK_HOME"]
+            .flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : URL(fileURLWithPath: $0) }
+            ?? home.appendingPathComponent(".grok")
+        let authFile = grokHome.appendingPathComponent("auth.json")
+        guard let data = try? Data(contentsOf: authFile), data.count <= 65_536,
+              let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return nil }
+        let entry = (root["https://auth.x.ai::b1a00492-073a-47ea-816f-4c329264a828"] as? [String: Any])
+            ?? (root["https://accounts.x.ai/sign-in"] as? [String: Any])
+        guard let entry, (entry["auth_mode"] as? String) != "api_key",
+              let token = (entry["key"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !token.isEmpty else { return nil }
+
+        let session = makeEphemeralSession(timeout: 8)
+        defer { session.finishTasksAndInvalidate() }
+        guard let url = URL(string: "https://cli-chat-proxy.grok.com/v1/billing?format=credits") else { return nil }
+        var req = URLRequest(url: url)
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        guard let (body, response) = try? await session.data(for: req),
+              (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
+        return ToolMembershipSource.grokBilling(body, now: now)
     }
 
     private static func claude(home: URL, now: Date) async -> ToolMembership? {
@@ -186,6 +370,55 @@ actor ToolMembershipCollector {
     }
 
     private static func kimi(home: URL, now: Date) async -> ToolMembership? {
+        if let direct = await kimiDirect(home: home, now: now) {
+            return direct
+        }
+        return await kimiLoopback(home: home, now: now)
+    }
+
+    private static func kimiDirect(home: URL, now: Date) async -> ToolMembership? {
+        let base = ProcessInfo.processInfo.environment["KIMI_CODE_HOME"].map { URL(fileURLWithPath: $0) }
+            ?? home.appendingPathComponent(".kimi-code")
+        let credFile = base.appendingPathComponent("credentials/kimi-code.json")
+        guard let data = try? Data(contentsOf: credFile), data.count <= 32_768,
+              let creds = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return nil }
+        let fileAccess = (creds["access_token"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let refreshToken = (creds["refresh_token"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let expiresAt = (creds["expires_at"] as? NSNumber)?.doubleValue ?? 0
+
+        let session = makeEphemeralSession(timeout: 8)
+        defer { session.finishTasksAndInvalidate() }
+
+        var accessToken: String?
+        if let fileAccess, !fileAccess.isEmpty, expiresAt > now.timeIntervalSince1970 + 60 {
+            accessToken = fileAccess
+        } else if let refreshToken, !refreshToken.isEmpty, let tokenURL = URL(string: "https://auth.kimi.com/api/oauth/token") {
+            var req = URLRequest(url: tokenURL)
+            req.httpMethod = "POST"
+            req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+            var comps = URLComponents()
+            comps.queryItems = [
+                URLQueryItem(name: "client_id", value: "17e5f671-d194-4dfb-9706-5516cb48c098"),
+                URLQueryItem(name: "grant_type", value: "refresh_token"),
+                URLQueryItem(name: "refresh_token", value: refreshToken),
+            ]
+            req.httpBody = comps.percentEncodedQuery?.data(using: .utf8)
+            if let (body, resp) = try? await session.data(for: req),
+               (resp as? HTTPURLResponse)?.statusCode == 200,
+               let json = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any],
+               let fresh = (json["access_token"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !fresh.isEmpty {
+                accessToken = fresh
+            }
+        }
+        guard let token = accessToken, let url = URL(string: "https://api.kimi.com/coding/v1/usages") else { return nil }
+        var req = URLRequest(url: url)
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        guard let (body, resp) = try? await session.data(for: req),
+              (resp as? HTTPURLResponse)?.statusCode == 200 else { return nil }
+        return ToolMembershipSource.kimiDirectUsage(body, now: now)
+    }
+
+    private static func kimiLoopback(home: URL, now: Date) async -> ToolMembership? {
         let manager = FileManager.default
         let base = ProcessInfo.processInfo.environment["KIMI_CODE_HOME"].map { URL(fileURLWithPath: $0) }
             ?? home.appendingPathComponent(".kimi-code")
