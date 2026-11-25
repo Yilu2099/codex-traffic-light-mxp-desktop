@@ -840,7 +840,16 @@ private struct StatusToolBadge: View {
             isPinned.toggle()
         } label: {
             brandIcon
-                .frame(width: 18, height: 18)
+                .frame(width: 21, height: 21)
+                .background(
+                    Circle()
+                        .fill(Color.white)
+                        .shadow(color: Color.black.opacity(0.05), radius: 1, x: 0, y: 0.5)
+                )
+                .overlay(
+                    Circle()
+                        .strokeBorder(Color.black.opacity(0.12), lineWidth: 0.75)
+                )
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
@@ -879,23 +888,23 @@ private struct StatusToolBadge: View {
     @ViewBuilder
     private var brandIcon: some View {
         if tool == "claude", let image = ToolBrandAssetCache.claude {
-            Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fit).frame(width: 15.5, height: 15.5)
+            Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fit).frame(width: 13.5, height: 13.5)
         } else if tool == "antigravity", let image = ToolBrandAssetCache.antigravity {
-            Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fit).frame(width: 15.5, height: 15.5)
+            Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fit).frame(width: 13.5, height: 13.5)
         } else if tool == "gemini", let image = ToolBrandAssetCache.gemini {
-            Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fit).frame(width: 15.5, height: 15.5)
+            Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fit).frame(width: 13.5, height: 13.5)
         } else if (tool == "grok" || tool == "grokbot"), let image = ToolBrandAssetCache.grok {
-            Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fill).frame(width: 16, height: 16).clipShape(Circle())
+            Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fill).frame(width: 15, height: 15).clipShape(Circle())
         } else if tool == "kimi", let image = ToolBrandAssetCache.kimi {
-            Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fill).frame(width: 16, height: 16).clipShape(Circle())
+            Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fill).frame(width: 15, height: 15).clipShape(Circle())
         } else if tool == "deepseek", let image = ToolBrandAssetCache.deepseek {
-            Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fit).frame(width: 15.5, height: 15.5)
+            Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fit).frame(width: 13.5, height: 13.5)
         } else if tool == "zhipu", let image = ToolBrandAssetCache.zhipu {
-            Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fit).frame(width: 15.5, height: 15.5)
+            Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fit).frame(width: 13.5, height: 13.5)
         } else if tool == "qwen", let image = ToolBrandAssetCache.qwen {
-            Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fit).frame(width: 15.5, height: 15.5)
+            Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fit).frame(width: 13.5, height: 13.5)
         } else if tool == "cursor", let image = ToolBrandAssetCache.cursor {
-            Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fit).frame(width: 15.5, height: 15.5)
+            Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fit).frame(width: 13.5, height: 13.5)
         } else if tool == "muse" {
             Text("M").font(.system(size: 9, weight: .black, design: .rounded)).foregroundStyle(Color(red: 0.49, green: 0.23, blue: 0.93))
         } else {
