@@ -800,6 +800,10 @@ private enum ToolBrandAssetCache {
     static let gemini: NSImage? = load("tool-gemini")
     static let grok: NSImage? = load("tool-grok")
     static let kimi: NSImage? = load("tool-kimi")
+    static let deepseek: NSImage? = load("tool-deepseek")
+    static let zhipu: NSImage? = load("tool-zhipu")
+    static let qwen: NSImage? = load("tool-qwen")
+    static let cursor: NSImage? = load("tool-cursor")
 
     private static func load(_ name: String) -> NSImage? {
         let url = Bundle.module.url(forResource: name, withExtension: "png", subdirectory: "Brand")
@@ -826,7 +830,9 @@ private struct StatusToolBadge: View {
 
     private var displayName: String {
         ["claude": "Claude", "antigravity": "Antigravity", "muse": "Muse Code",
-         "kimi": "Kimi", "gemini": "Gemini", "grok": "Grok", "grokbot": "Grok Bot"][tool] ?? tool
+         "kimi": "Kimi", "gemini": "Gemini", "grok": "Grok", "grokbot": "Grok Bot",
+         "opencode": "OpenCode", "qwen": "千问", "cursor": "Cursor", "pi": "Pi",
+         "deepseek": "DeepSeek", "zhipu": "智谱 GLM"][tool] ?? tool
     }
 
     var body: some View {
@@ -882,6 +888,14 @@ private struct StatusToolBadge: View {
             Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fill).frame(width: 16, height: 16).clipShape(Circle())
         } else if tool == "kimi", let image = ToolBrandAssetCache.kimi {
             Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fill).frame(width: 16, height: 16).clipShape(Circle())
+        } else if tool == "deepseek", let image = ToolBrandAssetCache.deepseek {
+            Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fit).frame(width: 15.5, height: 15.5)
+        } else if tool == "zhipu", let image = ToolBrandAssetCache.zhipu {
+            Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fit).frame(width: 15.5, height: 15.5)
+        } else if tool == "qwen", let image = ToolBrandAssetCache.qwen {
+            Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fit).frame(width: 15.5, height: 15.5)
+        } else if tool == "cursor", let image = ToolBrandAssetCache.cursor {
+            Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fit).frame(width: 15.5, height: 15.5)
         } else if tool == "muse" {
             Text("M").font(.system(size: 9, weight: .black, design: .rounded)).foregroundStyle(Color(red: 0.49, green: 0.23, blue: 0.93))
         } else {

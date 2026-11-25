@@ -108,6 +108,14 @@ public struct ToolTokenUsageCollector {
             }
         }
         let antigravity = antigravityByDay.values.sorted { $0.day < $1.day }
+        let extraTools = ExtraToolTokenUsageCollector().collect(home: home, now: now, environment: env)
+        for row in extraTools {
+            let key = row.tool + row.day
+            var sum = daily[key] ?? ToolDailyUsage(tool: row.tool, day: row.day, inputTokens: 0, cachedInputTokens: 0, cacheWriteInputTokens: 0, outputTokens: 0)
+            sum.inputTokens += row.inputTokens; sum.cachedInputTokens += row.cachedInputTokens
+            sum.cacheWriteInputTokens += row.cacheWriteInputTokens; sum.outputTokens += row.outputTokens
+            daily[key] = sum
+        }
         return (Array(daily.values)
             + claude.map { ToolDailyUsage(tool: "claude", day: $0.day, inputTokens: $0.inputTokens + $0.cachedInputTokens, cachedInputTokens: $0.cachedInputTokens, cacheWriteInputTokens: $0.cacheWriteInputTokens, outputTokens: $0.outputTokens) }
             + antigravity)
