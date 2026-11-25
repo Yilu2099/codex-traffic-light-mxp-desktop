@@ -25,7 +25,7 @@ public struct AntigravityUsageCollector {
         var keys: [String]
     }
 
-    private static let cacheVersion = 1
+    private static let cacheVersion = 2
     private static let maxTokens = 1_000_000_000_000
 
     public init() {}
@@ -69,10 +69,16 @@ public struct AntigravityUsageCollector {
             let rows: [ToolDailyUsage]
             if let cached = previous[key], cached.signature == sig {
                 rows = cached.rows
+                nextFiles[key] = cached
+            } else if let queried = queryConversationDB(dbURL: dbURL, now: now, cutoff: cutoff) {
+                rows = queried
+                nextFiles[key] = FileCacheEntry(signature: sig, rows: rows)
+            } else if let cached = previous[key] {
+                rows = cached.rows
+                nextFiles[key] = cached
             } else {
-                rows = queryConversationDB(dbURL: dbURL, now: now, cutoff: cutoff)
+                rows = []
             }
-            nextFiles[key] = FileCacheEntry(signature: sig, rows: rows)
             for row in rows where row.day >= cutoffDay && row.totalTokens > 0 {
                 var sum = daily[row.day] ?? ToolDailyUsage(
                     tool: "antigravity", day: row.day,
@@ -90,27 +96,54 @@ public struct AntigravityUsageCollector {
         return daily.values.filter { $0.totalTokens > 0 }.sorted { $0.day < $1.day }
     }
 
-    public func queryConversationDB(dbURL: URL, now: Date = Date(), cutoff: Date? = nil) -> [ToolDailyUsage] {
+    public func queryConversationDB(dbURL: URL, now: Date = Date(), cutoff: Date? = nil) -> [ToolDailyUsage]? {
+        let walURL = URL(fileURLWithPath: dbURL.path + "-wal")
+        let walSize = (try? walURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+        if walSize == 0, let direct = queryConversationDBAtPath(dbURL: dbURL, sourceURL: dbURL, now: now, cutoff: cutoff) {
+            return direct
+        }
+        return queryConversationDBViaSnapshot(dbURL: dbURL, walURL: walURL, walSize: walSize, now: now, cutoff: cutoff)
+    }
+
+    private func queryConversationDBViaSnapshot(dbURL: URL, walURL: URL, walSize: Int, now: Date, cutoff: Date?) -> [ToolDailyUsage]? {
+        let fm = FileManager.default
+        let tempDir = fm.temporaryDirectory.appendingPathComponent("wanhe-ag-\(UUID().uuidString)", isDirectory: true)
+        do {
+            try fm.createDirectory(at: tempDir, withIntermediateDirectories: true)
+            defer { try? fm.removeItem(at: tempDir) }
+            let dst = tempDir.appendingPathComponent(dbURL.lastPathComponent)
+            try fm.copyItem(at: dbURL, to: dst)
+            if walSize > 0, fm.fileExists(atPath: walURL.path) {
+                try? fm.copyItem(at: walURL, to: URL(fileURLWithPath: dst.path + "-wal"))
+            }
+            return queryConversationDBAtPath(dbURL: dst, sourceURL: dbURL, now: now, cutoff: cutoff, readWrite: true)
+        } catch {
+            return nil
+        }
+    }
+
+    private func queryConversationDBAtPath(dbURL: URL, sourceURL: URL, now: Date, cutoff: Date?, readWrite: Bool = false) -> [ToolDailyUsage]? {
         var db: OpaquePointer?
-        let flags = SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX
+        let flags = (readWrite ? SQLITE_OPEN_READWRITE : SQLITE_OPEN_READONLY) | SQLITE_OPEN_NOMUTEX
         guard sqlite3_open_v2(dbURL.path, &db, flags, nil) == SQLITE_OK, let db else {
             if let db { sqlite3_close(db) }
-            return []
+            return nil
         }
         defer { sqlite3_close(db) }
         sqlite3_busy_timeout(db, 150)
 
-        let tables = existingTables(db)
+        guard let tables = existingTables(db) else { return nil }
         guard tables.contains("gen_metadata") || tables.contains("steps") else { return [] }
 
-        let fallbackDate = (try? dbURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? now
+        let fallbackDate = (try? sourceURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? now
         let trajectoryDate = tables.contains("trajectory_metadata_blob") ? readTrajectoryTimestamp(db) : nil
         let effectiveCutoff = cutoff ?? now.addingTimeInterval(-365 * 86_400)
-        let sessionID = dbURL.deletingPathExtension().lastPathComponent
+        let sessionID = sourceURL.deletingPathExtension().lastPathComponent
 
         var samples: [UsageSample] = []
+        var stepDates: [Int: Date] = [:]
         if tables.contains("steps") {
-            readMetadataRows(
+            guard readMetadataRows(
                 db: db,
                 sql: "SELECT idx, metadata FROM steps WHERE metadata IS NOT NULL",
                 isStep: true,
@@ -119,11 +152,12 @@ public struct AntigravityUsageCollector {
                 fallbackDate: fallbackDate,
                 cutoff: effectiveCutoff,
                 now: now,
+                stepDates: &stepDates,
                 into: &samples
-            )
+            ) else { return nil }
         }
         if tables.contains("gen_metadata") {
-            readMetadataRows(
+            guard readMetadataRows(
                 db: db,
                 sql: "SELECT idx, data FROM gen_metadata WHERE data IS NOT NULL",
                 isStep: false,
@@ -132,8 +166,9 @@ public struct AntigravityUsageCollector {
                 fallbackDate: fallbackDate,
                 cutoff: effectiveCutoff,
                 now: now,
+                stepDates: &stepDates,
                 into: &samples
-            )
+            ) else { return nil }
         }
 
         // Deduplicate samples sharing any Antigravity response/request key across steps and gen_metadata.
@@ -169,18 +204,24 @@ public struct AntigravityUsageCollector {
         return daily.values.filter { $0.totalTokens > 0 }.sorted { $0.day < $1.day }
     }
 
-    private func existingTables(_ db: OpaquePointer) -> Set<String> {
+    private func existingTables(_ db: OpaquePointer) -> Set<String>? {
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, "SELECT name FROM sqlite_master WHERE type = 'table'", -1, &stmt, nil) == SQLITE_OK,
-              let stmt else { return [] }
+              let stmt else { return nil }
         defer { sqlite3_finalize(stmt) }
         var result = Set<String>()
-        while sqlite3_step(stmt) == SQLITE_ROW {
-            if let ptr = sqlite3_column_text(stmt, 0) {
-                result.insert(String(cString: ptr))
+        while true {
+            let rc = sqlite3_step(stmt)
+            if rc == SQLITE_ROW {
+                if let ptr = sqlite3_column_text(stmt, 0) {
+                    result.insert(String(cString: ptr))
+                }
+            } else if rc == SQLITE_DONE {
+                return result
+            } else {
+                return nil
             }
         }
-        return result
     }
 
     private func readTrajectoryTimestamp(_ db: OpaquePointer) -> Date? {
@@ -204,16 +245,21 @@ public struct AntigravityUsageCollector {
         fallbackDate: Date,
         cutoff: Date,
         now: Date,
+        stepDates: inout [Int: Date],
         into samples: inout [UsageSample]
-    ) {
+    ) -> Bool {
         var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK, let stmt else { return }
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK, let stmt else { return false }
         defer { sqlite3_finalize(stmt) }
 
         let maxDate = now.addingTimeInterval(300)
         var rowIndex = 0
-        while sqlite3_step(stmt) == SQLITE_ROW {
+        while true {
+            let rc = sqlite3_step(stmt)
+            if rc == SQLITE_DONE { return true }
+            guard rc == SQLITE_ROW else { return false }
             rowIndex += 1
+            let dbIdx = Int(sqlite3_column_int64(stmt, 0))
             guard let bytes = blobData(stmt: stmt, column: 1),
                   let root = ProtobufLite.parse(bytes) else { continue }
             let dataMsg: ProtobufLite
@@ -226,15 +272,24 @@ public struct AntigravityUsageCollector {
 
             let rowDate: Date
             if isStep {
-                rowDate = dataMsg.bytes(for: 8).flatMap(ProtobufLite.timestamp)
+                let explicitDate = dataMsg.bytes(for: 8).flatMap(ProtobufLite.timestamp)
                     ?? dataMsg.bytes(for: 1).flatMap(ProtobufLite.timestamp)
-                    ?? trajectoryDate
-                    ?? fallbackDate
+                if let explicitDate {
+                    stepDates[dbIdx] = explicitDate
+                }
+                rowDate = explicitDate ?? trajectoryDate ?? fallbackDate
             } else {
-                rowDate = dataMsg.bytes(for: 9)
-                    .flatMap(ProtobufLite.parse)
-                    .flatMap { $0.bytes(for: 4) }
-                    .flatMap(ProtobufLite.timestamp)
+                var linkedStepDate: Date?
+                if let packed = root.bytes(for: 2) {
+                    for stepIdx in ProtobufLite.packedVarints(packed) {
+                        if let d = stepDates[stepIdx] { linkedStepDate = d }
+                    }
+                }
+                rowDate = linkedStepDate
+                    ?? dataMsg.bytes(for: 9)
+                        .flatMap(ProtobufLite.parse)
+                        .flatMap { $0.bytes(for: 4) }
+                        .flatMap(ProtobufLite.timestamp)
                     ?? trajectoryDate
                     ?? fallbackDate
             }
@@ -400,5 +455,26 @@ struct ProtobufLite {
         guard seconds > 0 else { return nil }
         let nanos = msg.int(for: 2)
         return Date(timeIntervalSince1970: Double(seconds) + Double(nanos) / 1_000_000_000.0)
+    }
+
+    static func packedVarints(_ data: Data) -> [Int] {
+        var result: [Int] = []
+        var offset = 0
+        let count = data.count
+        while offset < count {
+            var value: UInt64 = 0
+            var shift: UInt64 = 0
+            var finished = false
+            while offset < count && shift < 70 {
+                let byte = data[data.startIndex + offset]
+                offset += 1
+                value |= UInt64(byte & 0x7F) << shift
+                if byte < 0x80 { finished = true; break }
+                shift += 7
+            }
+            guard finished else { break }
+            if value <= UInt64(Int.max) { result.append(Int(value)) }
+        }
+        return result
     }
 }

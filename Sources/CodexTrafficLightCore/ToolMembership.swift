@@ -151,6 +151,13 @@ actor ToolMembershipCollector {
         return lastReports.isEmpty ? nil : lastReports
     }
 
+    private static let nonInteractiveEnv: [String: String] = [
+        "BROWSER": "/usr/bin/false",
+        "NO_BROWSER": "1",
+        "GOOGLE_AUTH_DISABLE_BROWSER": "1",
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    ]
+
     private static func antigravity(home: URL, now: Date) async -> ToolMembership? {
         let paths = [
             home.appendingPathComponent(".local/bin/agy").path,
@@ -158,7 +165,14 @@ actor ToolMembershipCollector {
             "/usr/local/bin/agy",
         ]
         guard let executable = paths.first(where: FileManager.default.isExecutableFile(atPath:)) else { return nil }
-        let result = boundedProcessResult(executable: executable, arguments: ["-p", "/usage"], timeout: 10)
+        // Only query /usage when local Antigravity/Gemini credentials exist, and block browser OAuth prompts.
+        let credPaths = [
+            home.appendingPathComponent(".gemini/oauth_creds.json").path,
+            home.appendingPathComponent(".gemini/google_accounts.json").path,
+            home.appendingPathComponent(".gemini/antigravity-cli/installation_id").path,
+        ]
+        guard credPaths.contains(where: { FileManager.default.fileExists(atPath: $0) }) else { return nil }
+        let result = boundedProcessResult(executable: executable, arguments: ["-p", "/usage"], timeout: 10, environment: nonInteractiveEnv)
         guard result.status == 0 else { return nil }
         return ToolMembershipSource.antigravity(result.output, now: now)
     }
@@ -166,7 +180,7 @@ actor ToolMembershipCollector {
     private static func claude(home: URL, now: Date) async -> ToolMembership? {
         let paths = [home.appendingPathComponent(".local/bin/claude").path, "/opt/homebrew/bin/claude", "/usr/local/bin/claude"]
         guard let executable = paths.first(where: FileManager.default.isExecutableFile(atPath:)) else { return nil }
-        let result = boundedProcessResult(executable: executable, arguments: ["auth", "status"], timeout: 2)
+        let result = boundedProcessResult(executable: executable, arguments: ["auth", "status"], timeout: 2, environment: nonInteractiveEnv)
         guard result.status == 0, let data = result.output.data(using: .utf8) else { return nil }
         return ToolMembershipSource.claudeAccount(data, now: now)
     }

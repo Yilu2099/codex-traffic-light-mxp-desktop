@@ -306,13 +306,17 @@ public enum ExistingLaunchAgentRegistration {
 func boundedProcessResult(
     executable: String,
     arguments: [String],
-    timeout: TimeInterval = 5
+    timeout: TimeInterval = 5,
+    environment: [String: String]? = nil
 ) -> MainAppLaunchctlResult {
     let process = Process()
     let pipe = Pipe()
     let finished = DispatchSemaphore(value: 0)
     process.executableURL = URL(fileURLWithPath: executable)
     process.arguments = arguments
+    if let environment {
+        process.environment = ProcessInfo.processInfo.environment.merging(environment) { _, new in new }
+    }
     process.standardOutput = pipe
     process.standardError = pipe
     process.terminationHandler = { _ in finished.signal() }
