@@ -829,30 +829,13 @@ private struct StatusToolBadge: View {
          "kimi": "Kimi", "gemini": "Gemini", "grok": "Grok", "grokbot": "Grok Bot"][tool] ?? tool
     }
 
-    private var ringColor: Color {
-        guard let pct = quota?.remainingPercent else { return Color.gray.opacity(0.26) }
-        if pct <= 5 { return Color(red: 0.86, green: 0.15, blue: 0.15) }
-        if pct <= 20 { return Color(red: 0.85, green: 0.47, blue: 0.02) }
-        return Color(red: 0.23, green: 0.43, blue: 0.96)
-    }
-
     var body: some View {
         Button {
             isPinned.toggle()
         } label: {
-            ZStack {
-                Circle().fill(Color.white)
-                Circle().stroke(Color.gray.opacity(0.22), lineWidth: 1.9)
-                if let pct = quota?.remainingPercent {
-                    Circle()
-                        .trim(from: 0, to: max(0, min(1, pct / 100)))
-                        .stroke(ringColor, style: StrokeStyle(lineWidth: 1.9, lineCap: .round))
-                        .rotationEffect(.degrees(-90))
-                }
-                brandIcon
-            }
-            .frame(width: 20, height: 20)
-            .contentShape(Circle())
+            brandIcon
+                .frame(width: 18, height: 18)
+                .contentShape(Circle())
         }
         .buttonStyle(.plain)
         .onHover { hovering in
@@ -890,15 +873,15 @@ private struct StatusToolBadge: View {
     @ViewBuilder
     private var brandIcon: some View {
         if tool == "claude", let image = ToolBrandAssetCache.claude {
-            Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fit).frame(width: 12.5, height: 12.5)
+            Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fit).frame(width: 15.5, height: 15.5)
         } else if tool == "antigravity", let image = ToolBrandAssetCache.antigravity {
-            Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fit).frame(width: 12.5, height: 12.5)
+            Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fit).frame(width: 15.5, height: 15.5)
         } else if tool == "gemini", let image = ToolBrandAssetCache.gemini {
-            Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fit).frame(width: 12.5, height: 12.5)
+            Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fit).frame(width: 15.5, height: 15.5)
         } else if (tool == "grok" || tool == "grokbot"), let image = ToolBrandAssetCache.grok {
-            Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fill).frame(width: 15.5, height: 15.5).clipShape(Circle())
+            Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fill).frame(width: 16, height: 16).clipShape(Circle())
         } else if tool == "kimi", let image = ToolBrandAssetCache.kimi {
-            Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fill).frame(width: 15.5, height: 15.5).clipShape(Circle())
+            Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fill).frame(width: 16, height: 16).clipShape(Circle())
         } else if tool == "muse" {
             Text("M").font(.system(size: 9, weight: .black, design: .rounded)).foregroundStyle(Color(red: 0.49, green: 0.23, blue: 0.93))
         } else {
